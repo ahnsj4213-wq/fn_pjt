@@ -13,7 +13,7 @@ AI 음성 질문(TTS) → 실시간 음성 답변(WebRTC) → 꼬리질문 → �
 
 | 구분 | 기술 |
 |---|---|
-| 프론트엔드 | React + Vite, TypeScript |
+| 프론트엔드 | Next.js (App Router), TypeScript |
 | 백엔드 | FastAPI, SQLAlchemy, Pydantic |
 | DB / 벡터 DB | PostgreSQL 16 + pgvector |
 | 실시간 음성 | WebRTC (브라우저) + aiortc (서버), silero-vad |
