@@ -51,20 +51,39 @@ async def apply(cc: httpx.AsyncClient, posting_id: str, resume: dict | None = No
                          json={"consent_id": c["consent_id"], "resume": resume or RESUME})
 
 
+# Korean-capable system fonts (no downloads). AIHIRE_TEST_FONT overrides; .ttc files use the first face.
+_KOREAN_FONTS = (
+    "C:/Windows/Fonts/malgun.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+)
+
+
+def _korean_font_path() -> str:
+    import os
+
+    candidates = [os.environ["AIHIRE_TEST_FONT"]] if os.environ.get("AIHIRE_TEST_FONT") else list(_KOREAN_FONTS)
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError(f"no Korean font for test PDFs; set AIHIRE_TEST_FONT (tried {candidates})")
+
+
 def text_pdf(lines: list[str]) -> bytes:
-    """Korean text PDF built locally with the Windows Malgun Gothic font (no downloads)."""
+    """Korean text PDF built locally with a system Korean font (no downloads)."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.pdfgen import canvas
 
     try:
-        pdfmetrics.getFont("Malgun")
+        pdfmetrics.getFont("Korean")
     except KeyError:
-        pdfmetrics.registerFont(TTFont("Malgun", "C:/Windows/Fonts/malgun.ttf"))
+        pdfmetrics.registerFont(TTFont("Korean", _korean_font_path(), subfontIndex=0))
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
-    c.setFont("Malgun", 11)
+    c.setFont("Korean", 11)
     y = 800
     for line in lines:
         c.drawString(50, y, line)

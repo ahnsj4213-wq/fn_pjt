@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "aihire-backend"
 version = "0.1.0"
@@ -35,6 +39,10 @@ dev = [
   "pytest-asyncio==1.4.1",
   "reportlab==5.1.0",            # BSD; builds test PDF fixtures locally
 ]
+
+[tool.setuptools.packages.find]
+# Only the application package is installed; migrations/ and tests/ run from the source tree.
+include = ["app*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
