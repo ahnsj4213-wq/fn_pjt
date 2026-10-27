@@ -4,7 +4,7 @@ from sqlalchemy import select, text
 
 from app.core.db import session_scope
 from app.core.timeutil import utcnow
-from app.jobs import worker
+from app.jobs import handlers, worker  # noqa: F401  handlers register themselves on import
 from app.jobs.runtime import periodic
 from app.models import JobPosting
 

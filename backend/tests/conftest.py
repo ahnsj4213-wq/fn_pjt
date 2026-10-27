@@ -51,10 +51,13 @@ async def clean_tables(database):
     yield
     async with session_scope() as db:
         rows = (await db.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))).scalars()
-        names = [n for n in rows if n not in KEEP]
+        # `companies` is deleted, not truncated: TRUNCATE ... CASCADE on it would also empty question_bank
+        # (company-scoped AI questions reference it) and wipe the seed questions for every later test.
+        names = [n for n in rows if n not in KEEP and n != "companies"]
         await db.execute(text(f"TRUNCATE {', '.join(names)} RESTART IDENTITY CASCADE"))
         # Seeds stay; rows created by tests in kept tables do not.
         await db.execute(text("DELETE FROM question_bank WHERE source <> 'SEED'"))
+        await db.execute(text("DELETE FROM companies"))
         await db.execute(text("UPDATE question_bank SET usage_count = 0, last_used_at = NULL"))
 
 

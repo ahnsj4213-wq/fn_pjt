@@ -49,6 +49,26 @@ class ResumeContent(_Item):
         return self
 
 
+# The AI contract (TRD 05 T1 "resume-schema v1") names two sections differently from the stored form/snapshot.
+_AI_TO_FORM = {"experience": "career", "certifications": "certificates"}
+_FORM_TO_AI = {v: k for k, v in _AI_TO_FORM.items()}
+
+
+def from_ai_resume(fields: dict) -> dict:
+    """T1 output -> the form/snapshot shape (career, certificates). Unknown keys are dropped."""
+    out = {"name": fields.get("name"), "education": [], "career": [], "projects": [], "skills": [], "certificates": []}
+    for k, v in fields.items():
+        key = _AI_TO_FORM.get(k, k)
+        if key in out and key != "name":
+            out[key] = list(v or [])
+    return out
+
+
+def to_ai_resume(content: dict) -> dict:
+    """Snapshot -> T3 input (experience, certifications). The name is not passed (questions never need it)."""
+    return {_FORM_TO_AI.get(k, k): v for k, v in (content or {}).items() if k != "name"}
+
+
 def flatten(c: ResumeContent) -> str:
     """Plain text of the snapshot without name/contact: the only source resume questions may quote (QST-03)."""
     lines: list[str] = []

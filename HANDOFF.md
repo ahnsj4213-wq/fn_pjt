@@ -1,4 +1,4 @@
-# 작업 인수인계 (2026-10-27, AI 서비스 반영)
+# 작업 인수인계 (2026-10-27, AI 서비스·작업 핸들러 반영)
 
 온프레미스 AI 채용 플랫폼. 기준 문서는 `통합 PRD.pdf`(저장소에 없음, 추출본은 `docs/prd/`). 이 문서만 읽고 이어서 진행할 수 있도록 현재 상태·검증 결과·다음 할 일을 적었다.
 
@@ -21,7 +21,7 @@
 
 ## 3. 구현·검증 상태
 
-### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 63개 테스트 통과 — 2026-10-27 Linux 클라우드 환경에서 확인, Windows 장비에서는 아직 재실행 안 함)
+### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 75개 테스트 통과 — 2026-10-27 Linux 클라우드 환경에서 확인, Windows 장비에서는 아직 재실행 안 함)
 
 | 영역 | 파일 | 테스트 |
 |---|---|---|
@@ -31,6 +31,7 @@
 | 담당자 지원자 관리·리포트·결정 이력·재평가·메모·통계 | `app/recruiter/router.py` | `tests/test_recruiter.py` (AC-03, AC-19, AC-20, ADM-06/07) |
 | 점수 계산(6.4)·인용 검증(ADR-0008) | `app/evaluation/` | `tests/test_scoring_quotes.py` (AC-17, AC-16 규칙) |
 | 영속 작업 큐(임대·펜싱·인프라 장애 시 시도 미소모·재시작 복구) | `app/jobs/` | `tests/test_job_queue.py` (AC-18 기반) |
+| 작업 핸들러: `compose_questions`(ADR-0005 슬롯·커스텀 7번·이력서 근거·BANK_FALLBACK·회사 범위 은행·시드 최후 대체), `tts_pregen`, `extract_resume`(T1→폼 키 변환), `pre_evaluate`, `evaluate_application`(선평가 재사용·T5~T8·점수·리포트·지원자 피드백, ON_CLAIM/ON_REQUEUE/ON_EXHAUSTED로 run·eval_status 관리), `grade_coding`(기대 출력 비교는 worker, C8) | `app/jobs/handlers.py`, `app/questions/compose.py`, `app/evaluation/pipeline.py`, `app/coding/` | `tests/test_handlers.py` (12개) |
 | AI 서비스(TRD 05 §4·§5): 게이트웨이 레인·선점·마감·장애 감지, `/v1/llm·stt·tts·embed·health`, 토큰 인증, 기동 순서, hl-1, 48kHz 리샘플 / 클라이언트·가짜 클라이언트 | `app/aisvc/`, `app/ai/client.py`, `app/ai/fake.py` | `tests/test_ai_service.py` (15개) |
 
 ### 3.2 작성했지만 아직 실행·테스트하지 않은 코드
@@ -56,7 +57,12 @@
    get_ai_client() / set_ai_client(c);  AIUnavailable 예외(worker는 시도 미소모로 연기)
    ```
    테스트에서는 `set_ai_client(FakeAIClient())`. 가짜도 실제 작업 검증기(`run_task`)를 거친다. 설정 `AIHIRE_AI_TOKEN`(운영 필수), `AIHIRE_GPU_POLICY`, `AIHIRE_TTS_ENGINE=none`(텍스트 전용).
-2. **작업 핸들러**: `compose_questions`(ADR-0005), `tts_pregen`, `extract_resume`(T1), `pre_evaluate`·`evaluate_application`(T5~T8, `app/evaluation/scoring.py` 사용, 펜싱 완료는 `worker.fenced_complete`), `grade_coding`. `ON_CLAIM`/`ON_EXHAUSTED` 훅으로 eval_status PENDING→RUNNING, RUNNING→ON_HOLD
+2. ~~작업 핸들러~~ (완료). 알아둘 점:
+   - 이력서는 폼·스냅샷 키(`career`, `certificates`)와 AI 계약 키(`experience`, `certifications`)가 다르다. 변환은 `app/resumes/schemas.py`의 `from_ai_resume`·`to_ai_resume`에서만 한다.
+   - 담당자 리포트의 `strengths`·`improvements`는 프런트 계약대로 문자열 배열로 저장한다(T6의 `question_refs`는 저장하지 않음).
+   - 코딩 채점 전에 평가가 집히면 `InfraUnavailable`로 미룬다(시도 미소모). 출력 비교 규칙: 줄바꿈 통일, 줄 끝 공백·끝 빈 줄 무시(`app/coding/grading.py`).
+   - 질문 구성과 평가는 LLM 호출 동안 DB 트랜잭션을 열어 둔다(MVP 단순화). 동시 응시가 늘면 읽기·쓰기 트랜잭션을 나눌 것.
+   - 테스트 정리(`tests/conftest.py`)가 `companies`를 TRUNCATE CASCADE 하면서 시드 질문까지 지우던 버그를 고쳤다.
 3. **음성 런타임** `app/voice/`: aiortc(iceServers=[]), TTS 하향 트랙, 서버 게이트, VAD→STT→데이터채널 자막, `turns.py` 호출. 동작 확인된 원형은 `prototypes/rtc_browser/server.py`. 프로토콜은 TRD 06
 4. interview 라우터 등록 + 테스트(AC-08, 09, 10, 11, 12, 13, 14)
 5. 코딩테스트 API(TRD 04 §5.3) + runner 연동 + 자동 제출 주기 작업(AC-15)

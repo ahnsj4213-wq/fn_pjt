@@ -15,7 +15,8 @@ from app.evaluation.quotes import find_span, normalize
 QUESTION_MAX = 120
 
 
-def _similar(a: str, b: str) -> bool:
+def similar_question(a: str, b: str) -> bool:
+    """Same text after normalisation, or >= 80% shared content tokens (cheap duplicate check, no embeddings)."""
     if normalize(a) == normalize(b):
         return True
     ta, tb = content_tokens(a), content_tokens(b)
@@ -71,7 +72,7 @@ class QuestionGenerate(TaskSpec):
             span = find_span(q.basis_quote, src, min_chars=4)
             if span is None or not _shape_ok(text):
                 continue
-            if any(_similar(text, x) for x in existing + [v["text"] for v in valid]):
+            if any(similar_question(text, x) for x in existing + [v["text"] for v in valid]):
                 continue
             valid.append({"text": text, "basis": {"start": span.start, "end": span.end, "text": span.text}})
             if len(valid) >= n:
@@ -162,7 +163,7 @@ class ResumeQuestion(TaskSpec):
                                  "text": span.text})
             if not evidence or not any(shares_content(text, e["text"]) for e in evidence):
                 continue  # AC-07: the question must mention what the resume actually says
-            if any(_similar(text, v["text"]) for v in valid):
+            if any(similar_question(text, v["text"]) for v in valid):
                 continue
             valid.append({"text": text, "evidence": evidence})
             if len(valid) >= n:
