@@ -13,6 +13,8 @@ ALLOWED_FIELDS = frozenset({
     "request_id", "user_id", "role", "company_id", "application_id", "posting_id", "question_id", "job_id",
     "job_kind", "lane", "status", "status_code", "method", "path", "latency_ms", "event", "error_code",
     "attempt", "run_no", "model", "count", "seq", "reason", "duration_ms",
+    # ai gateway (SEC-08: counts and timings only, never prompt or output text)
+    "task", "trace_id", "prompt_tokens", "completion_tokens", "queue_ms", "llm_calls", "preempted",
 })
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 _PHONE = re.compile(r"01[016789]-?\d{3,4}-?\d{4}")

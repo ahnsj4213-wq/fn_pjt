@@ -48,9 +48,10 @@ def default_probes() -> dict[str, Probe]:
     s = get_settings()
 
     async def ai_ok(part: str) -> bool:
-        async with httpx.AsyncClient(timeout=3) as c:
-            body = (await c.get(f"{s.ai_service_url}/v1/health")).json()
-        return bool(body.get(part, {}).get("ok"))
+        from app.ai.client import get_ai_client
+
+        body = await get_ai_client().health()
+        return bool(body.get(part, {}).get("up"))
 
     async def runner_ok() -> bool:
         if not s.code_execution_enabled:

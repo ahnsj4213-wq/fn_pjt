@@ -1,4 +1,4 @@
-# 작업 인수인계 (2026-10-27)
+# 작업 인수인계 (2026-10-27, AI 서비스 반영)
 
 온프레미스 AI 채용 플랫폼. 기준 문서는 `통합 PRD.pdf`(저장소에 없음, 추출본은 `docs/prd/`). 이 문서만 읽고 이어서 진행할 수 있도록 현재 상태·검증 결과·다음 할 일을 적었다.
 
@@ -21,7 +21,7 @@
 
 ## 3. 구현·검증 상태
 
-### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 48개 테스트 통과)
+### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 63개 테스트 통과 — 2026-10-27 Linux 클라우드 환경에서 확인, Windows 장비에서는 아직 재실행 안 함)
 
 | 영역 | 파일 | 테스트 |
 |---|---|---|
@@ -31,6 +31,7 @@
 | 담당자 지원자 관리·리포트·결정 이력·재평가·메모·통계 | `app/recruiter/router.py` | `tests/test_recruiter.py` (AC-03, AC-19, AC-20, ADM-06/07) |
 | 점수 계산(6.4)·인용 검증(ADR-0008) | `app/evaluation/` | `tests/test_scoring_quotes.py` (AC-17, AC-16 규칙) |
 | 영속 작업 큐(임대·펜싱·인프라 장애 시 시도 미소모·재시작 복구) | `app/jobs/` | `tests/test_job_queue.py` (AC-18 기반) |
+| AI 서비스(TRD 05 §4·§5): 게이트웨이 레인·선점·마감·장애 감지, `/v1/llm·stt·tts·embed·health`, 토큰 인증, 기동 순서, hl-1, 48kHz 리샘플 / 클라이언트·가짜 클라이언트 | `app/aisvc/`, `app/ai/client.py`, `app/ai/fake.py` | `tests/test_ai_service.py` (15개) |
 
 ### 3.2 작성했지만 아직 실행·테스트하지 않은 코드
 
@@ -40,20 +41,21 @@
 
 | 담당(에이전트) | 범위 | 상태 |
 |---|---|---|
-| C | `backend/app/aisvc/`(ai 서비스), `backend/app/ai/`(작업 T1~T8, 클라이언트, 가짜 클라이언트) | `app/ai/` 규칙·루브릭·작업 정의 일부 작성. **`aisvc/` 비어 있음, `app/ai/client.py`·`fake.py` 없음, 테스트 없음.** 계약은 TRD 05 §4~6 |
+| C | `backend/app/aisvc/`, `app/ai/client.py`·`fake.py` | **완료(2026-10-27)**. 실제 모델(Ollama·faster-whisper·Supertonic) 연동은 GPU 장비에서 미확인 — `python -m app.aisvc` 기동 후 `/readyz`·`/v1/health` 확인 필요(S-10~S-12). 게이트웨이는 선점된 호출을 내부에서 같은 레인 맨 앞으로 다시 넣으므로 호출자에게 409를 돌려주지 않는다(클라이언트는 409도 처리). BATCH 기아 방지(5분마다 순서 당김)는 같은 레인 FIFO라 구현하지 않음 |
 | E | `runner/`(샌드박스 실행 서비스, SBX 자체 점검) | 코드 초안 작성, **테스트·실행 안 됨**. 계약은 ADR-0007, TRD 07 §13 |
 | D | `frontend/` 지원자·담당자 화면 | 골격·인증 화면·공통 계층 완료(build·lint·test 23개 통과, 중단 직전 기준). 화면 구현 진행 중 |
 
 ## 4. 다음 할 일 (권장 순서)
 
-1. **ai 서비스 완성** (TRD 05): `app/ai/client.py` 인터페이스(아래), `app/ai/fake.py`, `app/aisvc/`(레인·선점, STT, TTS, embed, health), 단위 테스트
+1. ~~ai 서비스 완성~~ (완료). 인터페이스:
    ```
    AIClient.llm(task, input, *, lane, deadline_ms=None) -> LLMResult(status, output, flags, usage, manifest_hash)
    AIClient.stt(pcm16k, *, purpose) -> STTResult(text, segments, model)
    AIClient.tts(text) -> TTSResult(pcm48k, duration_ms, voice_model)
    AIClient.embed(texts) -> list[list[float]];  AIClient.health() -> dict
-   get_ai_client() / set_ai_client(c);  AIUnavailable 예외
+   get_ai_client() / set_ai_client(c);  AIUnavailable 예외(worker는 시도 미소모로 연기)
    ```
+   테스트에서는 `set_ai_client(FakeAIClient())`. 가짜도 실제 작업 검증기(`run_task`)를 거친다. 설정 `AIHIRE_AI_TOKEN`(운영 필수), `AIHIRE_GPU_POLICY`, `AIHIRE_TTS_ENGINE=none`(텍스트 전용).
 2. **작업 핸들러**: `compose_questions`(ADR-0005), `tts_pregen`, `extract_resume`(T1), `pre_evaluate`·`evaluate_application`(T5~T8, `app/evaluation/scoring.py` 사용, 펜싱 완료는 `worker.fenced_complete`), `grade_coding`. `ON_CLAIM`/`ON_EXHAUSTED` 훅으로 eval_status PENDING→RUNNING, RUNNING→ON_HOLD
 3. **음성 런타임** `app/voice/`: aiortc(iceServers=[]), TTS 하향 트랙, 서버 게이트, VAD→STT→데이터채널 자막, `turns.py` 호출. 동작 확인된 원형은 `prototypes/rtc_browser/server.py`. 프로토콜은 TRD 06
 4. interview 라우터 등록 + 테스트(AC-08, 09, 10, 11, 12, 13, 14)
@@ -71,7 +73,7 @@ E의 구현 차이 목록 G-01~16(TRD 07 §14) 중 G-05(프록시 뒤 IP), G-06(
 docker compose -f deploy/docker-compose.dev.yml up -d --wait
 # 2) Python 3.12 가상환경 (저장소 루트에 .venv)
 py -3.12 -m venv .venv
-.venv/Scripts/python -m pip install -e "backend[ai,dev]"
+.venv/Scripts/python -m pip install -e "backend[ai,dev]"   # Linux/macOS: .venv/bin/python
 # 3) 마이그레이션과 테스트
 cd backend && ../.venv/Scripts/python -m alembic upgrade head
 ../.venv/Scripts/python -m pytest -q -p no:logging

@@ -60,13 +60,20 @@ class Settings(BaseSettings):
 
     # AI service (all inference on-prem, SEC-06)
     ai_service_url: str = "http://127.0.0.1:8200"
+    ai_token: SecretStr = SecretStr("dev-ai-token-change-me")  # X-AI-Token between app/worker and ai (TRD 05 §4)
     ollama_url: str = "http://127.0.0.1:11434"
     llm_model: str = "qwen3.5:4b"
     llm_num_ctx: int = 8192
     embed_model: str = "qwen3-embedding:0.6b"
     stt_model: str = "large-v3-turbo"
     stt_device: str = "cuda"  # "cpu" falls back to faster-whisper small
-    tts_engine: str = "supertonic"
+    stt_compute_type: str = "int8_float16"
+    tts_engine: str = "supertonic"  # "supertonic" | "none" (text-only interviews, INT-04)
+    tts_voice: str = ""  # Supertonic voice style name; empty = first available (fixed per manifest)
+    tts_steps: int = 8
+    tts_speed: float = 1.05
+    model_auto_download: bool = False  # prod is offline (AC-22): models are imported beforehand
+    gpu_policy: str = Field("shared", pattern="^(shared|stt_preempts_batch)$")  # TRD 05 §3, chosen by S-10
 
     # Code runner (COD-06). Execution stays off until the sandbox self-test passes (ADR-0007).
     runner_url: str = "http://127.0.0.1:8400"
@@ -82,7 +89,7 @@ class Settings(BaseSettings):
         if self.env == "prod":
             if not self.cookie_secure:
                 raise ValueError("cookie_secure must be true in prod")
-            for secret in ("runner_token", "throttle_key"):
+            for secret in ("runner_token", "throttle_key", "ai_token"):
                 if "change-me" in getattr(self, secret).get_secret_value():
                     raise ValueError(f"{secret} must be set in prod")
             if not self.cookie_name.startswith("__Host-"):

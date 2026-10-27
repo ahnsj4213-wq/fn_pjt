@@ -138,6 +138,8 @@ async def _requeue(ctx: JobCtx, *, consume: bool, error_code: str, delay_sec: in
 
 
 async def run_one(ctx: JobCtx) -> None:
+    from app.ai.client import AIUnavailable
+
     fn = HANDLERS[ctx.kind]
     beat = asyncio.create_task(_beat_loop(ctx))
     try:
@@ -145,7 +147,7 @@ async def run_one(ctx: JobCtx) -> None:
         log_event(log, "job_done", job_id=ctx.id, job_kind=ctx.kind, attempt=ctx.attempts)
     except LeaseLost:
         log_event(log, "job_lease_lost", logging.WARNING, job_id=ctx.id, job_kind=ctx.kind)
-    except InfraUnavailable:
+    except (InfraUnavailable, AIUnavailable):
         await _requeue(ctx, consume=False, error_code="INFRA_UNAVAILABLE", delay_sec=INFRA_BACKOFF_SEC[0])
     except TimeoutError:
         await _requeue(ctx, consume=True, error_code="ATTEMPT_TIMEOUT", delay_sec=0)
