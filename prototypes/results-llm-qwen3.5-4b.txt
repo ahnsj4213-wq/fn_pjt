@@ -1,0 +1,12 @@
+{"kind": "followup", "run": 0, "elapsed_s": 41.41, "eval_count": 24, "eval_tps": 48.0, "prompt_tps": 205.5, "load_s": 39.75, "valid_json": true, "quotes_in_source": null}
+  sample: {"need_followup": false, "reason": "none", "anchor_quote": "", "question": ""}
+{"kind": "followup", "run": 1, "elapsed_s": 0.57, "eval_count": 24, "eval_tps": 52.7, "prompt_tps": 2414.5, "load_s": 0.0, "valid_json": true, "quotes_in_source": null}
+{"kind": "followup", "run": 2, "elapsed_s": 0.56, "eval_count": 24, "eval_tps": 53.2, "prompt_tps": 2437.8, "load_s": 0.01, "valid_json": true, "quotes_in_source": null}
+{"kind": "eval", "run": 0, "elapsed_s": 10.97, "eval_count": 542, "eval_tps": 54.1, "prompt_tps": 231.8, "load_s": 0.0, "valid_json": true, "quotes_in_source": [true, false, false, false]}
+  sample: {"criteria": [{"criterion": "job_expertise", "score": 5, "quote": "주문 목록 조회에 인덱스가 없다는 걸 확인했습니다. 복합 인덱스를 추가하고 N+1 쿼리를 배치 조회로 바꿔서 평균 응답 시간을 800밀리초에서 120밀리초로 줄였습니다.", "comment": "APM 활용, 인덱스 분석, N+1 문제 해결 등 구체적인 기술적 전문성을 잘 보여줍니다."}, {"criterion": "logic", "score": 5, "quote": "먼저 APM 으로 느린 쿼리를 찾았고, 주문 목록 조회에 인덱스가 없다는 걸 확인했습니다. 복합 인덱스를 추가하고 N+1 쿼리를 배치 조회로 바꿔서 평균 응답 시간을 800밀리초에서 120밀리초로 줄였습니다.", "comment": "문제 진단부터 원인 규명, 해결 조치, 결과까지 논리적 흐름이 매우 명확합니다."}, {"criterion": "specificity", "score": 5, "quote": "주문 처리 API 의 응답 시간이 길어지는 문제를 맡았습니다. 먼저 APM 으로 느린 쿼리를 찾았고, 주문 목록 조회에 인덱스가 없다는 걸 확인했습니다. 복합 인덱스를 추
+{"kind": "eval", "run": 1, "elapsed_s": 9.55, "eval_count": 510, "eval_tps": 54.2, "prompt_tps": 2254.0, "load_s": 0.0, "valid_json": true, "quotes_in_source": [false, false, false, false]}
+{"kind": "eval", "run": 2, "elapsed_s": 10.33, "eval_count": 552, "eval_tps": 54.2, "prompt_tps": 2237.9, "load_s": 0.01, "valid_json": true, "quotes_in_source": [false, false, false, false]}
+ollama ps: qwen3.5:4b size_vram_MiB= 2995 size_MiB= 2995 context= 4096
+GPU MiB baseline=454 peak_observed=4172
+followup: first=41.41s warm_median=0.57s
+eval: first=10.97s warm_median=9.94s

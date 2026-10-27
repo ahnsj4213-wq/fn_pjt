@@ -1,0 +1,6 @@
+genuine quotes: 48, forged: 7
+exact     genuine accepted 25/48  forged accepted 0/7 []
+ws        genuine accepted 47/48  forged accepted 0/7 []
+ws_edge   genuine accepted 47/48  forged accepted 0/7 []
+ws_punct  genuine accepted 48/48  forged accepted 7/7 ['35배 개선', 'C++ 언어로 구현', 'C# 언어로 구현', '23명이었습니다', '11 멘토링을 했습니다', '오류율을 10 줄였습니다', '23명이 함께 했습니다']
+ws_edge misses: ["캐시 TTL 을 5 분으로 할지 30 초로 할지 갈렸는데 p95 지연 과 DB 부하 를 2 주간 A/B 로 측정 해서 60 초 로 정했습니다"]

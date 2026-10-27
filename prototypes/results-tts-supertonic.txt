@@ -1,0 +1,14 @@
+load 2.1s
+q0: chars=33 audio=5.2s synth=1.52s rtf=0.292 -> tts_supertonic_0.wav
+q1: chars=57 audio=8.6s synth=2.16s rtf=0.251 -> tts_supertonic_1.wav
+q2: chars=39 audio=5.8s synth=1.87s rtf=0.321 -> tts_supertonic_2.wav
+supertonic 1.3.1
+load 2.1s
+synthesize sig: (text: 'str', voice_style: 'Style', total_steps: 'int' = 8, speed: 'float' = 1.05, max_chunk_length: 'Optional[int]' = None, silence_duration: 'float' = 0.3, lang: 'Optional[str]' = None, verbose: 'bool' = False) -> 'tuple[np.ndarray, np.ndarray]'
+style attrs: ['get_voice_style', 'get_voice_style_from_path', 'voice_style_names']
+q0: chars=33 audio=5.2s synth=1.52s rtf=0.292 -> tts_supertonic_0.wav
+q1: chars=57 audio=8.6s synth=2.18s rtf=0.254 -> tts_supertonic_1.wav
+q2: chars=39 audio=5.8s synth=1.66s rtf=0.285 -> tts_supertonic_2.wav
+roundtrip q0: sr=44100 cer=0.000 :: 최근 프로젝트에서 성능 문제를 해결한 경험을 말씀해 주세요.
+roundtrip q1: sr=44100 cer=0.000 :: 이력서에 적힌 주문 처리 시스템 개선 프로젝트에서 본인이 맡은 역할과 결과를 구체적으로 설명해 주세요.
+roundtrip q2: sr=44100 cer=0.000 :: 팀원과 의견이 달랐을 때 어떻게 해결했는지 사례를 들어 말씀해 주세요.

@@ -1,0 +1,13 @@
+[PASS] hello world runs: rc=0 timed_out=False 0.51s out='ok'
+[PASS] network blocked (tcp to public IP): rc=0 timed_out=False 0.53s out='blocked [Errno 101] Network is unreachable'
+[PASS] network blocked (host gateway): rc=0 timed_out=False 0.51s out='blocked [Errno -3] Temporary failure in name resolution'
+[PASS] root fs read-only: rc=0 timed_out=False 0.43s out="ro [Errno 30] Read-only file system: '/usr/lib/x'"
+[PASS] tmp is noexec: rc=0 timed_out=False 0.53s out="noexec [Errno 13] Permission denied: '/tmp/a.sh'"
+[PASS] non-root, no capabilities: rc=0 timed_out=False 0.45s out='10001\n0000000000000000'
+[PASS] no host secrets in env: rc=0 timed_out=False 0.41s out="['GPG_KEY', 'HOME', 'HOSTNAME', 'LANG', 'PATH', 'PYTHONDONTWRITEBYTECODE', 'PYTHON_SHA256'"
+[PASS] fork bomb contained by pids limit: rc=0 timed_out=False 0.45s out='pids-limited after 63'
+[PASS] memory bomb killed: rc=137 timed_out=False 0.71s out=''
+[PASS] infinite loop killed by wall timeout: rc=137 timed_out=True 5.19s out=''
+[PASS] tmpfs size capped: rc=0 timed_out=False 0.46s out='capped [Errno 27] File too large'
+[PASS] output flood truncated by runner: rc=0 timed_out=False 0.56s out='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+12/12 contained

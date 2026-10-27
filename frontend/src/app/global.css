@@ -1,0 +1,39 @@
+:root {
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-text: #1b1f24;
+  --color-muted: #5b6470;
+  --color-border: #c9ced6;
+  --color-primary: #1f5fbf;
+  --color-primary-text: #ffffff;
+  --color-danger: #b42318;
+  --color-danger-bg: #fdecea;
+  --color-info-bg: #eaf2fd;
+  --color-success: #1e6b3a;
+  --color-success-bg: #e8f5ec;
+  --color-focus: #0b57d0;
+  --radius: 6px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  /* System fonts only: no web-font download (AC-22). */
+  --font-sans: 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR', system-ui, sans-serif;
+  --font-mono: Consolas, 'D2Coding', ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background: var(--color-bg);
+  line-height: 1.6;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+a { color: var(--color-primary); }
+code, pre, .cm-editor { font-family: var(--font-mono); }

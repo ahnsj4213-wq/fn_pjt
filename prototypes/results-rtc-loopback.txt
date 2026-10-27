@@ -1,0 +1,3 @@
+connected+first audio frame after 0.17s
+received 12.0s of 16k mono audio in 12.2s wall
+datachannel messages: ['mic_open']

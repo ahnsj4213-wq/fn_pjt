@@ -1,0 +1,40 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+
+# Secrets and local config — only .env.example is committed
+.env
+.env.*
+!.env.example
+
+# Runtime data (uploads, answer audio, TTS cache, model files)
+var/
+data/
+models/
+*.log
+
+# Prototype artefacts
+prototypes/audio/*.wav
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/worktrees/
+
+# Test runtime data
+backend/tests/.data/

@@ -1,0 +1,23 @@
+# Development dependencies only: PostgreSQL. The API, worker and runner run on the host
+# (Windows) during development; see docs/trd/08-testing-and-operations.md for the full stack.
+name: aihire-dev
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aihire
+      POSTGRES_USER: aihire
+      # Development-only value; never reuse outside a local machine.
+      POSTGRES_PASSWORD: aihire_dev_only
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - aihire_pg_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aihire -d aihire"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  aihire_pg_dev:

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>RTC spike</title></head>
+<body>
+<h1>WebRTC 스파이크</h1>
+<button id="go">연결 + 질문 시작</button>
+<p id="q"></p>
+<pre id="log"></pre>
+<audio id="tts" autoplay></audio>
+<script>
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
+window.events = [];
+document.getElementById('go').onclick = async () => {
+  const t0 = performance.now();
+  const ctx = new AudioContext({ sampleRate: 48000 });
+  const dest = ctx.createMediaStreamDestination();
+  // Stand-in for the microphone: a Korean WAV played into a MediaStream. It starts playing immediately,
+  // i.e. *before* the question audio ends, so the server gate must drop the first part (AC-09).
+  const buf = await ctx.decodeAudioData(await (await fetch('/sample.wav')).arrayBuffer());
+  const pc = new RTCPeerConnection({ iceServers: [] });
+  dest.stream.getAudioTracks().forEach((t) => pc.addTrack(t, dest.stream));
+  pc.ontrack = (e) => { document.getElementById('tts').srcObject = e.streams[0] || new MediaStream([e.track]); };
+  const dc = pc.createDataChannel('ctl');
+  dc.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    window.events.push({ ...m, t: Math.round(performance.now() - t0) });
+    if (m.type === 'question') document.getElementById('q').textContent = m.text;
+    log(`${Math.round(performance.now() - t0)}ms ${e.data}`);
+    if (m.type === 'mic_open') {
+      // replay the "answer" once the mic is open so the gate passes it
+      const s2 = ctx.createBufferSource(); s2.buffer = buf; s2.connect(dest); s2.start();
+    }
+  };
+  dc.onopen = () => {
+    log('datachannel open');
+    const s = ctx.createBufferSource(); s.buffer = buf; s.connect(dest); s.start(); // speaks during TTS
+    dc.send(JSON.stringify({ type: 'start_question' }));
+  };
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); else pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); });
+  const ans = await (await fetch('/offer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pc.localDescription) })).json();
+  await pc.setRemoteDescription(ans);
+  pc.onconnectionstatechange = () => log('pc ' + pc.connectionState);
+};
+</script>
+</body>
+</html>
