@@ -20,6 +20,29 @@ log = logging.getLogger("app.aisvc")
 STT_RATE = 16000
 TTS_RATE = 48000
 MAX_STT_SECONDS = 30
+TRANSCRIBE_TIMEOUT_SEC = 30.0  # one segment is <= 15 s of audio and takes ~1-3 s on the dev GPU
+
+
+def add_cuda_dll_paths() -> list[str]:
+    """Windows: ctranslate2 finds cuBLAS/cuDNN only through PATH (os.add_dll_directory is not enough, ADR-0004).
+    Prepend the `bin` folders of the nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels when they are installed."""
+    import importlib.util
+    import os
+
+    if os.name != "nt":
+        return []
+    added = []
+    for pkg in ("nvidia.cublas", "nvidia.cudnn", "nvidia.cuda_runtime"):
+        try:
+            spec = importlib.util.find_spec(pkg)
+        except ModuleNotFoundError:
+            continue
+        for base in (spec.submodule_search_locations or []) if spec else []:
+            d = os.path.join(base, "bin")
+            if os.path.isdir(d) and d not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+                added.append(d)
+    return added
 
 # ── hl-1 (TRD 06 §6) ───────────────────────────────────────────────────────────
 HALLUCINATION_RULE = "hl-1"
@@ -81,11 +104,18 @@ class STTEngine:
         last: Exception | None = None
         for name, dev, comp in tries:
             try:
+                if dev == "cuda":
+                    add_cuda_dll_paths()
                 m = WhisperModel(name, device=dev, compute_type=comp, local_files_only=not self.download)
-                m.transcribe(np.zeros(STT_RATE, dtype=np.float32), language="ko", beam_size=1)  # warm kernels
+                # transcribe() is lazy: consume it so the encoder really runs on this device (missing cuBLAS/cuDNN
+                # or too little VRAM must fail here and fall back, not on the first candidate's answer).
+                segs, _ = m.transcribe(np.zeros(STT_RATE, dtype=np.float32), language="ko", beam_size=1)
+                list(segs)
             except Exception as e:  # noqa: BLE001 - try the next fallback
                 last = e
-                log_event(log, "stt_load_failed", logging.WARNING, model=name, error_code=type(e).__name__)
+                # Warm-up input is silence, so the message carries no candidate data: log it for diagnosis.
+                log_event(log, "stt_load_failed", logging.WARNING, model=name, error_code=type(e).__name__,
+                          reason=f"{dev}: {str(e)[:300]}")
                 continue
             self._model, self.active, self.error = m, {"model": name, "device": dev, "compute": comp}, None
             if (name, dev) != (self.model_name, self.device):
@@ -125,7 +155,14 @@ class STTEngine:
         audio = pcm16_to_float(pcm16k)
         t0 = time.perf_counter()
         async with self._lock:
-            out = await asyncio.to_thread(self._transcribe_sync, audio)
+            try:
+                out = await asyncio.wait_for(asyncio.to_thread(self._transcribe_sync, audio), TRANSCRIBE_TIMEOUT_SEC)
+            except TimeoutError:
+                # A native call that hangs cannot be cancelled: report STT down (interviews will not start) instead
+                # of letting every later request queue behind it.
+                self._model, self.error = None, "TRANSCRIBE_TIMEOUT"
+                log_event(log, "stt_hung", logging.ERROR, model=self.active.get("model"), reason=self.active.get("device"))
+                raise
         out.update(model=self.active["model"], device=self.active["device"],
                    elapsed_ms=int((time.perf_counter() - t0) * 1000))
         return out

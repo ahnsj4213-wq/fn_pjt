@@ -425,3 +425,42 @@ async def test_evaluate_empty_quote_gets_one_regeneration():
     assert items["LOGIC"]["evidence_status"] == "OK" and items["LOGIC"]["score"] == 4  # filled in on regeneration
     assert (items["DELIVERY"]["evidence_status"], items["DELIVERY"]["insufficient_reason"], items["DELIVERY"]["score"]) \
         == ("INSUFFICIENT", "NO_EVIDENCE", 1)
+
+
+def test_stt_warmup_runs_encoder_and_falls_back(monkeypatch):
+    """transcribe() is lazy: a GPU that cannot encode must fail at load (-> CPU small), not on the first answer."""
+    import faster_whisper
+
+    from app.aisvc.speech import STTEngine
+
+    class FakeWhisper:
+        def __init__(self, name, device, compute_type, local_files_only):
+            self.device = device
+
+        def transcribe(self, audio, **kw):
+            def gen():
+                if self.device == "cuda":
+                    raise RuntimeError("cuDNN failed")  # raised only when the segments are consumed
+                yield from ()
+            return gen(), None
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", FakeWhisper)
+    eng = STTEngine(model_name="large-v3-turbo", device="cuda")
+    eng._load_sync()
+    assert eng.up and eng.active == {"model": "small", "device": "cpu", "compute": "int8"} and eng.degraded
+
+
+async def test_stt_hung_call_marks_engine_down(monkeypatch):
+    import threading
+
+    from app.aisvc import speech
+
+    release = threading.Event()
+    eng = speech.STTEngine()
+    eng._model, eng.active = object(), {"model": "m", "device": "cuda"}
+    monkeypatch.setattr(speech, "TRANSCRIBE_TIMEOUT_SEC", 0.2)
+    monkeypatch.setattr(eng, "_transcribe_sync", lambda audio: release.wait(5) or {})
+    with pytest.raises(TimeoutError):
+        await eng.transcribe(bytes(3200))
+    release.set()
+    assert not eng.up and eng.error == "TRANSCRIBE_TIMEOUT"
