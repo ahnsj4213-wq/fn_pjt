@@ -464,3 +464,21 @@ async def test_stt_hung_call_marks_engine_down(monkeypatch):
         await eng.transcribe(bytes(3200))
     release.set()
     assert not eng.up and eng.error == "TRANSCRIBE_TIMEOUT"
+
+
+async def test_ollama_status_matches_names_like_ollama():
+    from app.aisvc.ollama import OllamaBackend
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [
+                {"name": "qwen3.5:4b", "model": "qwen3.5:4b", "digest": "d1"},
+                {"name": "qwen3-embedding:latest", "model": "qwen3-embedding:latest", "digest": "d2"}]})
+        return httpx.Response(200, json={"models": [{"name": "qwen3.5:4b", "size": 10, "size_vram": 10}]})
+
+    b = OllamaBackend("http://127.0.0.1:11434", "qwen3.5:4b", "qwen3-embedding", 8192,
+                      transport=httpx.MockTransport(handle))
+    s = await b.status()
+    assert s["up"] and s["loaded"] and s["full_gpu"] and s["digest"] == "d1" and s["embed_available"]
+    b.embed_model = "qwen3-embedding:0.6b"
+    assert (await b.status())["embed_available"] is False  # a different tag is a different model

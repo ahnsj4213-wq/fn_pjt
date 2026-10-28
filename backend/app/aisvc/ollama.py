@@ -9,6 +9,15 @@ import httpx
 from app.aisvc.gateway import LLMUnavailable
 
 
+def _canon(name: str) -> str:
+    return name if ":" in name.rsplit("/", 1)[-1] else f"{name}:latest"
+
+
+def _same_model(entry: dict, wanted: str) -> bool:
+    """Ollama lists a model under `name` and `model`; an untagged name means `:latest`."""
+    return any(_canon(entry.get(k) or "") == _canon(wanted) for k in ("name", "model") if entry.get(k))
+
+
 class ThinkingLeak(Exception):
     """The model returned reasoning text although think=false: the output is treated as INVALID."""
 
@@ -79,12 +88,12 @@ class OllamaBackend:
                 ps = (await c.get("/api/ps")).json().get("models", [])
         except (httpx.HTTPError, ValueError):
             return {"up": False, "loaded": False, "full_gpu": False, "model": self.model, "digest": None}
-        digest = next((m.get("digest") for m in tags if m.get("name") == self.model), None)
-        run = next((m for m in ps if m.get("name") == self.model), None)
+        digest = next((m.get("digest") for m in tags if _same_model(m, self.model)), None)
+        run = next((m for m in ps if _same_model(m, self.model)), None)
         return {"up": digest is not None, "loaded": run is not None,
                 "full_gpu": bool(run) and run.get("size_vram", 0) >= run.get("size", 1),
                 "model": self.model, "digest": digest,
-                "embed_available": any(m.get("name") == self.embed_model for m in tags)}
+                "embed_available": any(_same_model(m, self.embed_model) for m in tags)}
 
     async def warmup(self) -> None:
         """Load the LLM with the fixed num_ctx before declaring ready (cold load ~40 s, TRD 05 §3)."""

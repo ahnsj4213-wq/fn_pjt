@@ -68,8 +68,10 @@ async def run(ai: AIClient) -> bool:
     async def health() -> None:
         t = time.perf_counter()
         h = await ai.health()
-        report("health", all(h.get(k, {}).get("up") for k in ("llm", "stt", "tts", "embed")),
-               f"llm={h.get('llm')} stt={h.get('stt')} ({time.perf_counter() - t:.2f}s)")
+        parts = {k: bool(h.get(k, {}).get("up")) for k in ("llm", "stt", "tts", "embed")}
+        report("health", all(parts.values()),
+               " ".join(f"{k}={'up' if v else 'DOWN'}" for k, v in parts.items())
+               + f" | llm={h.get('llm')} stt={h.get('stt')} ({time.perf_counter() - t:.2f}s)")
 
     async def followups() -> None:
         for label, answer in (("clear answer", ANSWER), ("vague answer", VAGUE)):
