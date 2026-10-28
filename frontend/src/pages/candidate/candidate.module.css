@@ -1,0 +1,27 @@
+/* Candidate interview / precheck / coding screens. Colors come from global.css tokens only. */
+.stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+
+.preview { width: 100%; max-width: 360px; aspect-ratio: 4 / 3; background: #000; border-radius: var(--radius); object-fit: cover; }
+.meter { height: 10px; background: var(--color-border); border-radius: 5px; overflow: hidden; max-width: 360px; }
+.meterBar { height: 100%; background: var(--color-success); transition: width 80ms linear; }
+
+.question { font-size: 1.25rem; line-height: 1.6; padding: var(--space-4); background: var(--color-surface);
+  border: 1px solid var(--color-border); border-radius: var(--radius); }
+.progress { display: flex; gap: var(--space-3); align-items: center; color: var(--color-muted); }
+.timer { font-variant-numeric: tabular-nums; font-size: 1.5rem; font-weight: 600; }
+.timerWarn { color: var(--color-danger); }
+.captions { min-height: 4.5rem; padding: var(--space-3); border: 1px dashed var(--color-border); border-radius: var(--radius);
+  background: var(--color-surface); white-space: pre-wrap; }
+.listening { color: var(--color-primary); font-weight: 600; }
+
+.editorWrap { border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface);
+  min-height: 320px; }
+.output { font-family: var(--font-mono); white-space: pre-wrap; background: #111; color: #eee; padding: var(--space-3);
+  border-radius: var(--radius); max-height: 240px; overflow: auto; margin: 0; }
+.example { font-family: var(--font-mono); white-space: pre-wrap; background: var(--color-bg); padding: var(--space-2);
+  border-radius: var(--radius); margin: 0; }
+.checks { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.ok { color: var(--color-success); font-weight: 600; }
+.fail { color: var(--color-danger); font-weight: 600; }

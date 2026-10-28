@@ -67,7 +67,7 @@
 
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
-| INT-01 | 환경 점검: 마이크(권한·장치·레벨), 카메라(권한·장치·영상), 모두 통과해야 시작, 이전 단계 복귀 가능 | P0 | interview / 프런트 | `pages/candidate/Precheck` | T-INT-01, AC-08 | 미착수 | 서버에도 점검 통과 기록이 있어야 start 허용 |
+| INT-01 | 환경 점검: 마이크(권한·장치·레벨), 카메라(권한·장치·영상), 모두 통과해야 시작, 이전 단계 복귀 가능 | P0 | interview / 프런트 | `pages/candidate/Precheck` | T-INT-01, AC-08 | 구현 | 서버에도 점검 통과 기록이 있어야 start 허용 |
 | INT-02 | 스피커 테스트 음성 재생 | P1 | 프런트 | `pages/candidate/Precheck` | T-INT-02 | 미착수 | |
 | INT-03 | 시작 전 안내(방식·문항 수·제한시간·코딩 여부·음량) | P0 | 프런트 | `pages/candidate/Guide` | T-INT-03 | 미착수 | |
 | INT-04 | 질문 텍스트(자막)+TTS 동시 제시, 아바타 없음, TTS 실패 시 텍스트만 | P0 | interview, voice | `app/voice/tts.py`, `pages/candidate/Interview` | T-INT-04, AC-09 | 미착수 | |
@@ -83,7 +83,7 @@
 | INT-14 | 시작 전 AI 서버(LLM·STT·TTS) 상태 확인, 불가 시 시작 차단 | P0 | `GET /api/system/ai-health` | `app/ai/health.py` | T-INT-14 | 미착수 | TTS 실패는 INT-04로 텍스트 진행 가능 → TTS 장애 시 차단 여부 OQ-08 |
 | INT-15 | 실시간 자막, 종료 후 확정 텍스트로 교체 | P0 | interview / WebRTC 데이터채널 | `app/voice/stt_stream.py` | T-INT-15, AC-10 | 미착수 | 목표: 말 끊긴 뒤 2초 내 (8.2) |
 | INT-16 | 화면 이탈 경고, 횟수·시간 기록, 리포트 표시, 종료 안 함 | P2 | interview / `POST .../proctor-events` | `app/interview` | T-INT-16 | 미착수 | 비용이 작아 P0 작업 중 함께 구현 검토 |
-| INT-17 | 점검 단계에서 서버와 WebRTC 실제 연결 + 짧은 발화 인식 확인, 실패 시 시작 차단 | P0 | interview / `POST .../precheck/webrtc` | `app/voice/rtc.py`, `pages/candidate/Precheck` | T-INT-17, AC-08 | 미착수 | |
+| INT-17 | 점검 단계에서 서버와 WebRTC 실제 연결 + 짧은 발화 인식 확인, 실패 시 시작 차단 | P0 | interview / `POST .../precheck/webrtc` | `app/voice/`, `pages/candidate/Precheck` | T-INT-17, AC-08 | 구현 | |
 | INT-18 | WebRTC 자동 재연결, 실패 시 텍스트 입력 답변, 리포트에 표시 | P1 | interview | `app/interview`, 프런트 | T-INT-18 | 미착수 | |
 
 ### 5.6 코딩테스트 (COD)
@@ -186,14 +186,14 @@
 | AC-05 | 필수 동의 안 하면 진행 불가, 동의 기록에 문구 버전·일시 | SEC-02 | API 통합 + UI E2E | 미착수 |
 | AC-06 | PDF 아님·10MB 초과 거부와 이유, 텍스트 PDF는 표준 항목 채움·수정 가능 | RES-02, 03, 05 | API 통합 + UI E2E | 미착수 |
 | AC-07 | 이력서 질문 2개가 이력서에 실제 적힌 경험·프로젝트 언급 | QST-03 | 단위(근거 검증) + 실모델 통합 | 미착수 |
-| AC-08 | 마이크·카메라·WebRTC 중 하나라도 실패하면 시작 불가 | INT-01, INT-17 | API 통합 + UI E2E(가짜 장치) | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (WebRTC 점검 발화·미디어 자가 보고·AI 상태)), UI 미구현 |
+| AC-08 | 마이크·카메라·WebRTC 중 하나라도 실패하면 시작 불가 | INT-01, INT-17 | API 통합 + UI E2E(가짜 장치) | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (WebRTC 점검 발화·미디어 자가 보고·AI 상태)); UI E2E 정상 경로 통과(2026-10-28, frontend/e2e/candidate-flow.spec.ts, 가짜 장치·가짜 AI — 점검 통과 전 [면접 시작] 비활성 확인) |
 | AC-09 | 질문 음성+자막, 음성 끝나기 전 소리는 답변에 안 들어감 | INT-04, INT-05 | 서버 단위(프레임 게이트) + WebRTC 통합 | 서버 자동 시험 통과(2026-10-28, tests/test_voice.py (게이트 이전 발화 STT 미전달)), UI 미구현 |
 | AC-10 | 실시간 자막, [답변 완료]로 확정, 침묵만으로 종료 안 됨 | INT-05, INT-15 | WebRTC 통합(합성 음성) | 서버 자동 시험 통과(2026-10-28, tests/test_voice.py, test_interview.py (자막·[답변 완료]·침묵으로 종료 안 됨)), UI 미구현 |
 | AC-11 | 60/45초 만료 시 확정, 10초 경고, 무발화 '답변 없음' | INT-06 | 서버 단위(가짜 시계) + UI | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (가짜 시계: 만료 확정·10초 경고·무발화)), UI 미구현 |
 | AC-12 | 진행률 "3 / 10", 꼬리질문 본질문당 1·전체 4 이하 | INT-07, 6.2 | 단위 + UI | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (본질문당 1·전체 4, 텍스트 모드)), UI 미구현 |
 | AC-13 | 새로고침·끊김 후 끊긴 문항부터, 저장 답변 유지 | INT-11 | API 통합 | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (끊김→재개→같은 문항 재출제, 옛 turn_id 409)), UI 미구현 |
 | AC-14 | 동시 응시 상한 초과 시 안내 문구, 시작 안 됨 | INT-13 | API 통합(동시성) | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (동시 시작 3건 중 1건 거부, 고정 문구)), UI 미구현 |
-| AC-15 | 코딩테스트는 켠 공고만 면접 뒤, [실행]은 정상/비정상만, 비공개 테스트 비노출, 시간 종료 자동 제출 | COD-01, 03, 05, 06 | API 통합 + 샌드박스 통합 | 서버 자동 시험 통과(2026-10-28, tests/test_coding.py; 실제 Docker 샌드박스는 `python -m runner --selftest`로 장비에서 확인), UI 미구현 |
+| AC-15 | 코딩테스트는 켠 공고만 면접 뒤, [실행]은 정상/비정상만, 비공개 테스트 비노출, 시간 종료 자동 제출 | COD-01, 03, 05, 06 | API 통합 + 샌드박스 통합 | 서버 자동 시험 통과(2026-10-28, tests/test_coding.py; 실제 Docker 샌드박스는 `python -m runner --selftest`로 장비에서 확인); UI E2E 정상 경로 통과(2026-10-28, frontend/e2e/candidate-flow.spec.ts — [실행]은 정상 작동·출력만, 정답 여부 문구 없음, 최종 제출) |
 | AC-16 | 모든 점수에 원문 인용, 원문에 없는 인용은 '근거 부족' | EVL-01, 02 | 단위(인용 검증) + 가짜 LLM 통합 | 미착수 |
 | AC-17 | 총점 = 6.4 공식 직접 계산값 | EVL-04 | 단위(계산) + 통합 | 미착수 |
 | AC-18 | 평가 서버 멈춘 채 제출해도 평가 건 유지, 재기동 후 평가 완료, 재응시 요구 없음 | 8.3, 7.2 | 통합(워커 중지·재기동) | 미착수 |

@@ -268,6 +268,9 @@ class VoiceSession:
             await self.close("TEXT_MODE_REQUIRED")
             return False
         if view is None:
+            # Closed before the event leaves: the client hangs up on `interview_completed`, and that hang-up must not
+            # count as a disconnect (it would interrupt the coding phase that has just begun).
+            self.closed = True
             self.send("interview_completed", next="CODING" if status == "CODING" else "SUBMITTED")
             await asyncio.sleep(0.2)  # let the event leave before the connection closes
             await self.close("COMPLETED")

@@ -259,6 +259,27 @@ async def test_disconnect_while_answering_interrupts_without_saving(client, make
     assert not await registry.request_finish(uuid.UUID(app_id), uuid.UUID(q_ev["turn_id"]))  # stale turn (C3)
 
 
+async def test_hanging_up_on_completion_does_not_interrupt_coding(client, make_client, voice_ai):
+    """The browser closes the connection as soon as `interview_completed` arrives; that is not a disconnect."""
+    (pid,), = await q("SELECT id FROM coding_problems LIMIT 1")
+    _, app_id, cand = await setup_app(client, make_client, coding_enabled=True, coding_problem_id=str(pid),
+                                     coding_time_limit_min=30)
+    qs = await prepare_and_compose(cand, app_id)
+    await answer_all(app_id, qs[:9], no_answer_seq=99)
+    await start_interviewing(app_id)
+    voice_ai.stt_texts.append("마지막 답변입니다")
+    voice_ai.responses["followup_decide"] = lambda inp, msgs: {"decision": "SKIP", "reason": "NONE", "anchor": None,
+                                                               "question": None}
+    c = Client(app_id)
+    await c.connect("interview")
+    await answer_turn(c, speak=0.8)
+    done = await c.expect("interview_completed")
+    await c.pc.close()  # at once, inside the server's send-then-close window
+    assert done["next"] == "CODING"
+    await asyncio.sleep(1.0)
+    assert await q("SELECT attempt_status, interrupted_from FROM applications WHERE id=:a", a=app_id) == [("CODING", None)]
+
+
 async def test_precheck_utterance_marks_webrtc_ok(client, make_client, voice_ai):
     _, app_id, cand = await setup_app(client, make_client)
     await prepare_and_compose(cand, app_id)

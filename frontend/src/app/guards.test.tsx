@@ -27,6 +27,12 @@ describe('route guards', () => {
   });
 
   it('lets a recruiter read a posting but blocks [지원하기] (AC-02)', async () => {
+    server.use(http.get('*/api/postings/p1', () => HttpResponse.json({
+      id: 'p1', title: '백엔드 개발자', company_name: '테스트회사', company_intro: null, job_family: 'BACKEND',
+      job_family_label: '백엔드', requirements: null, preferred: null, duties: null, headcount: 1, deadline_date: null,
+      deadline_at: null, is_open: true, coding_enabled: false, coding_language: null, coding_time_limit_min: null,
+      has_applied: false,
+    })));
     renderRoutes(routes, { path: '/postings/p1', session: recruiterSession });
     fireEvent.click(await screen.findByTestId('apply-button'));
     expect(screen.getByText(MESSAGES.ROLE_FORBIDDEN_CANDIDATE_AREA)).toBeTruthy();

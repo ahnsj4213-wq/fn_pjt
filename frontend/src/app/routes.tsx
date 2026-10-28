@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Outlet, type RouteObject } from 'react-router';
 import { Account } from '@/pages/candidate/Account';
+import { ApplyFlow } from '@/pages/candidate/apply/ApplyFlow';
 import { ApplyComplete } from '@/pages/candidate/ApplyComplete';
 import { ApplyResume } from '@/pages/candidate/ApplyResume';
 import { ApplyReview } from '@/pages/candidate/ApplyReview';
@@ -55,10 +56,17 @@ export const routes: RouteObject[] = [
           {
             element: <RequireRole role="CANDIDATE"><Outlet /></RequireRole>,
             children: [
-              { path: 'postings/:pid/apply/consent', element: <Consent /> },
-              { path: 'postings/:pid/apply/resume', element: <ApplyResume /> },
-              { path: 'postings/:pid/apply/review', element: <ApplyReview /> },
-              { path: 'postings/:pid/apply/complete', element: <ApplyComplete /> },
+              {
+                // The apply steps share consent id + resume draft in memory (ApplyFlow).
+                path: 'postings/:pid/apply',
+                element: <ApplyFlow />,
+                children: [
+                  { path: 'consent', element: <Consent /> },
+                  { path: 'resume', element: <ApplyResume /> },
+                  { path: 'review', element: <ApplyReview /> },
+                  { path: 'complete', element: <ApplyComplete /> },
+                ],
+              },
               { path: 'me/applications', element: <MyApplications /> },
               { path: 'me/applications/:aid/result', element: <Result /> },
               { path: 'me/resume', element: <MyResume /> },
