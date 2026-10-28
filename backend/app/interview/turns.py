@@ -175,7 +175,8 @@ async def decide_followup(app_id: UUID, answer_id: UUID) -> InterviewQuestion | 
                 cause, reason = "LLM", out.get("reason", "NONE")
             else:
                 fq = (out.get("question") or "").strip()
-                anchor = (out.get("anchor") or {}).get("quote") or ""
+                # The task returns the anchor as the verified source span {start, end, text} (ADR-0008).
+                anchor = (out.get("anchor") or {}).get("text") or ""
                 if not fq or not looks_like_question(fq) or not (shares_content(fq, anchor) or shares_content(fq, q.text)):
                     cause, reason = "INVALID", "NEW_TOPIC_OR_FORMAT"
                 else:
@@ -219,8 +220,8 @@ async def finish_interview(db: AsyncSession, app_id: UUID) -> str:
                              deadline_at=now + timedelta(minutes=posting.coding_time_limit_min)))
         await db.execute(update(Interview).where(Interview.application_id == app_id).values(last_heartbeat_at=now))
     else:
+        # One UPDATE with eval_status: the table CHECK forbids a SUBMITTED row without an evaluation status (7.2).
         app.attempt_status, app.submitted_at = "SUBMITTED", now
-        await db.flush()
         await register_evaluation(db, app)
     await db.flush()
     return app.attempt_status
