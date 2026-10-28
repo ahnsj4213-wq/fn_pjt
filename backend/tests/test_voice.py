@@ -14,8 +14,6 @@ import pytest
 from aiortc import MediaStreamTrack, RTCConfiguration, RTCPeerConnection, RTCSessionDescription
 from pydantic import ValidationError
 
-from app.ai.client import TTSResult, set_ai_client
-from app.ai.fake import FakeAIClient
 from app.core.db import session_scope
 from app.voice import dc_protocol as dcp
 from app.voice import registry
@@ -140,26 +138,6 @@ class Client:
             ev = await asyncio.wait_for(self.events.get(), max(0.01, deadline - time.monotonic()))
             if ev["type"] == type_:
                 return ev
-
-
-@pytest.fixture
-def voice_ai():
-    fake = FakeAIClient()
-    calls = {"stt": 0}
-    real_stt = fake.stt
-
-    async def short_tts(text: str) -> TTSResult:  # 0.2 s clips keep the test fast
-        return TTSResult(pcm48k=bytes(9600 * 2), duration_ms=200, voice_model="fake-tts")
-
-    async def counted_stt(pcm: bytes, *, purpose: str = "answer"):
-        calls["stt"] += 1
-        return await real_stt(pcm, purpose=purpose)
-
-    fake.tts, fake.stt = short_tts, counted_stt
-    fake.calls_count = calls
-    set_ai_client(fake)
-    yield fake
-    set_ai_client(None)
 
 
 async def start_interviewing(app_id: str) -> None:

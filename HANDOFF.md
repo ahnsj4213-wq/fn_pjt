@@ -21,7 +21,7 @@
 
 ## 3. 구현·검증 상태
 
-### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 87개 테스트 통과 — 2026-10-28 Linux 클라우드 환경에서 확인, Windows 장비에서는 아직 재실행 안 함)
+### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 92개 테스트 통과 — 2026-10-28 Linux 클라우드 환경에서 확인, Windows 장비에서는 아직 재실행 안 함)
 
 | 영역 | 파일 | 테스트 |
 |---|---|---|
@@ -32,6 +32,7 @@
 | 점수 계산(6.4)·인용 검증(ADR-0008) | `app/evaluation/` | `tests/test_scoring_quotes.py` (AC-17, AC-16 규칙) |
 | 영속 작업 큐(임대·펜싱·인프라 장애 시 시도 미소모·재시작 복구) | `app/jobs/` | `tests/test_job_queue.py` (AC-18 기반) |
 | 작업 핸들러: `compose_questions`(ADR-0005 슬롯·커스텀 7번·이력서 근거·BANK_FALLBACK·회사 범위 은행·시드 최후 대체), `tts_pregen`, `extract_resume`(T1→폼 키 변환), `pre_evaluate`, `evaluate_application`(선평가 재사용·T5~T8·점수·리포트·지원자 피드백, ON_CLAIM/ON_REQUEUE/ON_EXHAUSTED로 run·eval_status 관리), `grade_coding`(기대 출력 비교는 worker, C8) | `app/jobs/handlers.py`, `app/questions/compose.py`, `app/evaluation/pipeline.py`, `app/coding/` | `tests/test_handlers.py` (12개) |
+| 면접 API 등록(interview·voice 라우터, `GET /api/system/ai-health`)과 인수 기준 AC-08~14 HTTP 시험 | `app/main.py`, `app/interview/system.py` | `tests/test_interview.py` (5개) |
 | 음성 런타임(TRD 06, ADR-0009): 지원 건당 aiortc 세션(`iceServers=[]`), TTS 하향 트랙, 서버 게이트, 에너지 VAD, 구간 STT→`caption_segment`, [답변 완료]·시간 만료 확정, 꼬리질문, 면접 종료, 끊김→INTERRUPTED, 슬롯 갱신, 점검 발화(INT-17), 데이터채널 프로토콜 v1(`dc_protocol.py`) | `app/voice/` | `tests/test_voice.py` (7개, 같은 프로세스의 aiortc 클라이언트로 실제 WebRTC 왕복) |
 | AI 서비스(TRD 05 §4·§5): 게이트웨이 레인·선점·마감·장애 감지, `/v1/llm·stt·tts·embed·health`, 토큰 인증, 기동 순서, hl-1, 48kHz 리샘플 / 클라이언트·가짜 클라이언트 | `app/aisvc/`, `app/ai/client.py`, `app/ai/fake.py` | `tests/test_ai_service.py` (15개) |
 
@@ -67,8 +68,8 @@
 3. ~~음성 런타임~~ (완료). 시그널링 라우터는 `app/voice/router.py`(IV-3 `…/rtc/offer`, IV-18 `…/precheck/utterance`)인데 **아직 `app/main.py`에 등록하지 않았다**(4번에서 interview 라우터와 함께 등록). 알아둘 점·남은 것:
    - 함께 고친 기존 버그: `turns.decide_followup`이 검증된 anchor(`text`) 대신 없는 키(`quote`)를 읽어 **모든 꼬리질문을 새 주제로 버리던 문제**, `turns.finish_interview`가 eval_status 없이 SUBMITTED를 먼저 flush해 **DB CHECK 위반으로 면접 종료가 실패하던 문제**.
    - 답변 음성은 TRD의 Opus(OGG) 대신 FLAC(무손실, soundfile 지원)으로 `data_dir/answers/{turn_id}.flac`에 저장한다.
-   - 남은 것: 꼬리질문 TTS가 5초 예산을 넘을 때 "텍스트 먼저" 보내기(OQ-22, 지금은 TTS 최대 10초 대기 후 실패 시 텍스트만), 점검 단계 하향 안내 음성(INT-02, P1), 시간 만료(60초) 경로의 통합 시험(현재는 버튼 경로만), `dc_protocol.json_schemas()` → 프런트 TS 타입 생성, 30분 장시간·다른 PC·운영 Linux host 네트워크 검증(R-10).
-4. interview 라우터 등록 + 테스트(AC-08, 09, 10, 11, 12, 13, 14)
+   - 남은 것: 꼬리질문 TTS가 5초 예산을 넘을 때 "텍스트 먼저" 보내기(OQ-22, 지금은 TTS 최대 10초 대기 후 실패 시 텍스트만), 점검 단계 하향 안내 음성(INT-02, P1), `dc_protocol.json_schemas()` → 프런트 TS 타입 생성, 30분 장시간·다른 PC·운영 Linux host 네트워크 검증(R-10).
+4. ~~interview 라우터 등록 + 테스트~~ (완료). AC-08~14 서버 시험 통과(`docs/requirements-traceability.md` 갱신). 시간 만료는 음성 런타임 시계를 앞당기는 방식으로 시험한다. UI 쪽 확인은 6번(프런트·Playwright)에서.
 5. 코딩테스트 API(TRD 04 §5.3) + runner 연동 + 자동 제출 주기 작업(AC-15)
 6. 프런트 면접·코딩 화면, Playwright E2E(가짜 미디어 장치)
 7. 보관 기간 자동 삭제(SEC-07), 탈퇴(USR-07), AC-22 오프라인 시험, S-10 실측

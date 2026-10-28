@@ -87,3 +87,27 @@ def make_client(app):
     yield _make
     for c in clients:
         asyncio.get_event_loop().create_task(c.aclose())
+
+
+@pytest.fixture
+def voice_ai():
+    """FakeAIClient for voice tests: 0.2 s TTS clips (keeps real-time tests fast) and an STT call counter."""
+    from app.ai.client import TTSResult, set_ai_client
+    from app.ai.fake import FakeAIClient
+
+    fake = FakeAIClient()
+    calls = {"stt": 0}
+    real_stt = fake.stt
+
+    async def short_tts(text: str) -> TTSResult:
+        return TTSResult(pcm48k=bytes(9600 * 2), duration_ms=200, voice_model="fake-tts")
+
+    async def counted_stt(pcm: bytes, *, purpose: str = "answer"):
+        calls["stt"] += 1
+        return await real_stt(pcm, purpose=purpose)
+
+    fake.tts, fake.stt = short_tts, counted_stt
+    fake.calls_count = calls
+    set_ai_client(fake)
+    yield fake
+    set_ai_client(None)
