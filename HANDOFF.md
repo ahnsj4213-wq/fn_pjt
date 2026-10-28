@@ -47,7 +47,7 @@
 | 담당(에이전트) | 범위 | 상태 |
 |---|---|---|
 | C | `backend/app/aisvc/`, `app/ai/client.py`·`fake.py` | **완료(2026-10-27)**. 실제 모델(Ollama·faster-whisper·Supertonic) 연동은 GPU 장비에서 미확인 — `python -m app.aisvc` 기동 후 `/readyz`·`/v1/health` 확인 필요(S-10~S-12). 게이트웨이는 선점된 호출을 내부에서 같은 레인 맨 앞으로 다시 넣으므로 호출자에게 409를 돌려주지 않는다(클라이언트는 409도 처리). BATCH 기아 방지(5분마다 순서 당김)는 같은 레인 FIFO라 구현하지 않음 |
-| E | `runner/`(샌드박스 실행 서비스, SBX 자체 점검) | HTTP 계약·컨테이너 옵션·inspect 검증은 시험 통과. **실제 Docker 실행·자체 점검(SBX-01~14)은 Docker가 있는 장비에서 아직 안 돌림** — 5절의 runner 명령 참고. 계약은 ADR-0007, TRD 07 §13 |
+| E | `runner/`(샌드박스 실행 서비스, SBX 자체 점검) | HTTP 계약·컨테이너 옵션·inspect 검증은 시험 통과. **자체 점검 SBX-01~14 전부 통과(2026-10-28, 개발 장비 Windows + Docker Desktop, runtime `runc`) — ADR-0007에 따라 "개발 검증"으로만 본다.** 운영 Linux 호스트에서는 `runsc`(gVisor)로 다시 통과해야 한다(prod는 승인 런타임만 VERIFIED). 계약은 ADR-0007, TRD 07 §13 |
 | D | `frontend/` 지원자·담당자 화면 | 골격·인증 화면·공통 계층 완료(build·lint·test 23개 통과, 중단 직전 기준). 화면 구현 진행 중 |
 
 ## 4. 다음 할 일 (권장 순서)
