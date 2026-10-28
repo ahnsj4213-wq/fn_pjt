@@ -85,6 +85,19 @@ class _Unauthorized(Exception):
     pass
 
 
+def _raise_site(exc: BaseException) -> str:
+    """'file.py:123 in func' for the innermost frame, plus the first frame inside this project if different."""
+    import traceback
+
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return "unknown"
+    fmt = lambda f: f"{f.filename.replace(chr(92), '/').rsplit('/', 1)[-1]}:{f.lineno} in {f.name}"
+    own = next((f for f in reversed(frames) if "/app/" in f.filename.replace(chr(92), "/")), None)
+    inner = fmt(frames[-1])
+    return inner if own is None or own is frames[-1] else f"{inner} (via {fmt(own)})"
+
+
 def _err(status: int, code: str, message: str = "") -> JSONResponse:
     return JSONResponse({"error": {"code": code, "message": message}}, status_code=status)
 
@@ -146,8 +159,9 @@ def create_app(engines: Engines, *, token: str, warmup: bool = True) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception):  # never echo inputs back
-        log_event(log, "ai_error", logging.ERROR, path=request.url.path, error_code=type(exc).__name__)
-        return _err(500, "INTERNAL")
+        where = _raise_site(exc)  # code location only: exception messages can embed request data (SEC-08)
+        log_event(log, "ai_error", logging.ERROR, path=request.url.path, error_code=type(exc).__name__, reason=where)
+        return _err(500, "INTERNAL", f"{type(exc).__name__} at {where}")
 
     @app.get("/healthz")
     async def healthz():

@@ -110,13 +110,13 @@ class STTEngine:
         kept, dropped = [], []
         for s in segs:
             text = s.text.strip()
-            reason = is_hallucination(text, s.no_speech_prob, s.avg_logprob, s.compression_ratio)
+            reason = is_hallucination(text, float(s.no_speech_prob), float(s.avg_logprob), float(s.compression_ratio))
             if reason:
                 dropped.append(reason)
                 continue
-            if text:
-                kept.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": text,
-                             "no_speech_prob": round(s.no_speech_prob, 3)})
+            if text:  # plain floats: numpy scalars are not JSON-serialisable
+                kept.append({"start": round(float(s.start), 2), "end": round(float(s.end), 2), "text": text,
+                             "no_speech_prob": round(float(s.no_speech_prob), 3)})
         return {"text": " ".join(k["text"] for k in kept), "segments": kept, "dropped": dropped}
 
     async def transcribe(self, pcm16k: bytes) -> dict:

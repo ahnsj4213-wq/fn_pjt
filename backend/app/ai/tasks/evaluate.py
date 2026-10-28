@@ -5,7 +5,8 @@ eval_text span (never the LLM string), comment. Rule-based 1-point results never
 - is_no_answer            -> evidence_status NO_ANSWER (6.4 '답변 없음')
 - very short / no content -> INSUFFICIENT / TOO_SHORT (EVL-02, OQ-09)
 Quote mismatch -> one regeneration for the failed items only -> INSUFFICIENT / QUOTE_MISMATCH.
-Empty quote -> INSUFFICIENT / NO_EVIDENCE. P-8 wording in a comment -> one regeneration -> sentence removed.
+Empty quote with a score above 1 -> one regeneration (same budget as a mismatch); empty quote after that, or
+with score 1 -> INSUFFICIENT / NO_EVIDENCE (the 4B model tended to leave logic/delivery empty on solid answers). P-8 wording in a comment -> one regeneration -> sentence removed.
 """
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,7 +41,7 @@ def _rule_items(status: str, reason: str | None) -> dict:
 
 class EvaluateAnswer(TaskSpec):
     name = "evaluate_answer"
-    version = "evaluate_answer@1.0.0"
+    version = "evaluate_answer@1.1.0"
     lane = "BATCH"
     temperature = 0.0
     num_predict = 450
@@ -49,7 +50,10 @@ class EvaluateAnswer(TaskSpec):
     system = ("너는 채용 면접 답변 평가기다. 아래 루브릭의 4개 항목을 각각 1~5점 정수로 판정한다.\n"
               "각 항목마다 순서대로 quote → comment → score를 쓴다.\n"
               "- quote: 답변 원문에서 그 판단의 근거가 되는 연속 구절 하나를 띄어쓰기·문장부호까지 글자 그대로 복사한다(8자 이상, 150자 이하, 생략 부호 금지). "
-              "근거가 될 구절이 없으면 빈 문자열을 쓴다. 지어내지 않는다.\n"
+              "항목별로 인용할 구절: expertise=직무 지식·기술을 쓴 구절, logic=이유나 사례가 이어지는 구절, "
+              "specificity=본인의 역할·행동·결과가 드러난 구절, delivery=답변의 핵심(결론·요지)을 밝힌 문장. "
+              "논리성·전달력처럼 답변 전체를 보는 항목도 그 판단을 가장 잘 보여 주는 구절 하나를 고른다. "
+              "답변 어디에도 해당하는 구절이 없을 때만 빈 문자열을 쓰고 1점을 준다. 지어내지 않는다.\n"
               "- comment: 판단 이유를 한국어 한두 문장(100자 이내)으로 쓴다. 점수 숫자, 합격·불합격, 채용 추천은 쓰지 않는다.\n"
               "- 지원자의 이름·성별·나이 같은 정보는 판단에 쓰지 않는다.\n\n" + rubric.render())
 
@@ -87,6 +91,9 @@ class EvaluateAnswer(TaskSpec):
                 comment = strip_p8(comment)
                 flags["p8_filtered"] = ctx["p8_filtered"] = True
             q = item.quote.strip()
+            if not q and item.score > 1 and not final:
+                bad_quote.append(key)  # a score above 1 needs evidence: ask once for the quote before 근거 부족
+                continue
             if not q:
                 accepted[crit] = {"score": 1, "evidence_status": "INSUFFICIENT", "insufficient_reason": "NO_EVIDENCE",
                                   "quote": None, "comment": comment}
@@ -103,8 +110,9 @@ class EvaluateAnswer(TaskSpec):
                               "quote": {"start": span.start, "end": span.end, "text": span.text}, "comment": comment}
         feedback = {}
         if bad_quote:
-            feedback["quote"] = (f"다음 항목의 quote가 답변 원문에 없다: {', '.join(bad_quote)}. 답변 원문에서 띄어쓰기·문장부호까지 "
-                                 "그대로 복사한 연속 구절(8자 이상, 150자 이하)로 다시 써라. 근거가 없으면 빈 문자열로 둔다.")
+            feedback["quote"] = (f"다음 항목의 quote가 비어 있거나 답변 원문에 없다: {', '.join(bad_quote)}. 답변 원문에서 띄어쓰기·문장부호까지 "
+                                 "그대로 복사한 연속 구절(8자 이상, 150자 이하)로 다시 써라. 비어 있는 quote도 같다. 정말 근거가 없으면 빈 "
+                                 "문자열과 1점으로 둔다.")
         if bad_p8:
             feedback["p8"] = f"다음 항목의 comment에 합격·불합격·채용 추천 표현이 있다: {', '.join(bad_p8)}. 그런 표현 없이 다시 써라."
         if feedback:

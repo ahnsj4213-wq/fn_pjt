@@ -10,6 +10,7 @@ import pytest
 
 from app.ai.client import AIUnavailable, HttpAIClient
 from app.ai.fake import FakeAIClient
+from app.ai.tasks import TASKS
 from app.aisvc.gateway import CallStats, DeadlineExceeded, Gateway, LLMUnavailable
 from app.aisvc.service import Engines, create_app
 from app.aisvc.speech import TTS_RATE, is_hallucination, resample_to_s16
@@ -240,7 +241,7 @@ async def test_service_llm_runs_task_validators_and_reports_manifest(ai_app):
            "answer": ANSWER}
     engines.backend.task_for_next, engines.backend.inputs = "evaluate_answer", {"evaluate_answer": inp}
     async with http(app) as c:
-        r = await c.post("/v1/llm/evaluate_answer", json=env("evaluate_answer@1.0.0", "BATCH", inp))
+        r = await c.post("/v1/llm/evaluate_answer", json=env(TASKS["evaluate_answer"].version, "BATCH", inp))
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "OK" and body["manifest_hash"].startswith("sha256:")
@@ -385,3 +386,42 @@ def test_resample_to_48k_s16():
     pcm = resample_to_s16(x, 44100, TTS_RATE)
     assert len(pcm) == TTS_RATE * 2  # 1 s of s16 mono
     assert resample_to_s16(np.zeros(0, dtype=np.float32), 44100) == b""
+
+
+async def test_service_500_reports_exception_type_and_location(ai_app):
+    """A crash names its type and raise site so it can be fixed from the response alone; no request data leaks."""
+    app, engines = ai_app
+
+    async def broken(pcm: bytes) -> dict:
+        raise ValueError(f"secret-{len(pcm)}")
+
+    engines.stt.transcribe = broken
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+                                 base_url="http://ai", headers={"X-AI-Token": TOKEN}) as c:
+        r = await c.post("/v1/stt", content=bytes(3200), headers={"Content-Type": "audio/L16"})
+    assert r.status_code == 500
+    err = r.json()["error"]
+    assert err["code"] == "INTERNAL" and err["message"].startswith("ValueError at test_ai_service.py:")
+    assert "in broken" in err["message"] and "secret" not in r.text
+
+
+async def test_evaluate_empty_quote_gets_one_regeneration():
+    """Score > 1 with an empty quote is asked again once; still empty -> NO_EVIDENCE 1 point (no invention)."""
+    fake = FakeAIClient()
+    calls = {"n": 0}
+    good = ANSWER[:30]
+
+    def reply(inp, msgs):
+        calls["n"] += 1
+        quote = "" if calls["n"] == 1 else good
+        item = {"quote": good, "comment": "근거가 있다.", "score": 4}
+        return {"expertise": item, "logic": {**item, "quote": quote}, "specificity": item,
+                "delivery": {**item, "quote": ""}}
+
+    fake.responses["evaluate_answer"] = reply
+    r = await fake.llm("evaluate_answer", {"question": "q", "answer": ANSWER}, lane="BATCH")
+    items = r.output["items"]
+    assert r.status == "OK" and r.attempts["llm_calls"] == 2 and "비어 있거나" in fake.calls[0].messages[1][-1]["content"]
+    assert items["LOGIC"]["evidence_status"] == "OK" and items["LOGIC"]["score"] == 4  # filled in on regeneration
+    assert (items["DELIVERY"]["evidence_status"], items["DELIVERY"]["insufficient_reason"], items["DELIVERY"]["score"]) \
+        == ("INSUFFICIENT", "NO_EVIDENCE", 1)

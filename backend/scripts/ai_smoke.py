@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 
+import httpx
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -55,49 +56,76 @@ async def run(ai: AIClient) -> bool:
         ok_all &= ok
         print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}")
 
-    t = time.perf_counter()
-    h = await ai.health()
-    report("health", all(h.get(k, {}).get("up") for k in ("llm", "stt", "tts", "embed")),
-           f"llm={h.get('llm')} stt={h.get('stt')} ({time.perf_counter() - t:.2f}s)")
+    async def step(name: str, fn) -> None:
+        """Run one check; an exception fails only this step and shows the server's error detail."""
+        try:
+            await fn()
+        except httpx.HTTPStatusError as e:
+            report(name, False, f"HTTP {e.response.status_code} {e.response.text[:300]}")
+        except Exception as e:  # noqa: BLE001 - keep going so every capability is reported
+            report(name, False, f"{type(e).__name__}: {e}")
 
-    for label, answer in (("clear answer", ANSWER), ("vague answer", VAGUE)):
+    async def health() -> None:
         t = time.perf_counter()
-        r = await ai.llm("followup_decide", {"question": QUESTION, "question_type": "JOB", "answer": answer,
-                                             "followups_left": 4}, lane="RT", deadline_ms=now_ms(5.0))
+        h = await ai.health()
+        report("health", all(h.get(k, {}).get("up") for k in ("llm", "stt", "tts", "embed")),
+               f"llm={h.get('llm')} stt={h.get('stt')} ({time.perf_counter() - t:.2f}s)")
+
+    async def followups() -> None:
+        for label, answer in (("clear answer", ANSWER), ("vague answer", VAGUE)):
+            t = time.perf_counter()
+            r = await ai.llm("followup_decide", {"question": QUESTION, "question_type": "JOB", "answer": answer,
+                                                 "followups_left": 4}, lane="RT", deadline_ms=now_ms(5.0))
+            el = time.perf_counter() - t
+            detail = f"status={r.status} decision={r.output.get('decision')} reason={r.output.get('reason')} {el:.2f}s"
+            if r.error:
+                detail += f" error={r.error}"
+            if r.output.get("question"):
+                detail += f"\n         question: {r.output['question']}"
+            report(f"T4 follow-up ({label}, budget 5s)", r.status in ("OK", "TIMEOUT") and el < 5.5, detail)
+
+    async def evaluate() -> None:
+        t = time.perf_counter()
+        r = await ai.llm("evaluate_answer", {"question": QUESTION, "question_type": "JOB", "job_brief": "백엔드 개발자",
+                                             "answer": ANSWER}, lane="BATCH")
         el = time.perf_counter() - t
-        detail = f"status={r.status} decision={r.output.get('decision')} reason={r.output.get('reason')} {el:.2f}s"
-        if r.output.get("question"):
-            detail += f"\n         question: {r.output['question']}"
-        report(f"T4 follow-up ({label}, budget 5s)", r.status in ("OK", "TIMEOUT") and el < 5.5, detail)
+        items = r.output.get("items", {})
+        quotes_ok = all(v["quote"] is None or ANSWER[v["quote"]["start"]:v["quote"]["end"]] == v["quote"]["text"]
+                        for v in items.values())
+        lines = [f"status={r.status} model_calls={r.attempts.get('llm_calls')} regen={r.attempts.get('regen')} "
+                 f"format_retries={r.attempts.get('format')} {el:.1f}s" + (f" error={r.error}" if r.error else "")]
+        for k, v in items.items():
+            why = f" reason={v['insufficient_reason']}" if v.get("insufficient_reason") else ""
+            quote = f" quote=\"{v['quote']['text'][:40]}\"" if v.get("quote") else ""
+            lines.append(f"{k}: {v['score']}/{v['evidence_status']}{why}{quote} comment=\"{v.get('comment', '')}\"")
+        report("T5 evaluate_answer", r.status == "OK" and quotes_ok, "\n         ".join(lines))
 
-    t = time.perf_counter()
-    r = await ai.llm("evaluate_answer", {"question": QUESTION, "question_type": "JOB", "job_brief": "백엔드 개발자",
-                                         "answer": ANSWER}, lane="BATCH")
-    el = time.perf_counter() - t
-    items = r.output.get("items", {})
-    quotes_ok = all(v["quote"] is None or ANSWER[v["quote"]["start"]:v["quote"]["end"]] == v["quote"]["text"]
-                    for v in items.values())
-    summary = ", ".join(f"{k}={v['score']}/{v['evidence_status']}" for k, v in items.items())
-    report("T5 evaluate_answer", r.status == "OK" and quotes_ok,
-           f"status={r.status} {summary} model_calls={r.attempts.get('llm_calls')} {el:.1f}s")
+    async def roundtrip() -> None:
+        t = time.perf_counter()
+        tts = await ai.tts(TTS_TEXT)
+        t_tts = time.perf_counter() - t
+        report("TTS", bool(tts.pcm48k), f"audio={tts.duration_ms}ms voice={tts.voice_model} {t_tts:.2f}s")
+        t = time.perf_counter()
+        stt = await ai.stt(to_16k(tts.pcm48k))
+        t_stt = time.perf_counter() - t
+        c = cer(TTS_TEXT, stt.text)
+        report("STT (TTS round trip)", c <= 0.15,
+               f"CER={c:.3f} model={stt.model}/{stt.device} dropped={stt.dropped} {t_stt:.2f}s\n         heard: {stt.text}")
 
-    t = time.perf_counter()
-    tts = await ai.tts(TTS_TEXT)
-    t_tts = time.perf_counter() - t
-    t = time.perf_counter()
-    stt = await ai.stt(to_16k(tts.pcm48k)) if tts.pcm48k else None
-    t_stt = time.perf_counter() - t
-    text = stt.text if stt else ""
-    c = cer(TTS_TEXT, text)
-    report("TTS -> STT round trip", bool(tts.pcm48k) and c <= 0.15,
-           f"audio={tts.duration_ms}ms tts={t_tts:.2f}s stt={t_stt:.2f}s CER={c:.3f}\n         heard: {text}")
+    async def embeddings() -> None:
+        t = time.perf_counter()
+        v = await ai.embed(["팀 프로젝트 갈등 해결 경험", "협업 중 의견 충돌을 해결한 경험", "좋아하는 음식"])
 
-    t = time.perf_counter()
-    v = await ai.embed(["팀 프로젝트 갈등 해결 경험", "협업 중 의견 충돌을 해결한 경험", "좋아하는 음식"])
-    sim = lambda a, b: float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
-    report("embeddings", sim(v[0], v[1]) > sim(v[0], v[2]),
-           f"dim={len(v[0])} similar={sim(v[0], v[1]):.2f} unrelated={sim(v[0], v[2]):.2f} "
-           f"{time.perf_counter() - t:.2f}s")
+        def sim(a, b) -> float:
+            return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+        report("embeddings", sim(v[0], v[1]) > sim(v[0], v[2]),
+               f"dim={len(v[0])} similar={sim(v[0], v[1]):.2f} unrelated={sim(v[0], v[2]):.2f} "
+               f"{time.perf_counter() - t:.2f}s")
+
+    for name, fn in (("health", health), ("T4 follow-up", followups), ("T5 evaluate_answer", evaluate),
+                     ("TTS/STT", roundtrip), ("embeddings", embeddings)):
+        await step(name, fn)
     return ok_all
 
 
