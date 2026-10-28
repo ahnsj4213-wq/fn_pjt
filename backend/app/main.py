@@ -48,10 +48,11 @@ from app.postings.router import public_router as postings_public_router  # noqa:
 from app.postings.router import recruiter_router as postings_recruiter_router  # noqa: E402
 from app.recruiter.router import router as recruiter_router  # noqa: E402
 from app.resumes.router import router as resumes_router  # noqa: E402
+from app.retention.router import router as withdrawal_router  # noqa: E402
 from app.voice.router import router as voice_router  # noqa: E402
 
 ROUTERS = [auth_router, postings_public_router, postings_recruiter_router, consent_router, resumes_router,
            candidate_applications_router, recruiter_router, interview_router, voice_router, system_router,
-           coding_router]
+           coding_router, withdrawal_router]
 
 app = create_app()

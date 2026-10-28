@@ -42,6 +42,21 @@ async def create_recruiter(db: AsyncSession, *, company_id: str | UUID, email: s
     return user.id
 
 
+async def _purge(dry_run: bool) -> int:
+    from app.core.db import sessionmaker
+    from app.retention.service import run_file_gc, run_retention
+
+    async with sessionmaker()() as db:
+        counts = await run_retention(db, dry_run=dry_run)
+        print({"dry_run": dry_run, **counts.as_detail()})
+        if not dry_run:
+            await audit(db, action="DATA_PURGE", target_type="retention", target_id="cli", actor_id=None,
+                        actor_role="OPERATOR_CLI", **counts.as_detail())
+            await db.commit()
+            print({"files_removed": await run_file_gc(db)})
+    return 0
+
+
 async def _main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="python -m app.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -52,7 +67,12 @@ async def _main(argv: list[str]) -> int:
     r.add_argument("--company-id", required=True)
     r.add_argument("--email", required=True)
     r.add_argument("--name", required=True)
+    g = sub.add_parser("purge", help="retention purge now (SEC-07); --dry-run only counts")
+    g.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
+
+    if args.cmd == "purge":
+        return await _purge(args.dry_run)
 
     async with session_scope() as db:
         if args.cmd == "create-company":

@@ -25,7 +25,13 @@ async function signupAndLogin(page: Page): Promise<void> {
 
 test.setTimeout(240_000);
 
-test('candidate applies, passes precheck, interviews by voice and submits code', async ({ page }) => {
+test('candidate applies, interviews by voice, submits code and reads the decided result', async ({ page, playwright }) => {
+  // Browser-side AC-22 check (the decisive one is tools/offline/run.sh): the app never asks another host.
+  const external: string[] = [];
+  page.on('request', (r) => {
+    const host = new URL(r.url()).hostname;
+    if (!['localhost', '127.0.0.1'].includes(host) && !r.url().startsWith('data:')) external.push(r.url());
+  });
   await signupAndLogin(page);
 
   // Apply (JOB-02, SEC-01, RES-07)
@@ -83,4 +89,29 @@ test('candidate applies, passes precheck, interviews by voice and submits code',
 
   await page.getByTestId('go-applications').click();
   await expect(page.getByTestId('my-applications')).toContainText('제출');
+  const aid = (await page.locator('[data-testid^="action-"]').first().getAttribute('data-testid'))!.slice('action-'.length);
+
+  // Evaluation runs in the worker (fake AI); the recruiter decides through the API (recruiter screens come later).
+  const rec = await playwright.request.newContext({ baseURL: 'http://localhost:5173',
+    extraHTTPHeaders: { Origin: 'http://localhost:5173' } });
+  const login = await rec.post('/api/auth/login', { data: { role: 'RECRUITER', email: 'rec@e2e.example', password: PASSWORD } });
+  expect(login.ok()).toBeTruthy();
+  const csrf = (await login.json()).csrf_token as string;
+  await expect.poll(async () => {
+    const list = await (await rec.get('/api/recruiter/applications')).json();
+    return list.items.find((i: { id: string }) => i.id === aid)?.eval_status;
+  }, { timeout: 60_000 }).toBe('DONE');
+  const report = await (await rec.get(`/api/recruiter/applications/${aid}/report`)).json();
+  expect(report.total_score).not.toBeNull();
+  const decided = await rec.post(`/api/recruiter/applications/${aid}/decision`,
+    { headers: { 'X-CSRF-Token': csrf }, data: { decision: 'PASS', expected_version: 0 } });
+  expect(decided.ok()).toBeTruthy();
+  await rec.dispose();
+
+  // RPT-03/04: after the decision the candidate sees text feedback, never a total score.
+  await page.reload();
+  await page.getByTestId(`action-${aid}`).click();
+  await expect(page.getByTestId('feedback')).toBeVisible();
+  await expect(page.getByText('합격', { exact: true })).toBeVisible();
+  expect(external).toEqual([]);
 });

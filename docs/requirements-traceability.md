@@ -18,7 +18,7 @@
 | USR-04 | 로그인 실패 문구로 계정 존재 여부 비노출 | P0 | auth / `POST /api/auth/login` | `app/auth` | T-USR-04 | 미착수 | 존재하지 않는 계정도 해시 검증을 수행해 응답 시간 차이도 줄인다 |
 | USR-05 | 담당자 계정으로 지원자 기능 접근 차단·안내 | P0 | auth guard / 모든 `/api/candidate/*` | `app/auth/deps.py`, frontend 라우트 가드 | T-USR-05, AC-02 | 미착수 | 서버 403 + 화면 안내. 프런트 숨김만으로 대체하지 않음 (SEC-03) |
 | USR-06 | 마지막 요청 후 2시간 세션 유지 | P1 | auth / 세션 미들웨어 | `app/auth/sessions.py` | T-USR-06 | 미착수 | 서버 세션 테이블에 슬라이딩 만료 |
-| USR-07 | 회원 탈퇴와 계정·데이터 삭제 요청 | P1 | auth / `DELETE /api/candidate/me` | `app/auth`, `app/retention` | T-USR-07 | 미착수 | 8.5: 탈퇴 시 보관 기간과 무관하게 삭제. 담당자 측 진행 중 건 처리 방식 미결 (OQ-12) |
+| USR-07 | 회원 탈퇴와 계정·데이터 삭제 요청 | P1 | auth / `DELETE /api/candidate/me` | `app/retention/router.py`, `pages/candidate/Account` | T-USR-07 | 검증 완료 | 8.5: 탈퇴 시 보관 기간과 무관하게 삭제. 응시 중(PREPARING·INTERVIEWING·CODING)이면 409(OQ-12 잠정). `tests/test_retention.py`, `Account.test.tsx` (2026-10-28) |
 | USR-08 | 아이디·비밀번호 찾기 | P2 | — | — | — | 미착수 | 메일 발송 인프라 필요(온프레미스 SMTP). P2 |
 
 ### 5.2 채용공고 (JOB)
@@ -148,8 +148,8 @@
 | SEC-03 | 역할 기반 권한·회사 단위 분리를 모든 API·쿼리에서 서버 강제 | P0 | 전체 | `app/auth/deps.py`, 회사 범위 쿼리 헬퍼 | T-SEC-03, AC-03 | 미착수 | 다른 회사 리소스는 404로 응답(존재 비노출) |
 | SEC-04 | 지원자 API는 공개용만, 메모·내부 채점·가중치 비노출 | P0 | candidate API 응답 스키마 | `app/reports/public.py` | T-SEC-04, AC-19 | 미착수 | 응답 스키마 화이트리스트 + 금지 필드 검사 테스트 |
 | SEC-05 | 비밀번호 단방향 해시, 전송 구간 암호화 | P0 | auth, 배포 | `app/auth/passwords.py`, `deploy/` | T-SEC-05 | 미착수 | Argon2id. HTTPS는 리버스 프록시 |
-| SEC-06 | 모든 AI 추론 사내 처리, 외부 AI API 금지 | P0 | ai | `app/ai/*`, 설정 검사 | T-SEC-06, AC-22 | 미착수 | AI 엔드포인트 호스트 허용목록(사설망·localhost만) |
-| SEC-07 | 보관 기간 경과 데이터 자동 삭제 (8.5) | P1 | retention | `app/retention` | T-SEC-07 | 미착수 | 기간은 법률 검토 전 잠정값 |
+| SEC-06 | 모든 AI 추론 사내 처리, 외부 AI API 금지 | P0 | ai | `app/ai/*`, 설정 검사, `app/aisvc/offline.py` | T-SEC-06, AC-22 | 검증 완료 | AI 엔드포인트 호스트 허용목록(사설망·localhost만). `tests/test_offline_static.py` + 외부망 차단 E2E (2026-10-28) |
+| SEC-07 | 보관 기간 경과 데이터 자동 삭제 (8.5) | P1 | retention | `app/retention/service.py`, 주기 작업 `retention_purge`·`file_gc` | T-SEC-07 | 검증 완료 | 기간은 법률 검토 전 잠정값(음성 30일·내용 365일 구현값 유지, OQ-39). `tests/test_retention.py` (2026-10-28) |
 | SEC-08 | 감사 로그(열람·메모·결정·동의·삭제·재평가), 앱 로그에 답변 원문·개인정보 금지 | P1 | audit | `app/audit`, 로그 필터 | T-SEC-08 | 미착수 | 로그 마스킹은 P0 품질 게이트에도 포함 |
 
 ## 2. 규칙·상태·비기능 요구사항
@@ -200,7 +200,7 @@
 | AC-19 | 결정 전 점수 비공개, 결정 후 항목별 점수·강점·개선점만, 응답에 총점·인용·메모·가중치 없음 | 6.6, SEC-04 | API 통합(응답 필드 검사) | 미착수 |
 | AC-20 | 합격·불합격 저장·변경, 이력에 누가·언제 | ADM-04 | API 통합 | 미착수 |
 | AC-21 | 가중치 합 ≠ 100 저장 거부, 첫 응시 후 가중치·코딩 설정 변경 불가 | ADM-05, JOB-06 | API 통합 | 미착수 |
-| AC-22 | 외부 인터넷 차단 상태에서 지원부터 리포트까지 전체 흐름 동작 | SEC-06 | 통합(외부망 차단 컨테이너 네트워크) + 코드 검사 | 미착수 |
+| AC-22 | 외부 인터넷 차단 상태에서 지원부터 리포트까지 전체 흐름 동작 | SEC-06 | 통합(외부망 차단 컨테이너 네트워크) + 코드 검사 | 자동 시험 통과(2026-10-28: 정적 검사 `tests/test_offline_static.py`, 외부망 차단 네트워크 네임스페이스에서 지원→면접→코딩→평가→결정→결과 E2E `tools/offline/run.sh`, 가짜 AI). 실제 모델·시연 장비 수동 리허설 미실시(`docs/offline-rehearsal.md` 3절) |
 
 ## 4. PRD 결정 사항 대응 (11장)
 

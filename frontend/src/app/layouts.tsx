@@ -16,6 +16,7 @@ const CANDIDATE_NAV: NavItem[] = [
   { to: '/postings', label: '채용공고' },
   { to: '/me/applications', label: '지원 현황' },
   { to: '/me/resume', label: '내 이력서' },
+  { to: '/me/account', label: '계정' },
 ];
 const RECRUITER_NAV: NavItem[] = [
   { to: '/recruiter', label: '공고 관리', end: true },

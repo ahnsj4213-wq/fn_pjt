@@ -110,3 +110,7 @@ export interface CandidateResult {
 export const fetchMyApplications = () => apiFetch<CandidateApplication[]>('/api/candidate/applications');
 export const fetchMyApplication = (id: string) => apiFetch<CandidateApplication>(`/api/candidate/applications/${enc(id)}`);
 export const fetchMyResult = (id: string) => apiFetch<CandidateResult>(`/api/candidate/applications/${enc(id)}/result`);
+
+/** USR-07: password re-check; 409 ACTIVE_ATTEMPT while an attempt is in progress (OQ-12). */
+export const withdrawAccount = (password: string) =>
+  apiFetch<{ status: 'WITHDRAWN' }>('/api/candidate/me', { method: 'DELETE', body: { password } });

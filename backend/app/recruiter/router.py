@@ -26,6 +26,7 @@ from app.models import (
 )
 
 router = APIRouter(prefix="/api/recruiter", tags=["recruiter"])
+WITHDRAWN_NAME = "탈퇴한 지원자"  # USR-07: the account is anonymised; the application row stays (OQ-12)
 
 
 async def _app(db: AsyncSession, ctx: RecruiterCtx, aid: UUID, lock: bool = False) -> Application:
@@ -76,7 +77,7 @@ async def list_applications(posting_id: UUID | None = None,
     order = (RecruiterReport.total_score.desc().nulls_last() if sort == "total_score" else Application.applied_at.desc())
     total = await db.scalar(select(func.count()).select_from(Application).where(*conds))
     rows = (await db.execute(base.order_by(order).offset((page - 1) * size).limit(size))).all()
-    items = [{"id": a.id, "candidate_name": name, "posting": {"id": a.posting_id, "title": title},
+    items = [{"id": a.id, "candidate_name": name or WITHDRAWN_NAME, "posting": {"id": a.posting_id, "title": title},
               "applied_at": a.applied_at, "attempt_status": a.attempt_status, "answered_main_count": a.answered_main_count,
               "eval_status": a.eval_status,
               "total_score": str(score) if a.eval_status == "DONE" and score is not None else None,  # ADM-02
@@ -100,7 +101,7 @@ async def get_application(aid: UUID, ctx: RecruiterCtx = Depends(require_recruit
     posting = await db.get(JobPosting, a.posting_id)
     text_used = await db.scalar(select(func.count()).select_from(InterviewAnswer).where(
         InterviewAnswer.application_id == a.id, InterviewAnswer.input_mode == "TEXT"))
-    return {"id": a.id, "candidate": {"name": cand.name, "email": cand.email, "phone": cand.phone},
+    return {"id": a.id, "candidate": {"name": cand.name or WITHDRAWN_NAME, "email": cand.email, "phone": cand.phone},
             "posting": {"id": posting.id, "title": posting.title}, "attempt_status": a.attempt_status,
             "interrupted_from": a.interrupted_from, "eval_status": a.eval_status, "decision": a.decision_status,
             "decision_version": await _decision_version(db, a.id), "answered_main_count": a.answered_main_count,

@@ -81,7 +81,7 @@
 | T-SEC-03, AC-03, QG-01 | `tests/integration/test_route_inventory.py`, `tests/integration/test_idor_matrix.py` | integration | 미작성 |
 | T-SEC-04, AC-19, QG-02 | `tests/integration/test_candidate_exposure.py`, `frontend/e2e/result.spec.ts` | integration | 미작성 |
 | T-SEC-05, QG-09 | `tests/integration/test_headers_cookies.py`, `frontend/e2e/csp.spec.ts` | integration | 미작성 |
-| T-SEC-06, AC-22, QG-06 | `tests/unit/test_endpoint_allowlist.py`, `tools/scan_urls.py`, `deploy/compose.offline-test.yaml` | 단위 / 오프라인 | 미작성 |
+| T-SEC-06, AC-22, QG-06 | `backend/tests/test_offline_static.py`, `frontend/scripts/check-dist-urls.mjs`, `tools/offline/run.sh` + `frontend/e2e/global-teardown.ts` (compose 대신 네트워크 네임스페이스) | 단위 / 오프라인 | 작성·통과 |
 | T-SEC-08, QG-07 | `tests/unit/test_logging.py`, `tests/integration/test_canary_logs.py` | 단위 / integration | 미작성 |
 | T-JOB-* 나머지, AC-21 잠금 | `tests/test_postings_apply.py`(확장) | integration | 일부 구현(4.1) |
 | T-RES-* 나머지, AC-06 나머지 | `tests/test_postings_apply.py` 또는 `tests/test_resume_upload.py`, PDF 생성은 `tests/fixtures.py` | integration | 일부 구현(4.1) |

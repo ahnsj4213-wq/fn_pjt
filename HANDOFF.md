@@ -1,4 +1,4 @@
-# 작업 인수인계 (2026-10-28, AI 서비스·작업 핸들러·음성 런타임·지원자 화면 반영)
+# 작업 인수인계 (2026-10-28, AI 서비스·작업 핸들러·음성 런타임·지원자 화면·보관 삭제·탈퇴·오프라인 시험 반영)
 
 온프레미스 AI 채용 플랫폼. 기준 문서는 `통합 PRD.pdf`(저장소에 없음, 추출본은 `docs/prd/`). 이 문서만 읽고 이어서 진행할 수 있도록 현재 상태·검증 결과·다음 할 일을 적었다.
 
@@ -21,7 +21,7 @@
 
 ## 3. 구현·검증 상태
 
-### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 97개 테스트 통과 + runner 11개 + frontend 단위 27개 + 브라우저 E2E 1개 — 2026-10-28 Linux 클라우드 환경에서 확인, Windows 장비에서는 아직 재실행 안 함)
+### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 105개 테스트 통과 + runner 11개 + frontend 단위 32개 + 브라우저 E2E 2개(일반·외부망 차단) — 2026-10-28 Linux 클라우드 환경에서 확인, Windows 장비에서는 아직 재실행 안 함)
 
 | 영역 | 파일 | 테스트 |
 |---|---|---|
@@ -37,11 +37,15 @@
 | 면접 API 등록(interview·voice 라우터, `GET /api/system/ai-health`)과 인수 기준 AC-08~14 HTTP 시험 | `app/main.py`, `app/interview/system.py` | `tests/test_interview.py` (5개) |
 | 음성 런타임(TRD 06, ADR-0009): 지원 건당 aiortc 세션(`iceServers=[]`), TTS 하향 트랙, 서버 게이트, 에너지 VAD, 구간 STT→`caption_segment`, [답변 완료]·시간 만료 확정, 꼬리질문, 면접 종료, 끊김→INTERRUPTED, 슬롯 갱신, 점검 발화(INT-17), 데이터채널 프로토콜 v1(`dc_protocol.py`) | `app/voice/` | `tests/test_voice.py` (8개, 같은 프로세스의 aiortc 클라이언트로 실제 WebRTC 왕복) |
 | 지원자 화면: 공고 목록·상세, 지원(동의→이력서·PDF 추출→확인→완료, `ApplyFlow` 메모리 상태), 지원 현황, 면접 안내, 장비 점검(카메라 미리보기·마이크 레벨·WebRTC 발화 점검), 음성 면접(`media/rtc.ts` VoiceLink + 순수 리듀서 `interview/machine.ts`, 재연결 1·2·4초 후 텍스트 모드), 코딩테스트(CodeMirror, 자동 저장 revision, [실행], 최종 제출, 서버 시계 카운트다운), 응시 완료, 결과 | `frontend/src/pages/candidate/`, `src/media/`, `src/api/candidate/interview.ts` | `npm test`(27개), `e2e/candidate-flow.spec.ts`(지원→점검→음성 면접 10문항→코딩 실행·제출→지원 현황, 실제 WebRTC, 약 40초) |
+| 보관 기간 자동 삭제(SEC-07): 지원 건 단위 2단계(음성 → 내용 일괄), 기산점 = 첫 결정일 또는 공고 마감일, `app.purge`로 불변 테이블 삭제, 파일은 `file_deletions` outbox → `file_gc`, 끝난 응시의 TTS 캐시, 미사용 업로드 7일, 로그인 제한 기록 24시간, 감사 `DATA_PURGE`, 운영자 CLI `python -m app.cli purge [--dry-run]` | `app/retention/service.py`, `app/jobs/tasks.py`, `app/cli.py` | `tests/test_retention.py` |
+| 탈퇴(USR-07): `DELETE /api/candidate/me {password}` → 비밀번호 재확인(403 `REAUTH_FAILED`), 응시 중이면 409 `ACTIVE_ATTEMPT`, 남은 응시 EXPIRED, 모든 지원 건 내용 삭제 + `withdrawn_at`, 진행 중 작업 CANCELLED(펜싱), 등록 이력서·파일 삭제, 계정 익명화, 전 세션 무효화, 감사 `ACCOUNT_WITHDRAW`. 담당자 화면에는 "탈퇴한 지원자" | `app/retention/router.py`, `frontend/src/pages/candidate/Account.tsx` | `tests/test_retention.py`, `Account.test.tsx` |
+| AC-22 오프라인: 정적 검사(엔드포인트 허용목록·클라우드 AI SDK 금지·소스 URL·`iceServers=[]`·HF 오프라인 변수) + 외부망 차단 E2E(네트워크 네임스페이스, 백엔드 감사 훅 + Chromium net-log 판정) | `tests/test_offline_static.py`, `tools/offline/run.sh`, `frontend/e2e/global-teardown.ts`, `app/aisvc/offline.py`, `docs/offline-rehearsal.md` | 정적 5개, `tools/offline/run.sh` PASS |
 | AI 서비스(TRD 05 §4·§5): 게이트웨이 레인·선점·마감·장애 감지, `/v1/llm·stt·tts·embed·health`, 토큰 인증, 기동 순서, hl-1, 48kHz 리샘플 / 클라이언트·가짜 클라이언트 | `app/aisvc/`, `app/ai/client.py`, `app/ai/fake.py` | `tests/test_ai_service.py` (15개) |
 
 ### 3.2 작성했지만 아직 실행·테스트하지 않은 코드
 
-- 프런트 화면 중 E2E가 지나가지 않는 경로: 텍스트 모드(INT-18), 재연결·재개 게이트, 시간 만료 자동 제출 화면, 결과 화면(담당자 결정 후 피드백), 정원 초과 안내. 내 이력서(`MyResume`)·계정(`Account`)·담당자 화면 전체는 아직 골격(TodoPanel)이다.
+- 프런트 화면 중 E2E가 지나가지 않는 경로: 텍스트 모드(INT-18), 재연결·재개 게이트, 시간 만료 자동 제출 화면, 정원 초과 안내. 내 이력서(`MyResume`)·담당자 화면 전체는 아직 골격(TodoPanel)이다.
+- `scripts/s10_gpu_contention.py`(S-10 측정): `--fake` 자체 점검만 했다. GPU 장비에서 실제 측정 필요(아래 4절 7번).
 
 ### 3.3 중단된 작업 (사용량 한도로 끊김, 부분 구현)
 
@@ -80,7 +84,12 @@
    - E2E로 찾아 고친 서버 버그: 면접 종료 이벤트를 받은 브라우저가 바로 연결을 닫으면 서버가 이를 끊김으로 보고 **막 시작한 코딩테스트를 INTERRUPTED로 바꾸던 문제**(`app/voice/session.py`, 회귀 시험 `test_hanging_up_on_completion_does_not_interrupt_coding`).
    - 면접 화면은 들어올 때 항상 `POST …/interview/resume`으로 서버 상태를 맞춘 뒤 연결한다(INTERRUPTED 재개, CODING이면 코딩 화면, TEXT 모드면 텍스트 화면). [면접 시작] 직후가 아니면 클릭(자동 재생 정책)을 먼저 받는다.
    - 남은 것: 텍스트 모드·재연결·시간 만료·정원 초과 E2E, msedge 프로젝트 실행(Windows), 데이터채널 타입 자동 생성.
-7. 보관 기간 자동 삭제(SEC-07), 탈퇴(USR-07), AC-22 오프라인 시험, S-10 실측
+7. ~~보관 기간 자동 삭제(SEC-07), 탈퇴(USR-07), AC-22 오프라인 시험~~ (완료), **S-10 실측은 GPU 장비에서 남음**. 알아둘 점:
+   - 보관 기간 설정값은 법무 확인 전이라 구현값(음성 30일·내용 365일)을 바꾸지 않았다(`docs/data-retention.md`의 180일·3년안은 OQ-39 결론 대기). 3단계(기록 3년) 삭제도 아직 없다.
+   - 탈퇴는 OQ-12 잠정안: 응시 중이면 거부, 지원 건 행·동의·결정·감사 기록은 개인정보 없이 남긴다. 법정 보존 대상 분리 보관(data-retention 5절 2)은 법무 결론 뒤에.
+   - AC-22: 컨테이너 compose 대신 Linux 네트워크 네임스페이스(`unshare -n` + veth 사설 LAN, 기본 경로 없음)로 전체 E2E를 돌린다. Chromium 자체 서비스(구글 로그인·업데이트)는 플랫폼 요청이 아니라서 판정에서 빼고 보고서에만 남긴다. AI는 가짜이므로 실제 모델 오프라인 기동과 실제 브라우저는 `docs/offline-rehearsal.md` 3절 수동 리허설로 확인한다.
+   - AI 서비스는 `AIHIRE_MODEL_AUTO_DOWNLOAD`가 false(기본)이면 `HF_HUB_OFFLINE=1` 등으로 뜬다. **처음 모델을 받는 개발 장비에서는 `AIHIRE_MODEL_AUTO_DOWNLOAD=true`로 한 번 띄워야 한다.**
+   - S-10 측정: ai 서비스를 `AIHIRE_GPU_POLICY=shared`로 띄워 `python scripts/s10_gpu_contention.py --label shared`, 다시 `stt_preempts_batch`로 띄워 같은 명령. 기준은 경합 시 자막 p95 ≤ 2초. 결과로 기본 정책을 정한다(TRD 02 §5).
 8. 추적표 상태 갱신, TRD 09(구현 계획) 작성
 
 E의 구현 차이 목록 G-01~16(TRD 07 §14) 중 G-05(프록시 뒤 IP), G-06(가입 속도 제한), G-09/10(DB 역할 분리), G-11(라우트 정책 선언·IDOR 자동 생성), G-12(TrustedHost)가 남아 있다.
@@ -105,6 +114,7 @@ $env:E2E_PYTHON="..\.venv\Scripts\python"; npx playwright test --project=chromiu
 
 - 모델: Ollama에 `qwen3.5:4b`, `qwen3-embedding:0.6b`. faster-whisper `large-v3-turbo`/`small`, Supertonic-3은 처음 실행 시 Hugging Face에서 받는다(운영은 사전 반입). GPU STT는 `nvidia-cublas-cu12`, `nvidia-cudnn-cu12==9.*` 휠을 설치하고 그 `bin` 폴더를 **PATH**에 넣어야 한다.
 - 개발용 비밀번호·토큰은 모두 `dev-...-change-me` 같은 예시값이다. 운영 프로필(`AIHIRE_ENV=prod`)은 기본값이면 기동을 거부한다.
+- 외부망 차단 E2E(AC-22, Linux 전용): 저장소 루트에서 `tools/offline/run.sh` → `frontend/e2e/.fixtures/offline/ac22-report.json`. Windows에서는 `docs/offline-rehearsal.md` 3절 수동 리허설.
 - runner(Docker Desktop 필요): `docker build -t aihire-sandbox:py312 runner/sandbox` → `cd runner && ..\.venv\Scripts\python -m runner --selftest`(SBX-01~14) → 통과하면 `python -m runner`로 띄우고 backend에 `AIHIRE_CODE_EXECUTION_ENABLED=true`.
 - 운영자 CLI: `python -m app.cli create-company --name ...`, `create-recruiter --company-id ... --email ... --name ...`
 

@@ -43,6 +43,7 @@ export function Login() {
   return (
     <Page title="로그인" narrow>
       {params.get('reason') === 'expired' && <Notice>{MESSAGES.SESSION_EXPIRED}</Notice>}
+      {params.get('withdrawn') === '1' && <Notice kind="success">탈퇴가 완료되었습니다. 그동안 이용해 주셔서 감사합니다.</Notice>}
       {params.get('signedUp') === '1' && <Notice kind="success">가입이 완료되었습니다. 로그인해 주세요.</Notice>}
       {formError && <Notice kind="error">{formError}</Notice>}
       <form onSubmit={handleSubmit(onSubmit)} noValidate aria-label="로그인">

@@ -36,6 +36,9 @@ async def posting_autoclose() -> None:
 async def session_gc() -> None:
     async with session_scope() as db:
         await db.execute(text("DELETE FROM sessions WHERE expires_at < now()"))
+        # Login-throttle rows live 24 h (data-retention 2절) unless still locked.
+        await db.execute(text("DELETE FROM auth_throttle WHERE window_started_at < now() - interval '24 hours' "
+                              "AND (locked_until IS NULL OR locked_until < now())"))
 
 
 @periodic("coding_autosubmit")
@@ -75,3 +78,27 @@ async def attempt_sweeper() -> None:
     for app_id in stale:
         async with session_scope() as db:
             await turns.interrupt(db, app_id)
+
+
+@periodic("retention_purge")
+async def retention_purge() -> None:
+    """SEC-07 (8.5): audio and content past their retention period, per application (TRD 03 §8)."""
+    from app.audit import audit
+    from app.core.db import sessionmaker
+    from app.retention.service import run_retention
+
+    async with sessionmaker()() as db:  # run_retention commits per batch
+        counts = await run_retention(db)
+        if counts.audio_apps or counts.content_apps or counts.tts_assets:
+            await audit(db, action="DATA_PURGE", target_type="retention", target_id="periodic", actor_id=None,
+                        actor_role="SYSTEM", **counts.as_detail())
+            await db.commit()
+
+
+@periodic("file_gc")
+async def file_gc() -> None:
+    from app.core.db import sessionmaker
+    from app.retention.service import run_file_gc
+
+    async with sessionmaker()() as db:
+        await run_file_gc(db)

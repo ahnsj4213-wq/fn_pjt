@@ -7,13 +7,24 @@ import { defineConfig, devices } from '@playwright/test';
 const voiceWav = path.resolve(import.meta.dirname, 'e2e/.fixtures/voice.wav');
 const fakeMedia = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
   `--use-file-for-fake-audio-capture=${voiceWav}`, '--autoplay-policy=no-user-gesture-required'];
+// AC-22 run (tools/offline/run.sh): Chromium records every request, lookup and socket to a net-log.
+// Chromium's own vendor services (updates, autofill, variations) are switched off there so the log shows only what
+// the platform asks for; the manual rehearsal on the demo machine covers a stock browser.
+if (process.env.E2E_NETLOG) {
+  fakeMedia.push(`--log-net-log=${process.env.E2E_NETLOG}`, '--net-log-capture-mode=Default',
+    '--disable-background-networking', '--disable-component-update', '--disable-domain-reliability', '--no-pings',
+    '--disable-sync', '--disable-client-side-phishing-detection', '--disable-default-apps', '--no-first-run',
+    '--disable-features=AutofillServerCommunication,OptimizationHints,Translate,MediaRouter,DialMediaRouteProvider');
+}
 const executablePath = process.env.PW_CHROMIUM_PATH || undefined;
 // Backend with fake AI and runner (backend/scripts/e2e_server.py). E2E_PYTHON = the backend venv's python.
 const python = process.env.E2E_PYTHON ?? 'python';
 
 export default defineConfig({
   testDir: 'e2e',
+  testMatch: '*.spec.ts', // e2e/*.test.ts are vitest unit tests of the E2E tooling
   globalSetup: './e2e/global-setup.ts',
+  globalTeardown: './e2e/global-teardown.ts',
   fullyParallel: false,
   workers: 1,
   timeout: 240_000,

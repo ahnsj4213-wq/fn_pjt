@@ -17,9 +17,13 @@ from datetime import date, timedelta
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
-PG = "postgresql://aihire:aihire_dev_only@127.0.0.1:55432"
 DB = "aihire_e2e"
-os.environ["AIHIRE_DATABASE_URL"] = f"postgresql+asyncpg://aihire:aihire_dev_only@127.0.0.1:55432/{DB}"
+# E2E_PG_HOST=/tmp reaches PostgreSQL over its Unix socket (the AC-22 run has no network but loopback of its own).
+_PG_HOST = os.environ.get("E2E_PG_HOST", "127.0.0.1")
+_PG_QS = f"?host={_PG_HOST}&port=55432" if _PG_HOST.startswith("/") else ""
+_PG_NET = "" if _PG_QS else f"{_PG_HOST}:55432"
+PG = f"postgresql://aihire:aihire_dev_only@{_PG_NET}"
+os.environ["AIHIRE_DATABASE_URL"] = f"postgresql+asyncpg://aihire:aihire_dev_only@{_PG_NET}/{DB}{_PG_QS}"
 os.environ.setdefault("AIHIRE_ENV", "dev")
 os.environ.setdefault("AIHIRE_DATA_DIR", str(BACKEND / ".e2e-data"))
 sys.path.insert(0, str(BACKEND))
@@ -36,7 +40,7 @@ ANSWER_TEXT = "주문 API의 응답 지연을 복합 인덱스와 배치 조회�
 
 
 async def _recreate_db() -> None:
-    conn = await asyncpg.connect(f"{PG}/postgres")
+    conn = await asyncpg.connect(f"{PG}/postgres{_PG_QS}")
     try:
         await conn.execute(f"DROP DATABASE IF EXISTS {DB} WITH (FORCE)")
         await conn.execute(f"CREATE DATABASE {DB}")
@@ -48,6 +52,38 @@ def recreate_db() -> None:
     asyncio.run(_recreate_db())
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND, check=True,
                    env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+
+
+def install_egress_log(path: str) -> None:
+    """AC-22: records every name lookup and connection this process attempts outside loopback / Unix sockets."""
+    import ipaddress
+
+    local_names = {None, "", "localhost", "127.0.0.1", "::1"}
+
+    def is_local(host) -> bool:
+        if isinstance(host, bytes):
+            host = host.decode()
+        if host in local_names:
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    def hook(event: str, args: tuple) -> None:
+        target = None
+        if event == "socket.getaddrinfo" and not is_local(args[0]):
+            host = args[0].decode() if isinstance(args[0], bytes) else args[0]
+            target = f"dns {host}"
+        elif event == "socket.connect" and isinstance(args[1], tuple) and not is_local(args[1][0]):
+            target = f"connect {args[1][0]}:{args[1][1]}"
+        if target:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(target + "\n")
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text("", encoding="utf-8")
+    sys.addaudithook(hook)
 
 
 def install_fakes() -> None:
@@ -137,5 +173,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8000)
     port = ap.parse_args().port
+    if os.environ.get("E2E_EGRESS_LOG"):
+        install_egress_log(os.environ["E2E_EGRESS_LOG"])
     recreate_db()
     asyncio.run(serve(port))

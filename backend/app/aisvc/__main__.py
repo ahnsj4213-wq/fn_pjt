@@ -2,10 +2,15 @@
 import os
 from urllib.parse import urlparse
 
+from app.aisvc.offline import offline_env
+from app.core.config import get_settings
+
+# Before uvicorn and the model libraries are imported.
+os.environ.update(offline_env(get_settings().model_auto_download))
+
 import uvicorn
 
 from app.aisvc.service import create_app, default_engines
-from app.core.config import get_settings
 from app.core.logging import configure_logging
 
 
