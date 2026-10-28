@@ -21,7 +21,7 @@
 
 ## 3. 구현·검증 상태
 
-### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 92개 테스트 통과 — 2026-10-28 Linux 클라우드 환경에서 확인, Windows 장비에서는 아직 재실행 안 함)
+### 3.1 검증 완료 (backend, 실제 PostgreSQL에서 96개 테스트 통과 + runner 11개 — 2026-10-28 Linux 클라우드 환경에서 확인, Windows 장비에서는 아직 재실행 안 함)
 
 | 영역 | 파일 | 테스트 |
 |---|---|---|
@@ -32,6 +32,8 @@
 | 점수 계산(6.4)·인용 검증(ADR-0008) | `app/evaluation/` | `tests/test_scoring_quotes.py` (AC-17, AC-16 규칙) |
 | 영속 작업 큐(임대·펜싱·인프라 장애 시 시도 미소모·재시작 복구) | `app/jobs/` | `tests/test_job_queue.py` (AC-18 기반) |
 | 작업 핸들러: `compose_questions`(ADR-0005 슬롯·커스텀 7번·이력서 근거·BANK_FALLBACK·회사 범위 은행·시드 최후 대체), `tts_pregen`, `extract_resume`(T1→폼 키 변환), `pre_evaluate`, `evaluate_application`(선평가 재사용·T5~T8·점수·리포트·지원자 피드백, ON_CLAIM/ON_REQUEUE/ON_EXHAUSTED로 run·eval_status 관리), `grade_coding`(기대 출력 비교는 worker, C8) | `app/jobs/handlers.py`, `app/questions/compose.py`, `app/evaluation/pipeline.py`, `app/coding/` | `tests/test_handlers.py` (12개) |
+| 코딩테스트 API(TRD 04 §5.3: 문제·초안·[실행]·제출), 자동 제출 `coding_autosubmit`(AC-15), 생존 판정 `attempt_sweeper`(120초 무신호→INTERRUPTED, 준비 30분→READY), 평가가 채점을 기다림(`depends_on`) | `app/coding/router.py`, `app/jobs/tasks.py` | `tests/test_coding.py` (4개) |
+| runner HTTP 계약·강화 옵션·inspect 검증(Docker 없이) | `runner/` | `runner/tests/test_runner.py` (11개, `cd runner && python -m pytest`) |
 | 면접 API 등록(interview·voice 라우터, `GET /api/system/ai-health`)과 인수 기준 AC-08~14 HTTP 시험 | `app/main.py`, `app/interview/system.py` | `tests/test_interview.py` (5개) |
 | 음성 런타임(TRD 06, ADR-0009): 지원 건당 aiortc 세션(`iceServers=[]`), TTS 하향 트랙, 서버 게이트, 에너지 VAD, 구간 STT→`caption_segment`, [답변 완료]·시간 만료 확정, 꼬리질문, 면접 종료, 끊김→INTERRUPTED, 슬롯 갱신, 점검 발화(INT-17), 데이터채널 프로토콜 v1(`dc_protocol.py`) | `app/voice/` | `tests/test_voice.py` (7개, 같은 프로세스의 aiortc 클라이언트로 실제 WebRTC 왕복) |
 | AI 서비스(TRD 05 §4·§5): 게이트웨이 레인·선점·마감·장애 감지, `/v1/llm·stt·tts·embed·health`, 토큰 인증, 기동 순서, hl-1, 48kHz 리샘플 / 클라이언트·가짜 클라이언트 | `app/aisvc/`, `app/ai/client.py`, `app/ai/fake.py` | `tests/test_ai_service.py` (15개) |
@@ -45,7 +47,7 @@
 | 담당(에이전트) | 범위 | 상태 |
 |---|---|---|
 | C | `backend/app/aisvc/`, `app/ai/client.py`·`fake.py` | **완료(2026-10-27)**. 실제 모델(Ollama·faster-whisper·Supertonic) 연동은 GPU 장비에서 미확인 — `python -m app.aisvc` 기동 후 `/readyz`·`/v1/health` 확인 필요(S-10~S-12). 게이트웨이는 선점된 호출을 내부에서 같은 레인 맨 앞으로 다시 넣으므로 호출자에게 409를 돌려주지 않는다(클라이언트는 409도 처리). BATCH 기아 방지(5분마다 순서 당김)는 같은 레인 FIFO라 구현하지 않음 |
-| E | `runner/`(샌드박스 실행 서비스, SBX 자체 점검) | 코드 초안 작성, **테스트·실행 안 됨**. 계약은 ADR-0007, TRD 07 §13 |
+| E | `runner/`(샌드박스 실행 서비스, SBX 자체 점검) | HTTP 계약·컨테이너 옵션·inspect 검증은 시험 통과. **실제 Docker 실행·자체 점검(SBX-01~14)은 Docker가 있는 장비에서 아직 안 돌림** — 5절의 runner 명령 참고. 계약은 ADR-0007, TRD 07 §13 |
 | D | `frontend/` 지원자·담당자 화면 | 골격·인증 화면·공통 계층 완료(build·lint·test 23개 통과, 중단 직전 기준). 화면 구현 진행 중 |
 
 ## 4. 다음 할 일 (권장 순서)
@@ -70,7 +72,7 @@
    - 답변 음성은 TRD의 Opus(OGG) 대신 FLAC(무손실, soundfile 지원)으로 `data_dir/answers/{turn_id}.flac`에 저장한다.
    - 남은 것: 꼬리질문 TTS가 5초 예산을 넘을 때 "텍스트 먼저" 보내기(OQ-22, 지금은 TTS 최대 10초 대기 후 실패 시 텍스트만), 점검 단계 하향 안내 음성(INT-02, P1), `dc_protocol.json_schemas()` → 프런트 TS 타입 생성, 30분 장시간·다른 PC·운영 Linux host 네트워크 검증(R-10).
 4. ~~interview 라우터 등록 + 테스트~~ (완료). AC-08~14 서버 시험 통과(`docs/requirements-traceability.md` 갱신). 시간 만료는 음성 런타임 시계를 앞당기는 방식으로 시험한다. UI 쪽 확인은 6번(프런트·Playwright)에서.
-5. 코딩테스트 API(TRD 04 §5.3) + runner 연동 + 자동 제출 주기 작업(AC-15)
+5. ~~코딩테스트 API + runner 연동 + 자동 제출~~ (완료). 알아둘 점: runner의 실제 경로는 `/v1/execute`(TRD 04 표의 `/v1/run`과 다름, 구현 기준). [실행] 결과는 정상/비정상과 출력만 주고 정답 여부는 주지 않는다(AC-15). [실행] 결과 상세는 `coding_runs.stdout_head`에 JSON으로 둔다. `attempt_sweeper`는 음성 면접도 120초 무신호면 INTERRUPTED로 바꾼다(app 프로세스가 죽은 경우 대비).
 6. 프런트 면접·코딩 화면, Playwright E2E(가짜 미디어 장치)
 7. 보관 기간 자동 삭제(SEC-07), 탈퇴(USR-07), AC-22 오프라인 시험, S-10 실측
 8. 추적표 상태 갱신, TRD 09(구현 계획) 작성
@@ -94,6 +96,7 @@ cd ../frontend && npm ci && npm run build && npm test
 
 - 모델: Ollama에 `qwen3.5:4b`, `qwen3-embedding:0.6b`. faster-whisper `large-v3-turbo`/`small`, Supertonic-3은 처음 실행 시 Hugging Face에서 받는다(운영은 사전 반입). GPU STT는 `nvidia-cublas-cu12`, `nvidia-cudnn-cu12==9.*` 휠을 설치하고 그 `bin` 폴더를 **PATH**에 넣어야 한다.
 - 개발용 비밀번호·토큰은 모두 `dev-...-change-me` 같은 예시값이다. 운영 프로필(`AIHIRE_ENV=prod`)은 기본값이면 기동을 거부한다.
+- runner(Docker Desktop 필요): `docker build -t aihire-sandbox:py312 runner/sandbox` → `cd runner && ..\.venv\Scripts\python -m runner --selftest`(SBX-01~14) → 통과하면 `python -m runner`로 띄우고 backend에 `AIHIRE_CODE_EXECUTION_ENABLED=true`.
 - 운영자 CLI: `python -m app.cli create-company --name ...`, `create-recruiter --company-id ... --email ... --name ...`
 
 ## 6. 팀·법률 확인이 필요한 항목

@@ -111,3 +111,35 @@ def voice_ai():
     set_ai_client(fake)
     yield fake
     set_ai_client(None)
+
+
+@pytest.fixture
+def fake_runner():
+    """Runs the candidate's Python locally (trusted test code). The request must never carry expected output."""
+    state = {"sandbox_error": False, "requests": []}
+
+    import json
+    import subprocess
+    import sys
+
+    from app.coding import runner as runner_client
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        state["requests"].append(body)
+        assert set(body) == {"code", "cases", "limits"} and all(set(c) == {"case_id", "stdin"} for c in body["cases"])
+        results = []
+        for c in body["cases"]:
+            if state["sandbox_error"]:
+                results.append({"case_id": c["case_id"], "verdict": "SANDBOX_ERROR", "stdout": "", "stderr": "",
+                                "exit_code": None, "time_ms": 0})
+                continue
+            p = subprocess.run([sys.executable, "-I", "-c", body["code"]], input=c["stdin"], capture_output=True, check=False,
+                               text=True, timeout=10)
+            results.append({"case_id": c["case_id"], "verdict": "OK" if p.returncode == 0 else "RUNTIME_ERROR",
+                            "stdout": p.stdout, "stderr": p.stderr, "exit_code": p.returncode, "time_ms": 5})
+        return httpx.Response(200, json={"results": results, "sandbox_fingerprint": "test"})
+
+    runner_client.set_transport(httpx.MockTransport(handle))
+    yield state
+    runner_client.set_transport(None)
