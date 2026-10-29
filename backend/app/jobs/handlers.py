@@ -5,7 +5,6 @@ rolls back instead of writing twice (R-14). AIUnavailable (app.ai.client) / Runn
 without consuming an attempt (OQ-23); any other exception consumes it.
 """
 import logging
-from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select, text, update
@@ -19,6 +18,7 @@ from app.coding.runner import RunnerUnavailable
 from app.core.config import get_settings
 from app.core.db import session_scope
 from app.core.logging import log_event
+from app.core.storage import get_storage
 from app.core.timeutil import utcnow
 from app.evaluation import pipeline
 from app.evaluation.scoring import SCORING_VERSION
@@ -48,11 +48,6 @@ from app.resumes.schemas import from_ai_resume
 
 log = logging.getLogger("app.worker")
 
-
-def tts_dir() -> Path:
-    d = get_settings().data_dir / "tts"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 # ── compose_questions (ADR-0005) ───────────────────────────────────────────────
@@ -99,7 +94,7 @@ async def tts_pregen(ctx: JobCtx) -> None:
     for qid, qtext in todo:  # one question per transaction: progress survives a restart
         out = await ai.tts(qtext)
         key = f"tts/{qid}.pcm"
-        (tts_dir() / f"{qid}.pcm").write_bytes(out.pcm48k)
+        await get_storage().put(key, out.pcm48k)
         async with session_scope() as db:
             await db.execute(insert(QuestionTtsAsset).values(question_id=qid, audio_key=key, duration_ms=out.duration_ms,
                                                              voice_model=out.voice_model).on_conflict_do_nothing())

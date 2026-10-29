@@ -3,7 +3,7 @@
 name: aihire-dev
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16  # PostgreSQL 16 + pgvector (migration 0004)
     environment:
       POSTGRES_DB: aihire
       POSTGRES_USER: aihire

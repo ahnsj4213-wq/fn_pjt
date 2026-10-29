@@ -5,9 +5,10 @@ Start of the clock (OQ-11, provisional): the first decision, or the posting's cl
   stage 2  all content      start + retention_content_days  rows deleted / snapshot emptied, content_purged_at
 Kept: the application row (posting, dates, the three states), decision_history, consent_records, audit_logs,
 evaluation_runs (version metadata only). Files are never deleted inline: their keys go to `file_deletions`
-(paths relative to data_dir) and `file_gc` removes them, so a rolled-back purge never loses a file.
+(storage keys, app/core/storage.py) and `file_gc` removes them, so a rolled-back purge never loses a file.
 Immutable tables accept these deletes only under `SET LOCAL app.purge = 'on'` (T14).
 """
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -16,8 +17,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.logging import log_event
+from app.core.storage import get_storage
 from app.core.timeutil import utcnow
 
+log = logging.getLogger("app.retention")
 BATCH = 200
 
 
@@ -38,7 +42,7 @@ async def _allow_purge(db: AsyncSession) -> None:
 
 
 async def _queue_files(db: AsyncSession, sql: str, params: dict, reason: str) -> int:
-    """Copies the storage keys selected by `sql` (one column, relative to data_dir) into the deletion outbox."""
+    """Copies the storage keys selected by `sql` (one column, a storage key) into the deletion outbox."""
     res = await db.execute(text(f"INSERT INTO file_deletions (storage_key, reason) SELECT k, :reason FROM ({sql}) AS s(k) "
                                 "WHERE k IS NOT NULL"), {**params, "reason": reason})
     return res.rowcount or 0
@@ -153,7 +157,6 @@ async def run_retention(db: AsyncSession, as_of: datetime | None = None, *, dry_
 
 async def run_file_gc(db: AsyncSession) -> int:
     """Removes queued files (a missing file counts as done) and uploads nobody uses after 7 days (data-retention 2절)."""
-    s = get_settings()
     await db.execute(text(
         "INSERT INTO file_deletions (storage_key, reason) SELECT 'resumes/' || f.storage_key, 'UNUSED_UPLOAD' "
         "FROM resume_files f WHERE f.purpose = 'UPLOAD' AND f.created_at < now() - interval '7 days' "
@@ -165,16 +168,16 @@ async def run_file_gc(db: AsyncSession) -> int:
         "AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.resume_file_id = f.id)"))
     await db.commit()
     rows = (await db.execute(text("SELECT id, storage_key FROM file_deletions WHERE done_at IS NULL ORDER BY id LIMIT 1000"))).all()
-    root = s.data_dir.resolve()
+    storage = get_storage()
     done = []
     for fid, key in rows:
-        path = (root / key).resolve()
-        if root not in path.parents:  # never follow a key outside data_dir
-            continue
         try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            continue  # retried next run
+            await storage.delete(key)  # rejects keys that leave the storage root
+        except ValueError:
+            continue  # malformed key: left for an operator, never followed
+        except Exception as e:  # noqa: BLE001 - storage unreachable: retried next run
+            log_event(log, "file_delete_failed", logging.WARNING, error_code=type(e).__name__)
+            continue
         done.append(fid)
     if done:
         await db.execute(text("UPDATE file_deletions SET done_at = now() WHERE id = ANY(:ids)"), {"ids": done})

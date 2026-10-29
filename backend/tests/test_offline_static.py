@@ -70,7 +70,7 @@ def test_source_has_no_external_hosts():
     hits = []
     for f in _source_files():
         for host in _URL.findall(f.read_text(encoding="utf-8", errors="replace")):
-            if not _ALLOWED_HOST.match(host):
+            if not _ALLOWED_HOST.match(host) and not host.startswith("{"):  # "{...}" = an f-string placeholder
                 hits.append(f"{f.relative_to(REPO)}: {host}")
     assert not hits, hits
 

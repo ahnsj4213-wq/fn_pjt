@@ -15,7 +15,6 @@ Usage counts are bumped when the interview starts, not here.
 """
 import hashlib
 import logging
-import math
 import re
 import unicodedata
 import uuid
@@ -27,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.client import AIClient, AIUnavailable
 from app.ai.tasks import TASKS
 from app.ai.tasks.questions import similar_question
-from app.core.constants import MAIN_ANSWER_LIMIT_SEC, SLOT_ORDER, Slot
+from app.core.constants import EMBED_DIM, MAIN_ANSWER_LIMIT_SEC, SLOT_ORDER, Slot
 from app.core.logging import log_event
 from app.core.timeutil import utcnow
 from app.models import (
@@ -134,10 +133,15 @@ async def _embed_or_none(ai: AIClient, texts: list[str]) -> list[list[float]] | 
         return None  # 14: embeddings down -> exact-duplicate check only
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na, nb = math.sqrt(sum(x * x for x in a)), math.sqrt(sum(y * y for y in b))
-    return dot / (na * nb) if na and nb else 0.0
+async def _near_duplicate(db: AsyncSession, ids: list[uuid.UUID], vec: list[float], model: str) -> bool:
+    """pgvector cosine distance (HNSW index, migration 0004) against the bank questions in scope."""
+    if not ids:
+        return False
+    return (await db.execute(text(
+        "SELECT 1 FROM question_bank WHERE id = ANY(:ids) AND embedding IS NOT NULL AND embedding_model = :m "
+        "AND embedding <=> CAST(:v AS vector) <= :d LIMIT 1"),
+        {"ids": ids, "m": model, "v": "[" + ",".join(f"{x:.7g}" for x in vec) + "]",
+         "d": 1.0 - EMBED_DUP_COSINE})).first() is not None
 
 
 async def _add_to_bank(db: AsyncSession, c: _Ctx, kind: str, items: list[dict], embed_model: str) -> list[uuid.UUID | None]:
@@ -153,9 +157,8 @@ async def _add_to_bank(db: AsyncSession, c: _Ctx, kind: str, items: list[dict], 
         if any(r.text_norm_hash == h for r in scope):
             ids.append(next(r.id for r in scope if r.text_norm_hash == h))
             continue
-        vec = vectors[n] if vectors else None
-        if vec and any(r.embedding and r.embedding_model == embed_model and _cosine(vec, r.embedding) >= EMBED_DUP_COSINE
-                       for r in scope):
+        vec = vectors[n] if vectors and len(vectors[n]) == EMBED_DIM else None
+        if vec and await _near_duplicate(db, [r.id for r in scope], vec, embed_model):
             ids.append(None)  # near-duplicate of a bank question: used in this set, not stored again
             continue
         row = QuestionBank(kind=kind, job_family=c.posting.job_family if kind == "JOB" else None,

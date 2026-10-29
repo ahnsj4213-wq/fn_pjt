@@ -1,11 +1,10 @@
 """Recruiter application endpoints (ADM-01~08, RES-08, RPT-02, AC-03, AC-20). Every query is company-scoped.
 Contract: docs/trd/04-api-contract.md 4.2·4.3."""
 from datetime import date
-from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,15 +13,29 @@ from app.applications.lifecycle import register_evaluation
 from app.audit import audit
 from app.auth.deps import RecruiterCtx, require_recruiter
 from app.auth.scope import get_for_company
-from app.core.config import get_settings
 from app.core.constants import RECRUITER_AI_NOTICE
 from app.core.db import get_db
 from app.core.errors import AppError, conflict, not_found
+from app.core.storage import get_storage
 from app.core.timeutil import KST, utcnow
 from app.models import (
-    AnswerEvaluation, Application, CodingSubmission, CodingTestcase, CodingTestResult, DecisionHistory,
-    EvaluationRun, FollowupDecision, InterviewAnswer, InterviewQuestion, JobPosting, PostingEvalSettings, ProctorEvent,
-    RecruiterNote, RecruiterReport, ResumeFile, User,
+    AnswerEvaluation,
+    Application,
+    CodingSubmission,
+    CodingTestcase,
+    CodingTestResult,
+    DecisionHistory,
+    EvaluationRun,
+    FollowupDecision,
+    InterviewAnswer,
+    InterviewQuestion,
+    JobPosting,
+    PostingEvalSettings,
+    ProctorEvent,
+    RecruiterNote,
+    RecruiterReport,
+    ResumeFile,
+    User,
 )
 
 router = APIRouter(prefix="/api/recruiter", tags=["recruiter"])
@@ -122,13 +135,13 @@ async def get_resume_file(aid: UUID, request: Request, ctx: RecruiterCtx = Depen
     if a.resume_file_id is None:
         raise not_found()
     rf = await db.get(ResumeFile, a.resume_file_id)
-    path = Path(get_settings().data_dir) / "resumes" / rf.storage_key
-    if not path.is_file():
+    data = await get_storage().get(f"resumes/{rf.storage_key}")
+    if data is None:
         raise not_found()
     await _audit(db, ctx, request, "RESUME_FILE_VIEW", "application", a.id)
     await db.commit()
     # T26: inline view in a sandboxed document, never sniffed or cached
-    return FileResponse(path, media_type="application/pdf", headers={
+    return Response(data, media_type="application/pdf", headers={
         "Content-Disposition": 'inline; filename="resume.pdf"', "Content-Security-Policy": "sandbox",
         "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 

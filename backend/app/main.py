@@ -1,4 +1,5 @@
 """FastAPI application factory for the `app` process (REST + WebRTC signaling/media, ADR-0001)."""
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,12 +8,18 @@ from app.auth.router import router as auth_router
 from app.core.config import get_settings
 from app.core.db import dispose_engine
 from app.core.errors import install_error_handlers
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, log_event
 from app.core.middleware import RequestContextMiddleware
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.core.storage import ensure_ready
+
+    try:
+        await ensure_ready()  # MinIO bucket + default encryption (no-op for local files)
+    except Exception as e:  # noqa: BLE001 - storage not up yet: file calls fail until it is, the API still starts
+        log_event(logging.getLogger("app"), "storage_not_ready", logging.WARNING, error_code=type(e).__name__)
     yield
     from app.voice import registry
 

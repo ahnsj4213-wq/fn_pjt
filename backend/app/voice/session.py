@@ -34,6 +34,7 @@ from app.ai.client import get_ai_client
 from app.core.config import get_settings
 from app.core.db import session_scope
 from app.core.logging import log_event
+from app.core.storage import get_storage
 from app.core.timeutil import utcnow
 from app.interview import slots, turns
 from app.models import Application, InterviewAnswer, QuestionTtsAsset
@@ -364,14 +365,13 @@ class VoiceSession:
 
     async def _question_audio(self, view: turns.TurnView) -> bytes | None:
         """Pre-synthesised main-question audio, else synthesise now; None -> text only (INT-04)."""
-        data_dir = get_settings().data_dir
         if not view.is_followup:
             async with session_scope() as db:
                 asset = await db.get(QuestionTtsAsset, view.question_id)
             if asset is not None:
-                path = data_dir / asset.audio_key
-                if path.exists():
-                    return await asyncio.to_thread(path.read_bytes)
+                data = await get_storage().get(asset.audio_key)
+                if data:
+                    return data
         try:
             out = await asyncio.wait_for(get_ai_client().tts(view.text), TTS_TIMEOUT_SEC)
         except Exception as e:  # noqa: BLE001 - TTS down: the question is shown as text (INT-04)
@@ -385,15 +385,17 @@ class VoiceSession:
             return None, None
         pcm = np.concatenate(gate.audio)
         key = f"answers/{gate.turn_id}.flac"
-        path = get_settings().data_dir / key
-        path.parent.mkdir(parents=True, exist_ok=True)
 
-        def write() -> None:
+        def encode() -> bytes:
+            import io
+
             import soundfile as sf
 
-            sf.write(str(path), pcm, RATE, format="FLAC", subtype="PCM_16")
+            buf = io.BytesIO()
+            sf.write(buf, pcm, RATE, format="FLAC", subtype="PCM_16")
+            return buf.getvalue()
 
-        await asyncio.to_thread(write)
+        await get_storage().put(key, await asyncio.to_thread(encode), "audio/flac")
         return key, int(len(pcm) * 1000 / RATE)
 
     async def _renew_slot(self) -> None:

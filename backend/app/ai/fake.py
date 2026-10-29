@@ -157,7 +157,7 @@ class FakeAIClient:
             "ready": True, "manifest_hash": FAKE_MANIFEST}
 
 
-def _bigram_vector(text: str, dim: int = 64) -> list[float]:
+def _bigram_vector(text: str, dim: int = 1024) -> list[float]:
     """Character-bigram hashing: identical texts -> cosine 1, unrelated texts -> low cosine. Deterministic."""
     t = "".join(text.split())
     v = [0.0] * dim

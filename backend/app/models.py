@@ -8,9 +8,12 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import ARRAY, REAL, BigInteger, Boolean, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from app.core.constants import EMBED_DIM
 
 TS = TIMESTAMP(timezone=True)
 
@@ -251,7 +254,7 @@ class QuestionBank(Base):
     source: Mapped[str] = mapped_column(Text)
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
     last_used_at: Mapped[datetime | None] = mapped_column(TS)
-    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(REAL))
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))  # pgvector, BGE-M3 (migration 0004)
     embedding_model: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 

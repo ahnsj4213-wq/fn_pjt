@@ -66,3 +66,6 @@ CANDIDATE_FEEDBACK_NOTICE = "이 피드백은 AI가 만든 참고 자료입니�
 
 # Python is the only coding-test language in the MVP (X-10)
 CODING_LANGUAGES = ("python",)
+
+# Embedding size of BGE-M3 (and qwen3-embedding:0.6b); question_bank.embedding is vector(1024) (migration 0004).
+EMBED_DIM = 1024

@@ -159,6 +159,12 @@ async def run(stop: asyncio.Event, probes: dict[str, Probe] | None = None, lanes
     probes = probes or default_probes()
     wid = worker.worker_id()
     await worker.reap()  # restart recovery: reclaim leases left by a dead worker (8.3)
+    from app.core.storage import ensure_ready
+
+    try:
+        await ensure_ready()
+    except Exception as e:  # noqa: BLE001 - storage not up yet: file jobs fail and are retried
+        log_event(log, "storage_not_ready", logging.WARNING, error_code=type(e).__name__)
     tasks = [asyncio.create_task(_lane(r, probes[r], f"{wid}/{r}{i}", stop, idle_sec))
              for r, n in (lanes or LANES).items() for i in range(n)]
     tasks.append(asyncio.create_task(_periodic_loop(stop, periodic_tick)))

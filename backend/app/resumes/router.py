@@ -13,10 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import CandidateCtx, require_candidate
 from app.auth.scope import get_for_owner
-from app.core.config import get_settings
 from app.core.constants import RESUME_MAX_BYTES
 from app.core.db import get_db
 from app.core.errors import AppError
+from app.core.storage import get_storage
 from app.core.timeutil import utcnow
 from app.jobs.queue import enqueue
 from app.models import Resume, ResumeFile
@@ -29,10 +29,9 @@ MIN_TEXT_CHARS = 30  # fewer extractable characters => scanned/image PDF (RES-04
 _EXTRACTOR = Path(__file__).with_name("pdf_extract.py")
 
 
-def storage_dir() -> Path:
-    d = get_settings().data_dir / "resumes"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def storage_key(name: str) -> str:
+    """`resume_files.storage_key` holds the bare name; the storage key adds the folder."""
+    return f"resumes/{name}"
 
 
 async def _read_limited(upload: UploadFile) -> bytes:
@@ -44,15 +43,21 @@ async def _read_limited(upload: UploadFile) -> bytes:
     return bytes(buf)
 
 
-async def parse_pdf(path: Path) -> dict:
-    proc = await asyncio.create_subprocess_exec(sys.executable, "-I", str(_EXTRACTOR), str(path),
-                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=PARSE_TIMEOUT_SEC)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return {"ok": False, "error": "TIMEOUT"}
+async def parse_pdf(data: bytes) -> dict:
+    """Parses in a separate interpreter (T22) from a private temporary file, deleted right after."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="aihire-pdf-") as tmp:
+        path = Path(tmp) / "upload.pdf"
+        path.write_bytes(data)
+        proc = await asyncio.create_subprocess_exec(sys.executable, "-I", str(_EXTRACTOR), str(path),
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=PARSE_TIMEOUT_SEC)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"ok": False, "error": "TIMEOUT"}
     try:
         return json.loads(out.decode() or "{}")
     except json.JSONDecodeError:
@@ -67,16 +72,14 @@ async def upload_resume(file: UploadFile, ctx: CandidateCtx = Depends(require_ca
     if not name.endswith(".pdf") or b"%PDF-" not in data[:1024]:
         raise AppError(415, "NOT_PDF", "PDF 파일만 올릴 수 있습니다.")
     key = f"{uuid.uuid4().hex}.pdf"  # server-generated name; the user's filename is never used as a path
-    path = storage_dir() / key
-    path.write_bytes(data)
-    parsed = await parse_pdf(path)
+    parsed = await parse_pdf(data)
     if not parsed.get("ok"):
-        path.unlink(missing_ok=True)
         if parsed.get("error") == "ENCRYPTED":
             raise AppError(422, "PDF_ENCRYPTED", "암호가 걸린 PDF는 올릴 수 없습니다.")
         if parsed.get("error") == "TOO_MANY_PAGES":
             raise AppError(422, "PDF_TOO_MANY_PAGES", "50쪽 이하의 PDF만 올릴 수 있습니다.")
         raise AppError(422, "PDF_UNREADABLE", "PDF 파일이 손상되었거나 열 수 없습니다. 다른 파일을 올려 주세요.")
+    await get_storage().put(storage_key(key), data, "application/pdf")
     text = parsed.get("text") or ""
     extractable = len(re.sub(r"\s", "", text)) >= MIN_TEXT_CHARS
     rf = ResumeFile(owner_id=ctx.user_id, purpose="UPLOAD", storage_key=key, size_bytes=len(data),
@@ -93,10 +96,8 @@ async def upload_resume(file: UploadFile, ctx: CandidateCtx = Depends(require_ca
 
 async def copy_for_application(db: AsyncSession, src: ResumeFile) -> uuid.UUID:
     """Snapshot copy of the PDF for one application (RES-07); deleting the upload never affects it."""
-    import shutil
-
     key = f"{uuid.uuid4().hex}.pdf"
-    shutil.copyfile(storage_dir() / src.storage_key, storage_dir() / key)
+    await get_storage().copy(storage_key(src.storage_key), storage_key(key))
     rf = ResumeFile(owner_id=src.owner_id, purpose="APPLICATION", storage_key=key, size_bytes=src.size_bytes,
                     sha256=src.sha256, page_count=src.page_count, text_extractable=src.text_extractable,
                     extracted_text=src.extracted_text, extraction_status=src.extraction_status,

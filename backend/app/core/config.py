@@ -84,6 +84,15 @@ class Settings(BaseSettings):
     # Empty = off: workers claim from PostgreSQL directly and the event stream answers 503.
     redis_url: str = "redis://127.0.0.1:6379/0"
 
+    # File storage (app/core/storage.py): "local" = files under data_dir; "s3" = MinIO bucket, encrypted at rest.
+    storage_backend: str = Field("local", pattern="^(local|s3)$")
+    s3_endpoint: str = "127.0.0.1:9000"  # host:port, private only
+    s3_access_key: SecretStr = SecretStr("aihire")
+    s3_secret_key: SecretStr = SecretStr("dev-minio-secret-change-me")
+    s3_bucket: str = "aihire"
+    s3_secure: bool = False
+    s3_encrypt: bool = True
+
     # Code runner (COD-06). Execution stays off until the sandbox self-test passes (ADR-0007).
     runner_url: str = "http://127.0.0.1:8400"
     runner_token: SecretStr = SecretStr("dev-runner-token-change-me")
@@ -95,6 +104,8 @@ class Settings(BaseSettings):
             url = getattr(self, name)
             if url and not is_private_endpoint(url):
                 raise ValueError(f"{name} must point to a local/private host (SEC-06): {url}")
+        if self.storage_backend == "s3" and not is_private_endpoint(f"http://{self.s3_endpoint}"):
+            raise ValueError(f"s3_endpoint must point to a local/private host (SEC-06): {self.s3_endpoint}")
         if (self.rtc_udp_port_min or self.rtc_udp_port_max) and not 1024 <= self.rtc_udp_port_min <= self.rtc_udp_port_max:
             raise ValueError("rtc_udp_port_min..max must be a range of unprivileged ports")
         from app.voice.netcfg import validate_announce_ips
@@ -103,7 +114,7 @@ class Settings(BaseSettings):
         if self.env == "prod":
             if not self.cookie_secure:
                 raise ValueError("cookie_secure must be true in prod")
-            for secret in ("runner_token", "throttle_key", "ai_token"):
+            for secret in ("runner_token", "throttle_key", "ai_token", "s3_secret_key"):
                 if "change-me" in getattr(self, secret).get_secret_value():
                     raise ValueError(f"{secret} must be set in prod")
             if not self.cookie_name.startswith("__Host-"):

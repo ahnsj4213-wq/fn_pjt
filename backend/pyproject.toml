@@ -25,6 +25,8 @@ dependencies = [
   "numpy==2.5.4",                # BSD-3
   "soundfile==0.14.0",           # BSD-3
   "redis==8.1.0",                # MIT (job dispatch + real-time events, ADR-0013)
+  "minio==7.2.20",               # Apache-2.0 (S3/MinIO file storage client)
+  "pgvector==0.5.1",             # MIT (question-bank embeddings, migration 0004)
 ]
 
 [project.optional-dependencies]
@@ -42,6 +44,7 @@ dev = [
   "pytest==9.1.1",
   "pytest-asyncio==1.4.1",
   "reportlab==5.1.0",            # BSD; builds test PDF fixtures locally
+  "moto[server]==5.2.5",           # Apache-2.0; S3 server for storage tests
 ]
 
 [tool.setuptools.packages.find]

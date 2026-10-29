@@ -286,7 +286,7 @@ async def test_service_stt_tts_embed_health(ai_app):
         assert r.headers["content-type"].startswith("audio/L16")
         assert (await c.post("/v1/tts", json={"text": ""})).status_code == 422
         r = await c.post("/v1/embed", json={"texts": ["a b", "c d"]})
-        assert r.status_code == 200 and r.json()["dim"] == 64 and len(r.json()["vectors"]) == 2
+        assert r.status_code == 200 and r.json()["dim"] == 1024 and len(r.json()["vectors"]) == 2
         h = (await c.get("/v1/health")).json()
         assert h["llm"] == {"up": True, "loaded": True, "full_gpu": True, "model": "qwen3.5:4b", "digest": "sha256:abc"}
         assert h["stt"]["up"] and h["tts"]["up"] and h["embed"]["up"] and h["ready"]
