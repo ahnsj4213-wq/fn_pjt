@@ -1,14 +1,18 @@
+'use client';
+
 import { QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
 import { createBrowserRouter } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
 import { createQueryClient } from '@/app/queryClient';
 import { routes } from '@/app/routes';
 import { loginPath, setSession } from '@/app/session';
 import { configureHttp } from '@/shared/http/client';
-import '@/app/global.css';
 
+/**
+ * The screens are a client-side app (react-router) inside Next.js: Next serves the page and proxies /api to the
+ * API container (next.config.ts); everything after that runs in the browser, as before.
+ */
 const queryClient = createQueryClient();
 const router = createBrowserRouter(routes);
 
@@ -22,10 +26,12 @@ configureHttp({
   },
 });
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
-  </StrictMode>,
-);
+export default function ClientApp() {
+  return (
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </StrictMode>
+  );
+}

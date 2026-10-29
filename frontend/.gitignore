@@ -5,3 +5,5 @@ test-results/
 playwright-report/
 *.tsbuildinfo
 *.local
+.next/
+next-env.d.ts

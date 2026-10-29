@@ -38,7 +38,7 @@ export default defineConfig({
   webServer: process.env.E2E_BASE_URL ? undefined : [
     { command: `${python} ../backend/scripts/e2e_server.py --port 8000`, url: 'http://127.0.0.1:8000/api/job-families',
       reuseExistingServer: !process.env.CI, timeout: 120_000, stdout: 'ignore' },
-    { command: 'npm run dev -- --strictPort', url: 'http://localhost:5173', reuseExistingServer: !process.env.CI },
+    { command: 'npm run dev', url: 'http://localhost:5173', reuseExistingServer: !process.env.CI, timeout: 120_000 },
   ],
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: fakeMedia, executablePath } } },

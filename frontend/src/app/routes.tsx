@@ -1,37 +1,37 @@
 import { lazy, Suspense } from 'react';
 import { Outlet, type RouteObject } from 'react-router';
-import { Account } from '@/pages/candidate/Account';
-import { ApplyFlow } from '@/pages/candidate/apply/ApplyFlow';
-import { ApplyComplete } from '@/pages/candidate/ApplyComplete';
-import { ApplyResume } from '@/pages/candidate/ApplyResume';
-import { ApplyReview } from '@/pages/candidate/ApplyReview';
-import { Coding } from '@/pages/candidate/Coding';
-import { Consent } from '@/pages/candidate/Consent';
-import { Done } from '@/pages/candidate/Done';
-import { Guide } from '@/pages/candidate/Guide';
-import { Interview } from '@/pages/candidate/Interview';
-import { MyApplications } from '@/pages/candidate/MyApplications';
-import { MyResume } from '@/pages/candidate/MyResume';
-import { PostingDetail } from '@/pages/candidate/PostingDetail';
-import { Postings } from '@/pages/candidate/Postings';
-import { Precheck } from '@/pages/candidate/Precheck';
-import { Result } from '@/pages/candidate/Result';
-import { Login } from '@/pages/common/Login';
-import { NotFound, RouteError, Unsupported } from '@/pages/common/misc';
-import { Signup } from '@/pages/common/Signup';
+import { Account } from '@/screens/candidate/Account';
+import { ApplyFlow } from '@/screens/candidate/apply/ApplyFlow';
+import { ApplyComplete } from '@/screens/candidate/ApplyComplete';
+import { ApplyResume } from '@/screens/candidate/ApplyResume';
+import { ApplyReview } from '@/screens/candidate/ApplyReview';
+import { Coding } from '@/screens/candidate/Coding';
+import { Consent } from '@/screens/candidate/Consent';
+import { Done } from '@/screens/candidate/Done';
+import { Guide } from '@/screens/candidate/Guide';
+import { Interview } from '@/screens/candidate/Interview';
+import { MyApplications } from '@/screens/candidate/MyApplications';
+import { MyResume } from '@/screens/candidate/MyResume';
+import { PostingDetail } from '@/screens/candidate/PostingDetail';
+import { Postings } from '@/screens/candidate/Postings';
+import { Precheck } from '@/screens/candidate/Precheck';
+import { Result } from '@/screens/candidate/Result';
+import { Login } from '@/screens/common/Login';
+import { NotFound, RouteError, Unsupported } from '@/screens/common/misc';
+import { Signup } from '@/screens/common/Signup';
 import { Loading } from '@/shared/ui/components';
 import { HomeRedirect, RequireAuth, RequireRole } from './guards';
 import { AppLayout, FocusLayout, PublicLayout } from './layouts';
 
 // Recruiter screens are separate lazy chunks (named rc-*), rendered only after RequireRole passes,
 // so a candidate session never downloads them (design D 3.2).
-const RecruiterHome = lazy(() => import('@/pages/recruiter/Home'));
-const PostingForm = lazy(() => import('@/pages/recruiter/PostingForm'));
-const PostingPreview = lazy(() => import('@/pages/recruiter/PostingPreview'));
-const EvaluationSettings = lazy(() => import('@/pages/recruiter/EvaluationSettings'));
-const Applications = lazy(() => import('@/pages/recruiter/Applications'));
-const ApplicationDetail = lazy(() => import('@/pages/recruiter/ApplicationDetail'));
-const Stats = lazy(() => import('@/pages/recruiter/Stats'));
+const RecruiterHome = lazy(() => import('@/screens/recruiter/Home'));
+const PostingForm = lazy(() => import('@/screens/recruiter/PostingForm'));
+const PostingPreview = lazy(() => import('@/screens/recruiter/PostingPreview'));
+const EvaluationSettings = lazy(() => import('@/screens/recruiter/EvaluationSettings'));
+const Applications = lazy(() => import('@/screens/recruiter/Applications'));
+const ApplicationDetail = lazy(() => import('@/screens/recruiter/ApplicationDetail'));
+const Stats = lazy(() => import('@/screens/recruiter/Stats'));
 
 /** Route table = design D 3.3. */
 export const routes: RouteObject[] = [
