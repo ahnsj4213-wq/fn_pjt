@@ -13,8 +13,8 @@ JOB_KINDS: dict[str, tuple[str, int, int]] = {
     "tts_pregen": ("CPU", 15, 3),
     "extract_resume": ("LLM", 20, 2),
     "grade_coding": ("RUNNER", 20, 3),
-    "pre_evaluate": ("LLM", 40, 2),
-    "evaluate_application": ("LLM", 50, 2),   # EVL-06: first attempt + one automatic regeneration
+    "pre_evaluate": ("LLM_EVAL", 40, 2),       # BATCH lane: llm-eval in the split stack (ADR-0014)
+    "evaluate_application": ("LLM_EVAL", 50, 2),   # EVL-06: first attempt + one automatic regeneration
     "purge_files": ("NONE", 90, 10),
     "send_email": ("NONE", 30, 5),            # app/notify/mail.py
 }

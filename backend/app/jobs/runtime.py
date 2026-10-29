@@ -21,7 +21,9 @@ from app.jobs import dispatch, worker
 
 log = logging.getLogger("app.worker")
 Probe = Callable[[], Awaitable[bool]]
-LANES = {"LLM": 2, "RUNNER": 2, "CPU": 1, "NONE": 1}  # LLM: one interactive + one batch job; ai gateway orders them
+# LLM = INTERACTIVE jobs (question set, resume extraction), LLM_EVAL = BATCH jobs (evaluation): separate lanes so an
+# evaluation never holds up the question set; the gateway orders them when both share one model (ADR-0003/0014).
+LANES = {"LLM": 1, "LLM_EVAL": 1, "RUNNER": 2, "CPU": 1, "NONE": 1}
 PERIODIC: dict[str, Callable[[], Awaitable[None]]] = {}
 DISPATCH_TICK_SEC = 0.5
 
@@ -67,7 +69,13 @@ def default_probes() -> dict[str, Probe]:
     async def always() -> bool:
         return True
 
-    return {"LLM": CachedProbe(lambda: ai_ok("llm")), "CPU": CachedProbe(lambda: ai_ok("tts")),
+    async def eval_ok() -> bool:
+        from app.ai.client import get_ai_client
+
+        body = await get_ai_client().health()
+        return bool(body.get("llm_eval", body.get("llm", {})).get("up"))  # single ai service: the same LLM
+
+    return {"LLM": CachedProbe(lambda: ai_ok("llm")), "LLM_EVAL": CachedProbe(eval_ok), "CPU": CachedProbe(lambda: ai_ok("tts")),
             "RUNNER": CachedProbe(runner_ok), "NONE": always}
 
 

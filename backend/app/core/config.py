@@ -58,7 +58,13 @@ class Settings(BaseSettings):
     short_answer_min_chars: int = 15
     quote_min_chars: int = 8
 
-    # AI service (all inference on-prem, SEC-06)
+    # AI service (all inference on-prem, SEC-06). ai_mode picks the client (app/ai/client.py get_ai_client).
+    ai_mode: str = Field("service", pattern="^(service|direct|fake)$")
+    llm_rt_url: str = "http://127.0.0.1:8081"     # direct: llama.cpp, GPU (RT + INTERACTIVE)
+    llm_eval_url: str = "http://127.0.0.1:8082"   # direct: llama.cpp, CPU (BATCH)
+    embed_url: str = "http://127.0.0.1:8083"      # direct: llama.cpp --embeddings, BGE-M3
+    stt_url: str = "http://127.0.0.1:8201"        # direct: app.aisvc.speech_server stt
+    tts_url: str = "http://127.0.0.1:8202"        # direct: app.aisvc.speech_server tts
     ai_service_url: str = "http://127.0.0.1:8200"
     ai_token: SecretStr = SecretStr("dev-ai-token-change-me")  # X-AI-Token between app/worker and ai (TRD 05 §4)
     ollama_url: str = "http://127.0.0.1:11434"
@@ -111,7 +117,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check(self) -> "Settings":
-        for name in ("ai_service_url", "ollama_url", "runner_url", "redis_url"):
+        for name in ("ai_service_url", "ollama_url", "runner_url", "redis_url", "llm_rt_url", "llm_eval_url",
+                     "embed_url", "stt_url", "tts_url"):
             url = getattr(self, name)
             if url and not is_private_endpoint(url):
                 raise ValueError(f"{name} must point to a local/private host (SEC-06): {url}")
@@ -125,6 +132,8 @@ class Settings(BaseSettings):
 
         validate_announce_ips(self.rtc_announce_ips)
         if self.env == "prod":
+            if self.ai_mode == "fake":
+                raise ValueError("ai_mode=fake is for container checks only")
             if not self.cookie_secure:
                 raise ValueError("cookie_secure must be true in prod")
             for secret in ("runner_token", "throttle_key", "ai_token", "s3_secret_key"):

@@ -22,7 +22,7 @@ from tests.evalstate import to_submitted
 from tests.fixtures import RESUME, apply, create_posting, text_pdf
 from tests.helpers import candidate, recruiter
 
-RESOURCES = ["LLM", "CPU", "RUNNER", "NONE"]
+RESOURCES = ["LLM", "LLM_EVAL", "CPU", "RUNNER", "NONE"]
 SUM_SOLUTION = """
 import sys
 data = sys.stdin.read().split()

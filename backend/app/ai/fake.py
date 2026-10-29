@@ -166,3 +166,24 @@ def _bigram_vector(text: str, dim: int = 1024) -> list[float]:
         v[h % dim] += 1.0
     n = math.sqrt(sum(x * x for x in v)) or 1.0
     return [x / n for x in v]
+
+
+STACK_PRECHECK_TEXT = "안녕하세요"
+STACK_ANSWER_TEXT = "주문 API의 응답 지연을 복합 인덱스와 배치 조회로 줄였고 평균 응답 시간이 절반으로 줄었습니다."
+
+
+def stack_fake() -> FakeAIClient:
+    """`ai_mode=fake` for container checks without models: replies pass the real validators, STT "hears" a fixed
+    sentence for any audio (a fake microphone only beeps), TTS returns 0.4 s of silence."""
+    fake = FakeAIClient()
+
+    async def stt(pcm16k: bytes, *, purpose: str = "answer") -> STTResult:
+        said = STACK_PRECHECK_TEXT if purpose == "precheck" else STACK_ANSWER_TEXT
+        return STTResult(text=said, segments=[{"start": 0.0, "end": len(pcm16k) / 32000, "text": said}],
+                         model="fake-stt", device="cpu")
+
+    async def tts(_text: str) -> TTSResult:
+        return TTSResult(pcm48k=bytes(19200 * 2), duration_ms=400, voice_model="fake-tts")
+
+    fake.stt, fake.tts = stt, tts  # type: ignore[method-assign]
+    return fake

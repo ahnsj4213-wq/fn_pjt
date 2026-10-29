@@ -170,9 +170,21 @@ _client: AIClient | None = None
 
 
 def get_ai_client() -> AIClient:
+    """ai_mode: service = the single `ai` process (native development), direct = the split containers
+    (app.ai.direct), fake = no models at all (container checks only; refused in prod)."""
     global _client
     if _client is None:
-        _client = HttpAIClient()
+        mode = get_settings().ai_mode
+        if mode == "direct":
+            from app.ai.direct import DirectAIClient
+
+            _client = DirectAIClient()
+        elif mode == "fake":
+            from app.ai.fake import stack_fake
+
+            _client = stack_fake()
+        else:
+            _client = HttpAIClient()
     return _client
 
 
