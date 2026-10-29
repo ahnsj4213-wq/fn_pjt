@@ -37,6 +37,7 @@ from app.models import (
     ResumeFile,
     User,
 )
+from app.notify.mail import queue_mail
 
 router = APIRouter(prefix="/api/recruiter", tags=["recruiter"])
 WITHDRAWN_NAME = "탈퇴한 지원자"  # USR-07: the account is anonymised; the application row stays (OQ-12)
@@ -261,6 +262,7 @@ async def decide(aid: UUID, body: DecisionIn, request: Request, ctx: RecruiterCt
     await _audit(db, ctx, request, "DECISION_SET", "application", a.id, **{"from": a.decision_status, "to": body.decision})
     a.decision_status, a.decided_at, a.decided_by = body.decision, now, ctx.user_id
     a.first_decided_at = a.first_decided_at or now
+    await queue_mail(db, "RESULT_RELEASED", a.id)  # every change: the candidate should look again
     await db.commit()
     return {"decision": a.decision_status, "version": version + 1, "decided_at": now}
 

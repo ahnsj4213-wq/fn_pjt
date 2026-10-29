@@ -16,6 +16,7 @@ JOB_KINDS: dict[str, tuple[str, int, int]] = {
     "pre_evaluate": ("LLM", 40, 2),
     "evaluate_application": ("LLM", 50, 2),   # EVL-06: first attempt + one automatic regeneration
     "purge_files": ("NONE", 90, 10),
+    "send_email": ("NONE", 30, 5),            # app/notify/mail.py
 }
 
 

@@ -20,6 +20,7 @@ from app.core.db import get_db
 from app.core.errors import conflict, not_found
 from app.core.timeutil import utcnow
 from app.models import Application, CandidateFeedback, Company, ConsentRecord, JobPosting, Resume, ResumeFile
+from app.notify.mail import queue_mail
 from app.postings.service import is_open
 from app.resumes.router import copy_for_application, parse_resume_content
 from app.resumes.schemas import flatten
@@ -68,6 +69,7 @@ async def apply(posting_id: UUID, body: ApplyIn, ctx: CandidateCtx = Depends(req
                   "file_id": body.resume_file_id, "updated_at": utcnow()}
         await db.execute(insert(Resume).values(candidate_id=ctx.user_id, **values)
                          .on_conflict_do_update(index_elements=["candidate_id"], set_=values))
+    await queue_mail(db, "APPLICATION_RECEIVED", app.id, dedupe=f"mail:received:{app.id}")
     await db.commit()
     return {"application_id": str(app.id)}
 

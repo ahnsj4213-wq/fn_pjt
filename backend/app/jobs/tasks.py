@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.core.db import session_scope
 from app.core.timeutil import utcnow
 from app.jobs import handlers, worker  # noqa: F401  handlers register themselves on import
+from app.notify import mail  # noqa: F401  registers send_email
 from app.jobs.runtime import periodic
 from app.models import JobPosting
 

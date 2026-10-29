@@ -93,6 +93,17 @@ class Settings(BaseSettings):
     s3_secure: bool = False
     s3_encrypt: bool = True
 
+    # Email (app/notify/mail.py) through the `mailer` container: Mailpit, relaying to Gmail on the reference PC.
+    mail_enabled: bool = False
+    smtp_host: str = "127.0.0.1"
+    smtp_port: int = 1025
+    smtp_starttls: bool = False
+    smtp_username: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    mail_from: str = "no-reply@aihire.local"
+    mail_from_name: str = "AI 채용 플랫폼"
+    public_base_url: str = "http://localhost:8080"  # links in mails
+
     # Code runner (COD-06). Execution stays off until the sandbox self-test passes (ADR-0007).
     runner_url: str = "http://127.0.0.1:8400"
     runner_token: SecretStr = SecretStr("dev-runner-token-change-me")
@@ -104,6 +115,8 @@ class Settings(BaseSettings):
             url = getattr(self, name)
             if url and not is_private_endpoint(url):
                 raise ValueError(f"{name} must point to a local/private host (SEC-06): {url}")
+        if self.mail_enabled and not is_private_endpoint(f"http://{self.smtp_host}"):
+            raise ValueError("smtp_host must be the internal mailer (SEC-06); the mailer relays outside")
         if self.storage_backend == "s3" and not is_private_endpoint(f"http://{self.s3_endpoint}"):
             raise ValueError(f"s3_endpoint must point to a local/private host (SEC-06): {self.s3_endpoint}")
         if (self.rtc_udp_port_min or self.rtc_udp_port_max) and not 1024 <= self.rtc_udp_port_min <= self.rtc_udp_port_max:
