@@ -19,6 +19,8 @@ if (process.env.E2E_NETLOG) {
 const executablePath = process.env.PW_CHROMIUM_PATH || undefined;
 // Backend with fake AI and runner (backend/scripts/e2e_server.py). E2E_PYTHON = the backend venv's python.
 const python = process.env.E2E_PYTHON ?? 'python';
+// E2E_BASE_URL = an already running stack (e.g. deploy/docker-compose.yml on http://localhost:8080): no local servers.
+const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:5173';
 
 export default defineConfig({
   testDir: 'e2e',
@@ -29,11 +31,11 @@ export default defineConfig({
   workers: 1,
   timeout: 240_000,
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL,
     testIdAttribute: 'data-testid',
     trace: 'retain-on-failure',
   },
-  webServer: [
+  webServer: process.env.E2E_BASE_URL ? undefined : [
     { command: `${python} ../backend/scripts/e2e_server.py --port 8000`, url: 'http://127.0.0.1:8000/api/job-families',
       reuseExistingServer: !process.env.CI, timeout: 120_000, stdout: 'ignore' },
     { command: 'npm run dev -- --strictPort', url: 'http://localhost:5173', reuseExistingServer: !process.env.CI },

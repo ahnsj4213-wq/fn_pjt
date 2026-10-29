@@ -6,11 +6,13 @@ import { FIXED } from '../src/shared/copy/fixed';
  * apply -> precheck (WebRTC + STT round trip) -> voice interview over WebRTC -> coding run/submit -> 지원 현황.
  */
 const PASSWORD = 'Str0ng-pass!';
+const BASE = process.env.E2E_BASE_URL ?? 'http://localhost:5173';
+const RECRUITER = process.env.E2E_RECRUITER ?? 'rec@e2e.example'; // seeded by backend/scripts/seed_demo.py
 const ANSWER_TEXT = '주문 API의 응답 지연을';
 
 async function signupAndLogin(page: Page): Promise<void> {
   const email = `cand${Date.now()}@e2e.example`;
-  const headers = { Origin: 'http://localhost:5173' };
+  const headers = { Origin: BASE };
   let r = await page.request.post('/api/auth/signup', { headers, data: {
     name: '김지원', email, password: PASSWORD, password_confirm: PASSWORD, phone: '010-1234-5678' } });
   expect(r.status()).toBe(201);
@@ -92,9 +94,8 @@ test('candidate applies, interviews by voice, submits code and reads the decided
   const aid = (await page.locator('[data-testid^="action-"]').first().getAttribute('data-testid'))!.slice('action-'.length);
 
   // Evaluation runs in the worker (fake AI); the recruiter decides through the API (recruiter screens come later).
-  const rec = await playwright.request.newContext({ baseURL: 'http://localhost:5173',
-    extraHTTPHeaders: { Origin: 'http://localhost:5173' } });
-  const login = await rec.post('/api/auth/login', { data: { role: 'RECRUITER', email: 'rec@e2e.example', password: PASSWORD } });
+  const rec = await playwright.request.newContext({ baseURL: BASE, extraHTTPHeaders: { Origin: BASE } });
+  const login = await rec.post('/api/auth/login', { data: { role: 'RECRUITER', email: RECRUITER, password: PASSWORD } });
   expect(login.ok()).toBeTruthy();
   const csrf = (await login.json()).csrf_token as string;
   await expect.poll(async () => {

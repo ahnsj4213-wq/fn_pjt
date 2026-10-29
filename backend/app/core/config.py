@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     model_auto_download: bool = False  # prod is offline (AC-22): models are imported beforehand
     gpu_policy: str = Field("shared", pattern="^(shared|stt_preempts_batch)$")  # TRD 05 §3, chosen by S-10
 
+    # WebRTC when `app` runs in a container (app/voice/netcfg.py). Off = aioice defaults (host networking).
+    rtc_udp_port_min: int = Field(0, ge=0, le=65535)
+    rtc_udp_port_max: int = Field(0, ge=0, le=65535)
+    rtc_announce_ips: list[str] = []
+
     # Code runner (COD-06). Execution stays off until the sandbox self-test passes (ADR-0007).
     runner_url: str = "http://127.0.0.1:8400"
     runner_token: SecretStr = SecretStr("dev-runner-token-change-me")
@@ -86,6 +91,11 @@ class Settings(BaseSettings):
             url = getattr(self, name)
             if not is_private_endpoint(url):
                 raise ValueError(f"{name} must point to a local/private host (SEC-06): {url}")
+        if (self.rtc_udp_port_min or self.rtc_udp_port_max) and not 1024 <= self.rtc_udp_port_min <= self.rtc_udp_port_max:
+            raise ValueError("rtc_udp_port_min..max must be a range of unprivileged ports")
+        from app.voice.netcfg import validate_announce_ips
+
+        validate_announce_ips(self.rtc_announce_ips)
         if self.env == "prod":
             if not self.cookie_secure:
                 raise ValueError("cookie_secure must be true in prod")

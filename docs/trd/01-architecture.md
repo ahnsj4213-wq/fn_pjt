@@ -131,6 +131,7 @@
 | 브라우저 | `http://localhost:5173`. localhost는 보안 컨텍스트라 마이크 허용(8.4) |
 
 - app을 네이티브로 두는 이유: Docker Desktop 컨테이너 IP에는 Windows 브라우저가 닿지 않는다. aioice는 포트 범위를 지정할 수 없어 포트 publish로 우회할 수도 없다.
+- **2026-10-29 갱신**: 전체 컨테이너 실행(`deploy/docker-compose.yml`, `deploy/README.md`)이 추가됐다. `app/voice/netcfg.py`가 aioice 포트를 범위 안으로 묶고(`AIHIRE_RTC_UDP_PORT_MIN/MAX`, publish 40000~40019/udp) 응답 SDP에 브라우저가 닿는 주소(`AIHIRE_RTC_ANNOUNCE_IPS`, 기본 127.0.0.1)의 host 후보를 추가해 위 제약을 우회한다. 네이티브 실행도 그대로 가능하다.
 - ai 기동 스크립트는 cuBLAS·cuDNN 경로를 PATH에 넣는다. ctranslate2는 PATH로만 찾는다 [실측 S-1].
 - uvicorn은 `--reload`·`--workers` 없이 실행한다(ADR-0002 남은 위험: 이벤트 루프 종류).
 

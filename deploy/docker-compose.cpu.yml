@@ -1,0 +1,12 @@
+# Override for a machine without an NVIDIA GPU (or Docker without GPU support): Ollama and the ai service run on
+# the CPU and STT falls back to faster-whisper `small` (TRD 02: CPU small 2.0~2.6 s per segment — slower than the
+# 2 s caption target, fine for trying the flow).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
+services:
+  ollama:
+    deploy: !reset {}
+  ai:
+    deploy: !reset {}
+    environment:
+      AIHIRE_STT_DEVICE: cpu

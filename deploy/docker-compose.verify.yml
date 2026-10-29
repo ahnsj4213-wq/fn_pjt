@@ -1,0 +1,21 @@
+# Override for checking the container stack on a machine without a GPU or models (CI, cloud sessions):
+# the ai service is replaced by backend/scripts/fake_ai_service.py and Ollama is not started.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.verify.yml up -d --build
+#
+# Everything else (postgres, migrate, app with WebRTC on the published UDP range, worker, runner with real sandbox
+# containers, web) is the same as the real stack.
+services:
+  ollama:
+    profiles: ["gpu"]
+  ollama-pull:
+    profiles: ["gpu"]
+  ai:
+    build: { context: ../backend, target: app, secrets: [build_ca] }
+    image: aihire-backend:dev
+    command: ["python", "scripts/fake_ai_service.py", "--host", "0.0.0.0", "--port", "8200"]
+    deploy: !reset {}
+    volumes: !reset []
+    healthcheck:
+      start_period: 30s
+    depends_on: !reset {}

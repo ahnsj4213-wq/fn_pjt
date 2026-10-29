@@ -39,3 +39,6 @@ Thumbs.db
 # Test runtime data
 backend/tests/.data/
 backend/.e2e-data/
+
+# Local build CA for TLS-inspecting proxies (deploy/.env BUILD_CA_FILE)
+deploy/*.local.pem

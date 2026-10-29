@@ -38,6 +38,7 @@ from app.core.timeutil import utcnow
 from app.interview import slots, turns
 from app.models import Application, InterviewAnswer, QuestionTtsAsset
 from app.voice import dc_protocol as dcp
+from app.voice import netcfg
 from app.voice.tts_track import TtsTrack
 from app.voice.vad import RATE, EnergyVAD, Segment
 
@@ -158,11 +159,14 @@ class VoiceSession:
                 self._spawn(self._disconnected_watch())
 
     async def accept(self, offer_sdp: str) -> str:
+        s = get_settings()
+        if s.rtc_udp_port_min:
+            netcfg.install_port_range(s.rtc_udp_port_min, s.rtc_udp_port_max)  # before ICE gathering binds ports
         await self.pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type="offer"))
         await self.pc.setLocalDescription(await self.pc.createAnswer())
         self._runner = self._spawn(self._run())
         self._spawn(self._watchdog())
-        return self.pc.localDescription.sdp
+        return netcfg.announce(self.pc.localDescription.sdp, s.rtc_announce_ips)
 
     # ── data channel ──
     def send(self, type_: str, turn_id=None, **fields) -> None:

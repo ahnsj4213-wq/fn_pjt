@@ -303,3 +303,51 @@ async def test_precheck_utterance_marks_webrtc_ok(client, make_client, voice_ai)
     await listen
     assert res["ok"] is False and res["reason"] == "NO_SPEECH"
     await c.pc.close()
+
+
+def test_announce_adds_host_candidates_with_valid_foundations():
+    from app.voice.netcfg import announce, validate_announce_ips
+
+    f = "0123456789abcdef0123456789abcdef"  # aioice uses all 32 characters
+    sdp = "\r\n".join(["v=0", f"a=candidate:{f} 1 udp 2130706431 172.18.0.5 41003 typ host",
+                       "a=candidate:x 1 udp 2130706431 fe80::1 41004 typ host", "a=end-of-candidates", ""])
+    out = announce(sdp, ["127.0.0.1", "192.168.0.20"]).split("\r\n")
+    added = [x for x in out if " 41003 " in x and "172.18.0.5" not in x]
+    assert added == [f"a=candidate:{f[:29]}a00 1 udp 2130706430 127.0.0.1 41003 typ host",
+                     f"a=candidate:{f[:29]}a01 1 udp 2130706429 192.168.0.20 41003 typ host"]
+    assert all(len(x.split()[0].split(":", 1)[1]) <= 32 for x in out if x.startswith("a=candidate:"))
+    assert not [x for x in out if "41004" in x and "fe80" not in x]  # IPv6 candidates are not duplicated
+    assert announce(sdp, []) == sdp
+    for bad in (["8.8.8.8"], ["host.docker.internal"], ["::1"]):
+        with pytest.raises(ValueError):
+            validate_announce_ips(bad)
+
+
+async def test_container_rtc_settings_pin_ports_and_still_connect(client, make_client, voice_ai):
+    """deploy/docker-compose.yml: ports come from the published range and the announced address is offered too."""
+    import re
+
+    import aioice.ice
+
+    from app.core.config import get_settings
+    from app.voice import netcfg
+
+    s = get_settings()
+    saved = (s.rtc_udp_port_min, s.rtc_udp_port_max, s.rtc_announce_ips)
+    s.rtc_udp_port_min, s.rtc_udp_port_max, s.rtc_announce_ips = 41000, 41009, ["10.255.255.1"]
+    try:
+        _, app_id, cand = await setup_app(client, make_client)
+        await prepare_and_compose(cand, app_id)
+        c = Client(app_id)
+        await c.pc.setLocalDescription(await c.pc.createOffer())
+        answer, _ = await registry.open_session(uuid.UUID(app_id), "precheck", c.pc.localDescription.sdp)
+        cands = re.findall(r"a=candidate:\S+ 1 udp \d+ (\S+) (\d+) typ host", answer)
+        assert cands and all(41000 <= int(port) <= 41009 for _, port in cands)
+        assert {ip for ip, _ in cands} >= {"10.255.255.1"}
+        await c.pc.setRemoteDescription(RTCSessionDescription(sdp=answer, type="answer"))
+        assert (await c.expect("hello"))["purpose"] == "precheck"
+        await c.pc.close()
+    finally:
+        s.rtc_udp_port_min, s.rtc_udp_port_max, s.rtc_announce_ips = saved
+        aioice.ice.asyncio = asyncio
+        netcfg._installed = None

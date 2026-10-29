@@ -55,6 +55,17 @@
 | E | `runner/`(샌드박스 실행 서비스, SBX 자체 점검) | HTTP 계약·컨테이너 옵션·inspect 검증은 시험 통과. **자체 점검 SBX-01~14 전부 통과(2026-10-28, 개발 장비 Windows + Docker Desktop, runtime `runc`) — ADR-0007에 따라 "개발 검증"으로만 본다.** 운영 Linux 호스트에서는 `runsc`(gVisor)로 다시 통과해야 한다(prod는 승인 런타임만 VERIFIED). 계약은 ADR-0007, TRD 07 §13 |
 | D | `frontend/` 지원자·담당자 화면 | 지원자 응시 흐름 완료(2026-10-28, build·lint·test 27개·E2E 통과). 남은 것: 내 이력서·계정 화면, 담당자 화면 전체 |
 
+### 3.4 전체 컨테이너 실행 (2026-10-29)
+
+`deploy/docker-compose.yml` 하나로 postgres·migrate·ollama(+ollama-pull)·ai(GPU)·runner·app·worker·web(Caddy)을 띄운다. 사용법은 `deploy/README.md`. Redis는 설계에 없다(큐는 PostgreSQL).
+
+- 이미지: `backend/Dockerfile`(target `app`=API·worker·migrate, `ai`=CUDA 12/cuDNN 9 pip 휠 포함 4.7 GB), `runner/Dockerfile`(docker CLI, 첫 기동 때 샌드박스 이미지 빌드), `frontend/Dockerfile`(빌드 + Caddy, `/api`→app).
+- 컨테이너 안 WebRTC: `app/voice/netcfg.py`(UDP 포트 범위 고정 + 응답 SDP에 announce 주소 추가). `tests/test_voice.py` 2개 추가.
+- 클라우드 세션에서 확인한 것(GPU 없음): 네 이미지 빌드, ai 이미지 안에서 ctranslate2·cuBLAS·cuDNN·supertonic 로드, `docker-compose.verify.yml`(가짜 AI)로 전체 기동 → runner 자체 점검 VERIFIED(runc), 브라우저 E2E 통과(지원→음성 면접→코딩→평가→결정→결과), `scripts/check_container_rtc.py`로 127.0.0.1 후보만으로 WebRTC 연결 PASS.
+- **확인 안 한 것**: GPU 할당(Windows Docker Desktop), 실제 모델 다운로드·적재(이 환경은 컨테이너 외부 DNS 차단), Windows에서 UDP 포트 publish를 거친 브라우저 음성. 사용자 PC에서 `deploy/README.md` 3절로 확인 필요.
+- 빌드가 TLS 검사 프록시 뒤에 있으면 `BUILD_CA_FILE`(BuildKit secret `build_ca`)로 CA를 넣는다. 설정하지 않으면 아무 영향 없다.
+- 시연 데이터: `scripts/seed_demo.py`(회사·담당자 `rec@demo.example`·코딩 포함 공고, 멱등).
+
 ## 4. 다음 할 일 (권장 순서)
 
 1. ~~ai 서비스 완성~~ (완료). 인터페이스:
