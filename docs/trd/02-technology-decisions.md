@@ -20,7 +20,7 @@
 | 백엔드 | FastAPI + Pydantic v2 + SQLAlchemy 2(async) + Alembic | Django 5(+DRF/Ninja), Litestar | aiortc와 같은 asyncio 루프·패키지를 공유한다. `response_model`로 지원자 응답 화이트리스트(SEC-04). OpenAPI → TS 타입 생성 | 인증·운영 화면 직접 구현 |
 | DB | PostgreSQL 16 | MySQL 8, SQLite | `SKIP LOCKED`·`LISTEN/NOTIFY`(작업 큐), CHECK·트리거(가중치 합, 불변 스냅샷, 허용 전이), JSONB(이력서 스냅샷), 부분 유니크 인덱스 | 백업 운영 |
 | DB 드라이버 | asyncpg | psycopg 3 async | psycopg async는 Windows 기본 Proactor 루프를 지원하지 않는다. Windows의 asyncio 하위 프로세스는 Proactor에서만 동작한다. asyncpg + aiortc + subprocess가 한 루프에서 동작함을 조정자가 실측했다(통합 결정 T2, ADR-0002) | uvicorn의 루프 정책(ADR-0002) |
-| 작업 큐 | 자체 `jobs` 테이블(SKIP LOCKED, 임대·펜싱, 인프라 게이트) | Procrastinate, Redis + Celery/RQ | 제출과 작업 등록을 같은 트랜잭션에서 한다(7.2, 8.3 누락 0). 인프라를 추가하지 않는다. "LLM 불가 시 집지 않음"(OQ-23)을 그대로 구현할 수 있다 | 직접 구현 분량 |
+| 작업 큐 | 자체 `jobs` 테이블(영속 기록·outbox, 임대·펜싱, 인프라 게이트) + **Redis sorted set 분배**(ADR-0013, 2026-10-29) | Procrastinate, Redis + Celery/RQ | 제출과 작업 등록을 같은 트랜잭션에서 한다(7.2, 8.3 누락 0). 인프라를 추가하지 않는다. "LLM 불가 시 집지 않음"(OQ-23)을 그대로 구현할 수 있다 | 직접 구현 분량 |
 | WebRTC 서버 | aiortc 1.15.0(app 프로세스 안) | LiveKit 자가 호스팅, Janus(GPL-3.0), mediasoup | 같은 Python 코드에서 프레임 게이트·VAD·STT를 직접 제어한다. Windows에서 Opus 송수신·데이터채널·리샘플이 동작한다 [실측 `results-rtc-loopback.txt`]. 브라우저↔서버 게이트도 S-1에서 확인 | 포트 범위 지정 불가 → 운영 host 네트워크(ADR-0010). 장시간·재연결 미검증 |
 | LLM 런타임 | Ollama 0.40.7(설치됨) + 자체 게이트웨이 | llama.cpp `llama-server`, vLLM | GGUF Q4_K_M, JSON 스키마 강제 출력 6/6 유효 [실측]. 스트림 연결 종료로 취소가 동작한다 [실측]. Ollama에는 우선순위가 없어 게이트웨이가 레인을 갖는다(ADR-0003) | 요청마다 `num_ctx`가 다르면 재적재 → 전역 고정 |
 | LLM 모델 | `qwen3.5:4b` Q4_K_M (Apache-2.0) | Qwen3-8B, Qwen3-4B-2507, Kanana-1.5-8B, `exaone3.5:7.8b` | 6GB에 전 층 적재, 53 tok/s, 꼬리질문 판단 0.57초 [실측]. 8B급은 일부 층이 CPU로 내려가 실시간 경로에 부적합 [추정, R-01] | 평가 품질(Kappa)은 골든셋 전까지 미지수(OQ-13) |

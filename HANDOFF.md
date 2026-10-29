@@ -66,6 +66,19 @@
 - 빌드가 TLS 검사 프록시 뒤에 있으면 `BUILD_CA_FILE`(BuildKit secret `build_ca`)로 CA를 넣는다. 설정하지 않으면 아무 영향 없다.
 - 시연 데이터: `scripts/seed_demo.py`(회사·담당자 `rec@demo.example`·코딩 포함 공고, 멱등).
 
+### 3.5 Redis 작업 분배·실시간 알림 (2026-10-29, ADR-0013)
+
+사용자 결정으로 Redis를 넣었다.
+- 대기줄: 자원별 sorted set, worker가 `BZPOPMIN`으로 즉시 집기.
+- 실시간: 상태 변경 → Redis pub/sub → SSE `GET /api/events/stream` → 화면이 다시 조회.
+- **`jobs` 테이블은 영속 기록·outbox로 유지**했다. 제출과 작업 등록의 원자성(7.2), 누락 0, 펜싱·인프라 게이트를 지키기 위해서다.
+- Redis가 꺼지면 SQL 집기로 자동 전환한다.
+- 개발: `deploy/docker-compose.dev.yml`에 redis(127.0.0.1:6379) 추가, `AIHIRE_REDIS_URL`(빈 값 = 끔).
+- 테스트는 Redis DB 15를 쓰고, Redis가 없으면 해당 테스트만 건너뛴다.
+- 시험:
+  - `tests/test_redis_dispatch.py`(4개), `tests/test_events.py`(3개), `liveUpdates.test.ts`
+  - E2E의 담당자 결정이 새로고침 없이 지원 현황에 반영(로컬·컨테이너·외부망 차단 실행 모두 통과)
+
 ## 4. 다음 할 일 (권장 순서)
 
 1. ~~ai 서비스 완성~~ (완료). 인터페이스:

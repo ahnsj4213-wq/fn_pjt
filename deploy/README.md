@@ -1,10 +1,11 @@
 # 컨테이너로 전체 실행하기
 
-`docker-compose.yml` 하나로 플랫폼 전체를 띄운다. Redis는 없다. 작업 큐는 PostgreSQL에 있다(ADR-0006).
+`docker-compose.yml` 하나로 플랫폼 전체를 띄운다.
 
 | 서비스 | 내용 | GPU |
 |---|---|---|
-| `postgres` | PostgreSQL 16 (유일한 상태 저장소) | |
+| `postgres` | PostgreSQL 16 (영속 저장소, 작업 기록) | |
+| `redis` | AI 작업 대기줄(자원별 우선순위 큐)과 화면 실시간 알림(pub/sub → SSE). 내용은 DB에서 재구성되므로 영속 설정 없음(ADR-0013) | |
 | `migrate` | 기동 시 1회 `alembic upgrade head` | |
 | `ollama` | LLM `qwen3.5:4b`, 임베딩 `qwen3-embedding:0.6b` | ○ |
 | `ollama-pull` | 기동 시 1회 두 모델이 있는지 확인하고 없으면 받는다 | |

@@ -66,12 +66,15 @@ def worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
-async def claim(resources: list[str], wid: str, kinds: list[str] | None = None) -> JobCtx | None:
+async def claim(resources: list[str], wid: str, kinds: list[str] | None = None,
+                job_id: int | None = None) -> JobCtx | None:
+    """Claims the next claimable job of `resources`, or exactly `job_id` (handed out by Redis, ADR-0013)."""
     async with session_scope() as db:
         row = (await db.execute(text("""
             WITH next AS (
               SELECT j.id FROM jobs j
               WHERE j.state = 'QUEUED' AND j.run_after <= now() AND j.resource = ANY(:res)
+                AND (CAST(:job_id AS bigint) IS NULL OR j.id = CAST(:job_id AS bigint))
                 AND (CAST(:kinds AS text[]) IS NULL OR j.kind = ANY(CAST(:kinds AS text[])))
                 AND (j.depends_on IS NULL OR EXISTS (SELECT 1 FROM jobs d WHERE d.id = j.depends_on
                                                      AND d.state IN ('SUCCEEDED','FAILED','CANCELLED')))
@@ -81,7 +84,7 @@ async def claim(resources: list[str], wid: str, kinds: list[str] | None = None) 
               attempt_deadline_at = now() + :limit, started_at = now()
             FROM next WHERE j.id = next.id
             RETURNING j.id, j.kind, j.payload, j.application_id, j.attempts, j.max_attempts, j.lease_token"""),
-            {"res": resources, "kinds": kinds, "wid": wid, "lease": LEASE,
+            {"res": resources, "kinds": kinds, "job_id": job_id, "wid": wid, "lease": LEASE,
              "limit": timedelta(seconds=EVAL_ATTEMPT_TIMEOUT_SEC)})).first()
         if row is None:
             return None

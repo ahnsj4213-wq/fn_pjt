@@ -549,3 +549,4 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
     started_at: Mapped[datetime | None] = mapped_column(TS)
     finished_at: Mapped[datetime | None] = mapped_column(TS)
+    dispatched_at: Mapped[datetime | None] = mapped_column(TS)  # last hand-off to Redis (ADR-0013)

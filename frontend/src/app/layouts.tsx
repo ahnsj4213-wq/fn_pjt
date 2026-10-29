@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router';
 import { logout } from '@/api/common/auth';
 import { Button } from '@/shared/ui/components';
+import { useLiveUpdates } from './liveUpdates';
 import s from './layouts.module.css';
 import { useSession } from './session';
 
@@ -41,6 +42,7 @@ export function AppLayout() {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const nav = data?.user.role === 'RECRUITER' ? RECRUITER_NAV : CANDIDATE_NAV;
+  useLiveUpdates(data?.user.id);
 
   const onLogout = async () => {
     setBusy(true);

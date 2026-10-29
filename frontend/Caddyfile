@@ -9,6 +9,11 @@
 		Permissions-Policy "microphone=(self), camera=(self), geolocation=()"
 		-Server
 	}
+	handle /api/events/* {
+		reverse_proxy app:8000 {
+			flush_interval -1  # Server-Sent Events: pass each event through at once
+		}
+	}
 	handle /api/* {
 		reverse_proxy app:8000
 	}

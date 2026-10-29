@@ -4,6 +4,7 @@ Requires the dev PostgreSQL (deploy/docker-compose.dev.yml). Tests talk to the A
 so routing, dependencies, middleware and error handlers are all exercised.
 """
 import asyncio
+import contextlib
 import os
 import subprocess
 import sys
@@ -16,6 +17,8 @@ PG = "postgresql://aihire:aihire_dev_only@127.0.0.1:55432"
 TEST_DB = "aihire_test"
 os.environ["AIHIRE_DATABASE_URL"] = f"postgresql+asyncpg://aihire:aihire_dev_only@127.0.0.1:55432/{TEST_DB}"
 os.environ["AIHIRE_ENV"] = "test"
+# Redis DB 15 keeps tests away from development data; tests needing Redis skip when it is not running.
+os.environ.setdefault("AIHIRE_REDIS_URL", "redis://127.0.0.1:6379/15")
 os.environ.setdefault("AIHIRE_DATA_DIR", str(Path(__file__).parent / ".data"))
 
 import httpx  # noqa: E402
@@ -59,6 +62,19 @@ async def clean_tables(database):
         await db.execute(text("DELETE FROM question_bank WHERE source <> 'SEED'"))
         await db.execute(text("DELETE FROM companies"))
         await db.execute(text("UPDATE question_bank SET usage_count = 0, last_used_at = NULL"))
+    await _flush_redis()
+
+
+async def _flush_redis() -> None:
+    from app.core.redis import get_redis
+
+    r = get_redis()
+    if r is None:
+        return
+    with contextlib.suppress(Exception):  # Redis not running: nothing to clean
+        keys = [k async for k in r.scan_iter("aihire:*")]
+        if keys:
+            await r.delete(*keys)
 
 
 @pytest.fixture(scope="session")

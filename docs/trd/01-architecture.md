@@ -27,6 +27,7 @@
 | `postgres` | 유일한 상태 저장소(파일 본문은 볼륨) | PostgreSQL 16 | 개발 55432, 운영 5432 | — | — | — |
 | `ollama` | LLM 서빙(GPU), 임베딩(CPU, `num_gpu=0`) | Ollama 0.40.7 | 11434 | — | LLM | 게이트웨이가 동시 요청 1개로 제한 |
 | `caddy` | HTTPS 종단, SPA 정적 파일, `/api/*`→app, 보안 헤더 | Caddy 2 (운영) | 443, 80→443 | — | — | — |
+| `redis` | 작업 분배(자원별 sorted set)·실시간 상태 알림(pub/sub → SSE). 내용은 모두 PostgreSQL에서 재구성 가능(ADR-0013, 2026-10-29 추가) | Redis 7 | 6379 | — | — | — |
 
 - 직접 작성하는 프로세스는 app, worker, ai, runner 4개다. 나머지 3개는 기성 런타임이다.
 - 개발에서는 caddy를 두지 않고 Vite 개발 서버(5173)가 같은 출처 프록시를 맡는다(6.1절).

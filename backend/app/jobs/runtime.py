@@ -2,6 +2,7 @@
 
 Each resource (LLM, RUNNER, CPU, NONE) has a few lanes. A lane claims work only while the resource's probe says
 the infrastructure is up, so stopping the model server leaves jobs QUEUED with attempts untouched (AC-18).
+Lanes wait on Redis for job ids (ADR-0013) and fall back to claiming from PostgreSQL when Redis is off or down.
 Periodic tasks run in the same process; `periodic_tasks.next_run_at` makes them single-runner across workers.
 """
 import asyncio
@@ -15,12 +16,14 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.core.db import session_scope
 from app.core.logging import configure_logging, log_event
-from app.jobs import worker
+from app.core.redis import get_redis
+from app.jobs import dispatch, worker
 
 log = logging.getLogger("app.worker")
 Probe = Callable[[], Awaitable[bool]]
 LANES = {"LLM": 2, "RUNNER": 2, "CPU": 1, "NONE": 1}  # LLM: one interactive + one batch job; ai gateway orders them
 PERIODIC: dict[str, Callable[[], Awaitable[None]]] = {}
+DISPATCH_TICK_SEC = 0.5
 
 
 def periodic(name: str):
@@ -68,16 +71,58 @@ def default_probes() -> dict[str, Probe]:
             "RUNNER": CachedProbe(runner_ok), "NONE": always}
 
 
+_redis_up: bool | None = None
+
+
+def _note_redis(up: bool, error: BaseException | None = None) -> None:
+    """Logs only when Redis comes or goes, not on every lane iteration."""
+    global _redis_up
+    if up != _redis_up:
+        _redis_up = up
+        log_event(log, "redis_up" if up else "redis_down", logging.INFO if up else logging.WARNING,
+                  error_code=type(error).__name__ if error else None)
+
+
+async def _next_job(resource: str, wid: str, stop: asyncio.Event, idle_sec: float) -> worker.JobCtx | None:
+    kinds = list(worker.HANDLERS) or None
+    if get_redis() is not None:
+        try:
+            job_id = await dispatch.pop(resource, timeout_sec=idle_sec)  # blocks while idle (ADR-0013)
+            _note_redis(True)
+        except Exception as e:  # noqa: BLE001 - Redis unreachable: fall through to the SQL claim
+            _note_redis(False, e)
+        else:
+            # A stale id (claimed elsewhere, not yet due) yields None; the dispatcher re-sends live jobs.
+            return None if job_id is None else await worker.claim([resource], wid, kinds, job_id=job_id)
+    ctx = await worker.claim([resource], wid, kinds)
+    if ctx is None:
+        await _sleep(stop, idle_sec)
+    return ctx
+
+
 async def _lane(resource: str, probe: Probe, wid: str, stop: asyncio.Event, idle_sec: float) -> None:
     while not stop.is_set():
         if not await probe():
             await _sleep(stop, 2.0)
             continue
-        ctx = await worker.claim([resource], wid, kinds=list(worker.HANDLERS) or None)
-        if ctx is None:
-            await _sleep(stop, idle_sec)
+        ctx = await _next_job(resource, wid, stop, idle_sec)
+        if ctx is not None:
+            await worker.run_one(ctx)
+
+
+async def _dispatch_loop(stop: asyncio.Event, tick: float, wid: str) -> None:
+    """Outbox relays (ADR-0013): QUEUED jobs -> Redis queues, state changes -> Redis pub/sub. Both are safe with
+    several workers (row locks + idempotent ZADD; a single relay lease for events)."""
+    from app.events.relay import relay_once
+
+    while not stop.is_set():
+        try:
+            await dispatch.dispatch_due()
+            await relay_once(wid)
+        except Exception:  # noqa: BLE001 - logged by dispatch_due / the lanes; retry after a pause
+            await _sleep(stop, 5.0)
             continue
-        await worker.run_one(ctx)
+        await _sleep(stop, tick)
 
 
 async def _periodic_loop(stop: asyncio.Event, tick: float) -> None:
@@ -117,6 +162,8 @@ async def run(stop: asyncio.Event, probes: dict[str, Probe] | None = None, lanes
     tasks = [asyncio.create_task(_lane(r, probes[r], f"{wid}/{r}{i}", stop, idle_sec))
              for r, n in (lanes or LANES).items() for i in range(n)]
     tasks.append(asyncio.create_task(_periodic_loop(stop, periodic_tick)))
+    if get_redis() is not None:
+        tasks.append(asyncio.create_task(_dispatch_loop(stop, DISPATCH_TICK_SEC, wid)))
     log_event(log, "worker_started", count=len(tasks))
     await stop.wait()
     for t in tasks:

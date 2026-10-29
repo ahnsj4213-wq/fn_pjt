@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     rtc_udp_port_max: int = Field(0, ge=0, le=65535)
     rtc_announce_ips: list[str] = []
 
+    # Redis (ADR-0013): job dispatch (sorted set per resource) and real-time state events (pub/sub -> SSE).
+    # Empty = off: workers claim from PostgreSQL directly and the event stream answers 503.
+    redis_url: str = "redis://127.0.0.1:6379/0"
+
     # Code runner (COD-06). Execution stays off until the sandbox self-test passes (ADR-0007).
     runner_url: str = "http://127.0.0.1:8400"
     runner_token: SecretStr = SecretStr("dev-runner-token-change-me")
@@ -87,9 +91,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check(self) -> "Settings":
-        for name in ("ai_service_url", "ollama_url", "runner_url"):
+        for name in ("ai_service_url", "ollama_url", "runner_url", "redis_url"):
             url = getattr(self, name)
-            if not is_private_endpoint(url):
+            if url and not is_private_endpoint(url):
                 raise ValueError(f"{name} must point to a local/private host (SEC-06): {url}")
         if (self.rtc_udp_port_min or self.rtc_udp_port_max) and not 1024 <= self.rtc_udp_port_min <= self.rtc_udp_port_max:
             raise ValueError("rtc_udp_port_min..max must be a range of unprivileged ports")

@@ -7,8 +7,8 @@
 #   open http://localhost:8080
 #
 # First start downloads the models (Ollama ~4 GB, Whisper large-v3-turbo ~1.6 GB, Supertonic) into volumes; see
-# deploy/README.md to reuse the copies already on this PC instead. There is no Redis: the job queue lives in
-# PostgreSQL (ADR-0006).
+# deploy/README.md to reuse the copies already on this PC instead. Redis carries the AI job queue hand-off and the
+# real-time screen notifications (ADR-0013); PostgreSQL stays the durable record, so Redis needs no persistence.
 name: aihire
 
 x-backend-env: &backend-env
@@ -17,6 +17,7 @@ x-backend-env: &backend-env
   AIHIRE_DATA_DIR: /data
   AIHIRE_AI_SERVICE_URL: http://ai:8200
   AIHIRE_AI_TOKEN: ${AI_TOKEN:-dev-ai-token-change-me}
+  AIHIRE_REDIS_URL: redis://redis:6379/0
   AIHIRE_RUNNER_URL: http://runner:8400
   AIHIRE_RUNNER_TOKEN: ${RUNNER_TOKEN:-dev-runner-token-change-me}
   AIHIRE_CODE_EXECUTION_ENABLED: "true"
@@ -42,6 +43,17 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aihire -d aihire"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # Everything in Redis can be rebuilt from PostgreSQL (ADR-0013): no snapshots, no AOF.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -145,6 +157,7 @@ services:
       retries: 12
     depends_on:
       migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
       ai: { condition: service_started }
       runner: { condition: service_started }
     restart: unless-stopped
@@ -157,6 +170,7 @@ services:
       - appdata:/data
     depends_on:
       migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
     restart: unless-stopped
 
   web:

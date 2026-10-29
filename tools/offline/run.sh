@@ -25,8 +25,12 @@ exec unshare -n -- sh -c "
   ip link add lan0 type veth peer name lan1 && ip addr add 10.77.0.10/24 dev lan0 &&
   ip link set lan0 up && ip link set lan1 up &&
   echo 'network: loopback + 10.77.0.10/24, no default route' &&
+  { command -v redis-server >/dev/null && redis-server --port 6379 --save '' --appendonly no --daemonize yes >/dev/null \
+    && echo 'redis: started inside the namespace' || echo 'redis: not installed (dispatch falls back to SQL)'; } &&
   cd '$ROOT/frontend' &&
   E2E_OFFLINE=1 E2E_PG_HOST=/tmp E2E_EGRESS_LOG='$OUT/backend-egress.log' E2E_NETLOG='$OUT/chromium-netlog.json' \
   E2E_PYTHON=\${E2E_PYTHON:-'$ROOT/.venv/bin/python'} \
-  npx playwright test --project=chromium --reporter=line
+  npx playwright test --project=chromium --reporter=line; rc=\$?
+  redis-cli -p 6379 shutdown nosave >/dev/null 2>&1
+  exit \$rc
 "

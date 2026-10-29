@@ -1,4 +1,4 @@
-# Development dependencies only: PostgreSQL. The API, worker and runner run on the host
+# Development dependencies only: PostgreSQL and Redis (ADR-0013). The API, worker and runner run on the host
 # (Windows) during development; see docs/trd/08-testing-and-operations.md for the full stack.
 name: aihire-dev
 services:
@@ -15,6 +15,17 @@ services:
       - aihire_pg_dev:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aihire -d aihire"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 3s
       retries: 30

@@ -109,8 +109,9 @@ test('candidate applies, interviews by voice, submits code and reads the decided
   expect(decided.ok()).toBeTruthy();
   await rec.dispose();
 
+  // ADR-0013: the decision reaches the open 지원 현황 screen live (Redis pub/sub -> SSE), no reload.
+  await expect(page.getByTestId('my-applications')).toContainText('합격', { timeout: 15_000 });
   // RPT-03/04: after the decision the candidate sees text feedback, never a total score.
-  await page.reload();
   await page.getByTestId(`action-${aid}`).click();
   await expect(page.getByTestId('feedback')).toBeVisible();
   await expect(page.getByText('합격', { exact: true })).toBeVisible();

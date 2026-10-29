@@ -24,6 +24,7 @@ dependencies = [
   "av==17.1.0",                  # BSD-3, bundles LGPL FFmpeg
   "numpy==2.5.4",                # BSD-3
   "soundfile==0.14.0",           # BSD-3
+  "redis==8.1.0",                # MIT (job dispatch + real-time events, ADR-0013)
 ]
 
 [project.optional-dependencies]
