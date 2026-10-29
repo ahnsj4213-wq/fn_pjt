@@ -9,6 +9,11 @@ const PASSWORD = 'Str0ng-pass!';
 const BASE = process.env.E2E_BASE_URL ?? 'http://localhost:5173';
 const RECRUITER = process.env.E2E_RECRUITER ?? 'rec@e2e.example'; // seeded by backend/scripts/seed_demo.py
 const ANSWER_TEXT = '주문 API의 응답 지연을';
+// E2E_REAL_AI=1: the stack runs the real models (deploy/docker-compose.yml) and the microphone plays real speech
+// (E2E_VOICE_WAV). Answers are transcribed rather than fixed, and grading on the CPU takes minutes.
+const REAL_AI = !!process.env.E2E_REAL_AI;
+const SPEAK_MS = REAL_AI ? 8_000 : 1_500;
+const EVAL_TIMEOUT = REAL_AI ? 1_200_000 : 60_000;
 
 async function signupAndLogin(page: Page): Promise<void> {
   const email = `cand${Date.now()}@e2e.example`;
@@ -25,7 +30,7 @@ async function signupAndLogin(page: Page): Promise<void> {
   expect(r.ok()).toBeTruthy();
 }
 
-test.setTimeout(240_000);
+test.setTimeout(REAL_AI ? 1_800_000 : 240_000);
 
 test('candidate applies, interviews by voice, submits code and reads the decided result', async ({ page, playwright }) => {
   // Browser-side AC-22 check (the decisive one is tools/offline/run.sh): the app never asks another host.
@@ -38,7 +43,7 @@ test('candidate applies, interviews by voice, submits code and reads the decided
 
   // Apply (JOB-02, SEC-01, RES-07)
   await page.goto('/postings');
-  await page.getByRole('link', { name: 'E2E 백엔드 개발자' }).click();
+  await page.getByRole('link', { name: process.env.E2E_POSTING ?? 'E2E 백엔드 개발자', exact: true }).click();
   await page.getByTestId('apply-button').click();
   await expect(page.getByRole('checkbox').first()).toBeVisible();
   for (const box of await page.getByRole('checkbox').all()) await box.check();
@@ -66,10 +71,14 @@ test('candidate applies, interviews by voice, submits code and reads the decided
     await expect(done.or(codingTimer)).toBeVisible({ timeout: 45_000 });
     if (await codingTimer.isVisible()) break;
     if (answered === 0) await expect(page.getByText(FIXED.ANSWER_PROMPT)).toBeVisible();
-    await page.waitForTimeout(1_500); // let the fake microphone talk
+    await page.waitForTimeout(SPEAK_MS); // let the fake microphone talk
     await done.click({ timeout: 3_000 }).catch(() => undefined); // the page may move on while clicking
     answered += 1;
-    if (answered === 1) await expect(page.getByTestId('last-answer')).toContainText(ANSWER_TEXT, { timeout: 30_000 });
+    if (answered === 1) {
+      // Real STT hears the looped recording from wherever it was when the microphone opened.
+      await expect(page.getByTestId('last-answer')).toContainText(REAL_AI ? /응답|쿼리|인덱스|밀리초/ : ANSWER_TEXT,
+        { timeout: 30_000 });
+    }
     expect(answered).toBeLessThan(20); // 10 main + at most 3 follow-ups (+ re-asks)
   }
   await expect(page).toHaveURL(/\/coding$/, { timeout: 60_000 });
@@ -101,7 +110,7 @@ test('candidate applies, interviews by voice, submits code and reads the decided
   await expect.poll(async () => {
     const list = await (await rec.get('/api/recruiter/applications')).json();
     return list.items.find((i: { id: string }) => i.id === aid)?.eval_status;
-  }, { timeout: 60_000 }).toBe('DONE');
+  }, { timeout: EVAL_TIMEOUT, intervals: REAL_AI ? [5_000] : undefined }).toBe('DONE');
   const report = await (await rec.get(`/api/recruiter/applications/${aid}/report`)).json();
   expect(report.total_score).not.toBeNull();
   const decided = await rec.post(`/api/recruiter/applications/${aid}/decision`,

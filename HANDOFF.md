@@ -108,6 +108,26 @@ frontend(Next.js)·api·mailer(Mailpit)·migrate·worker(Celery)·scheduler(beat
   - Gmail 중계
   - MinIO 이미지
 
+### 3.7 사용자 PC(GTX 1660 SUPER 6GB) 실제 모델 기동 확인 (2026-10-29, 진행 중·커밋 안 함)
+
+`deploy/README.md` 순서로 전체 스택을 띄웠다(`230f320` 기준).
+
+- 준비: `ollama pull bge-m3` → `prepare_models.py` 결과 `llm=OK embed=OK stt=OK tts=OK`. `deploy/.env`는 `.env.example` 복사본에 `STORAGE_BACKEND=local`, `COMPOSE_PROFILES=`(비움)만 바꿨다.
+- **MinIO**: `minio/minio`(Docker Hub)와 `quay.io/minio/minio` 둘 다 받을 수 없다(pull access denied / 401). 이미지 선택은 사용자 결정 대기, 그동안 local 저장소.
+- 확인 결과(모두 실제 모델):
+  - 13개 서비스 기동, llm-rt·llm-eval·stt·tts·embed healthy. VRAM 약 5.1/6 GB(llm-rt ctx 16384 + STT)로 함께 올라감
+  - `scripts/ai_smoke.py`의 검사를 api 컨테이너 안에서 `DirectAIClient`로 실행: 전부 PASS. T4 1~2초, T5 47~78초(CPU), TTS→STT CER 0.000(large-v3-turbo/cuda), embed dim 1024
+  - worker 샌드박스 VERIFIED(runc), `check_container_rtc.py` PASS(Windows UDP publish 경유)
+- **고친 것 1 (`deploy/docker-compose.yml` llm-rt)**: llama.cpp CUDA 이미지에 sm_75용 커널이 없어 컨테이너를 만들 때마다 첫 prompt에서 커널 JIT 컴파일 1~2분 → T4가 전부 TIMEOUT(꼬리질문 없음). `CUDA_CACHE_PATH=/cuda-cache` + 볼륨 `cudacache`로 보관하고, healthcheck가 warm-up prompt 1회를 마친 뒤에만 healthy가 되게 했다. 확인: 캐시 빈 상태 첫 기동 141초 뒤 healthy, 이후 첫 호출 1.4초. 재생성 시 기동 7초.
+- **고친 것 2 (E2E 실제 AI 모드)**: `frontend/playwright.config.ts`에 `E2E_VOICE_WAV`(가짜 마이크로 실제 음성 재생), `e2e/candidate-flow.spec.ts`에 `E2E_REAL_AI=1`(발화 대기 8초, 채점 대기 20분, 답변은 정규식 확인), `E2E_POSTING`(공고 제목). 음성 파일 `frontend/e2e/.fixtures/voice-real.wav`는 tts 컨테이너로 만든 12.8초 한국어 답변.
+- **진행 중이던 것**: 실제 모델 E2E 실행. 결과 미확인. 다시 돌리는 명령(frontend에서, PowerShell):
+  ```
+  $env:E2E_BASE_URL='http://localhost:8080'; $env:E2E_RECRUITER='rec@demo.example'; $env:E2E_POSTING='백엔드 개발자'
+  $env:E2E_REAL_AI='1'; $env:E2E_VOICE_WAV='e2e/.fixtures/voice-real.wav'
+  npx playwright test e2e/candidate-flow.spec.ts --project=chromium --reporter=line
+  ```
+- 남은 것: E2E 결과 확인·실패 시 수정, Mailpit(127.0.0.1:8025) 메일 수신 확인, llm-rt healthy 전에도 api의 ai-health가 up으로 보일 수 있음(첫 기동 한정, 미수정), `tools/offline/run.sh`가 CRLF(Linux 전용, `.gitattributes`에 `*.sh text eol=lf` 권장), 변경 커밋(사용자 확인 후).
+
 ## 4. 다음 할 일 (권장 순서)
 
 1. ~~ai 서비스 완성~~ (완료). 인터페이스:

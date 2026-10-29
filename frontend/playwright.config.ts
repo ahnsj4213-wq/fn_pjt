@@ -4,7 +4,10 @@ import { defineConfig, devices } from '@playwright/test';
 // E2E (design D 3.13). Browser binaries are installed separately and carried into the offline network beforehand
 // (AC-22); `npm install` does not download them. PW_CHROMIUM_PATH points at a pre-installed Chromium if needed.
 // The microphone plays e2e/.fixtures/voice.wav (written by global-setup) so the server VAD hears "speech".
-const voiceWav = path.resolve(import.meta.dirname, 'e2e/.fixtures/voice.wav');
+// E2E_VOICE_WAV = a recording of real speech instead, for a stack with real STT (E2E_REAL_AI=1).
+const voiceWav = process.env.E2E_VOICE_WAV
+  ? path.resolve(process.env.E2E_VOICE_WAV)
+  : path.resolve(import.meta.dirname, 'e2e/.fixtures/voice.wav');
 const fakeMedia = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
   `--use-file-for-fake-audio-capture=${voiceWav}`, '--autoplay-policy=no-user-gesture-required'];
 // AC-22 run (tools/offline/run.sh): Chromium records every request, lookup and socket to a net-log.

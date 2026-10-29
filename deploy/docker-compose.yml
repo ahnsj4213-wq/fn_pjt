@@ -157,9 +157,18 @@ services:
     image: ghcr.io/ggml-org/llama.cpp:${LLAMACPP_CUDA_TAG:-server-cuda}
     command: ["-m", "/models/llm/qwen3.5-4b.gguf", "--host", "0.0.0.0", "--port", "8080", "--jinja",
               "-c", "${LLM_RT_CTX:-16384}", "--parallel", "2", "-ngl", "99", "--alias", "${LLM_MODEL:-qwen3.5:4b}"]
-    volumes: [ "../models:/models:ro" ]
+    # The image has no prebuilt kernels for older GPUs (GTX 16xx, sm_75): the driver compiles them on first use,
+    # 1-2 min that made every follow-up decision time out after a fresh start. Keep the compiled kernels.
+    environment:
+      CUDA_CACHE_PATH: /cuda-cache
+      CUDA_CACHE_MAXSIZE: "4294967296"
+    volumes: [ "../models:/models:ro", "cudacache:/cuda-cache" ]
     networks: [internal]
-    healthcheck: *llama-health
+    healthcheck:
+      <<: *llama-health
+      # Healthy only after one real prompt, so the first kernel compile never lands on an interview.
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:8080/health || exit 1; [ -f /tmp/warm ] || { curl -fs -o /dev/null http://127.0.0.1:8080/completion -H 'Content-Type: application/json' -d \"{\\\"prompt\\\": \\\"$$(yes '면접 질문과 답변을 검토합니다.' | head -n 40 | tr -d '\\n')\\\", \\\"n_predict\\\": 4}\" && touch /tmp/warm; } || exit 1"]
+      timeout: 240s
     restart: unless-stopped
 
   llm-eval:
@@ -286,3 +295,4 @@ volumes:
   redisdata:
   miniodata:
   appdata:  # local-storage fallback only (STORAGE_BACKEND=local)
+  cudacache:  # llm-rt's compiled CUDA kernels
