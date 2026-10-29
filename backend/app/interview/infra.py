@@ -20,6 +20,14 @@ async def sandbox_ready() -> bool:
     s = get_settings()
     if not s.code_execution_enabled:
         return False
+    if s.runner_mode == "celery":  # API container: the worker publishes its self-test result
+        from app.coding.sandbox_local import published_ready
+
+        return await published_ready()
+    if s.runner_mode == "local":
+        from app.coding.sandbox_local import service
+
+        return await service().ensure_valid()
     try:
         async with httpx.AsyncClient(timeout=3) as c:
             r = await c.get(f"{s.runner_url}/v1/health", headers={"X-Runner-Token": s.runner_token.get_secret_value()})

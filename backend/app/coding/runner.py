@@ -31,7 +31,15 @@ def set_transport(transport: httpx.AsyncBaseTransport | None) -> None:
 
 
 async def execute(code: str, cases: list[dict], *, wall_ms: int, mem_mb: int) -> list[CaseResult]:
+    """runner_mode: http = the runner service (native development), local = in this process (the worker container,
+    which holds docker.sock), celery = hand the run to the worker (the API container, which has no Docker)."""
     s = get_settings()
+    if s.runner_mode == "local":
+        from app.coding.sandbox_local import execute_local
+
+        return await execute_local(code, cases, wall_ms=wall_ms, mem_mb=mem_mb)
+    if s.runner_mode == "celery":
+        return await _execute_via_worker(code, cases, wall_ms=wall_ms, mem_mb=mem_mb)
     body = {"code": code, "cases": [{"case_id": c["case_id"], "stdin": c["stdin"]} for c in cases],
             "limits": {"wall_ms": wall_ms, "mem_mb": mem_mb}}
     timeout = wall_ms / 1000 * len(cases) + 30
@@ -48,3 +56,20 @@ async def execute(code: str, cases: list[dict], *, wall_ms: int, mem_mb: int) ->
     if any(x.verdict == "SANDBOX_ERROR" for x in out):
         raise RunnerUnavailable("SANDBOX_ERROR")  # the environment failed, not the candidate's code
     return out
+
+
+async def _execute_via_worker(code: str, cases: list[dict], *, wall_ms: int, mem_mb: int) -> list[CaseResult]:
+    import asyncio
+
+    from app.celery_app import celery
+
+    timeout = wall_ms / 1000 * len(cases) + 30
+    try:
+        res = celery.send_task("sandbox.execute", kwargs={"code": code, "cases": cases, "wall_ms": wall_ms,
+                                                          "mem_mb": mem_mb}, queue="sandbox")
+        out = await asyncio.to_thread(res.get, timeout=timeout, propagate=False)
+    except Exception as e:  # broker down / no worker in time
+        raise RunnerUnavailable(f"worker: {type(e).__name__}") from e
+    if not isinstance(out, dict) or not out.get("ok"):
+        raise RunnerUnavailable((out or {}).get("error", "WORKER_FAILED") if isinstance(out, dict) else "WORKER_FAILED")
+    return [CaseResult(**x) for x in out["results"]]

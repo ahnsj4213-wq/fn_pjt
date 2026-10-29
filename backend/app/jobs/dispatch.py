@@ -32,11 +32,33 @@ def score(priority: int, due_epoch_ms: int) -> float:
     return priority * 1e13 + due_epoch_ms
 
 
-async def dispatch_due() -> int:
-    """One pass: hand every claimable QUEUED job to Redis. Returns how many were sent (0 when Redis is off)."""
+RESOURCE_QUEUE = {"LLM": "llm", "LLM_EVAL": "llm_eval", "CPU": "cpu", "RUNNER": "runner", "NONE": "none"}
+
+
+async def _to_sorted_sets(rows) -> None:
+    r = get_redis()
+    async with r.pipeline(transaction=False) as p:
+        for job_id, resource, priority, due_ms in rows:
+            p.zadd(queue_key(resource), {str(job_id): score(priority, due_ms)})
+        await p.execute()
+
+
+async def to_celery(rows) -> None:
+    """worker_mode=celery: one `jobs.run` task per job on its resource's queue (ADR-0014)."""
+    from app.celery_app import celery
+
+    for job_id, resource, priority, _ in rows:
+        celery.send_task("jobs.run", args=[int(job_id), resource], queue=RESOURCE_QUEUE[resource],
+                         priority=min(9, max(0, priority // 10)))
+
+
+async def dispatch_due(send=None) -> int:
+    """One pass: hand every claimable QUEUED job over (Redis sorted sets, or Celery with `send=to_celery`).
+    Returns how many were sent (0 when Redis is off)."""
     r = get_redis()
     if r is None:
         return 0
+    send = send or _to_sorted_sets
     async with session_scope() as db:
         rows = (await db.execute(text(f"""
             WITH due AS (
@@ -52,10 +74,7 @@ async def dispatch_due() -> int:
     if not rows:
         return 0
     try:
-        async with r.pipeline(transaction=False) as p:
-            for job_id, resource, priority, due_ms in rows:
-                p.zadd(queue_key(resource), {str(job_id): score(priority, due_ms)})
-            await p.execute()
+        await send(rows)
     except Exception as e:  # Redis down: forget the hand-off so the next pass (or the SQL claim) gets it
         async with session_scope() as db:
             await db.execute(text("UPDATE jobs SET dispatched_at = NULL WHERE id = ANY(:ids)"),

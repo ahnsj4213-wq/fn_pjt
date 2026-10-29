@@ -90,14 +90,9 @@ P_PRIV = """import os, ctypes, errno, platform
 libc = ctypes.CDLL(None, use_errno=True)
 res = {}
 def code(e): return errno.errorcode.get(e, str(e))
-try:
-    os.unshare(os.CLONE_NEWUSER); res['unshare_user'] = 'ALLOWED'
-except OSError as e:
-    res['unshare_user'] = code(e.errno)
-try:
-    os.unshare(os.CLONE_NEWNS); res['unshare_mnt'] = 'ALLOWED'
-except OSError as e:
-    res['unshare_mnt'] = code(e.errno)
+# libc unshare(2) directly: os.unshare exists only from Python 3.12 (the sandbox runs 3.11).
+for name, flag in (('unshare_user', 0x10000000), ('unshare_mnt', 0x00020000)):
+    res[name] = 'ALLOWED' if libc.unshare(flag) == 0 else code(ctypes.get_errno())
 os.makedirs('/tmp/m', exist_ok=True)
 r = libc.mount(b'none', b'/tmp/m', b'tmpfs', 0, None)
 res['mount'] = 'ALLOWED' if r == 0 else code(ctypes.get_errno())

@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     runner_url: str = "http://127.0.0.1:8400"
     runner_token: SecretStr = SecretStr("dev-runner-token-change-me")
     code_execution_enabled: bool = False
+    # http = runner service (native development); local = sandbox in this process (worker container with
+    # docker.sock); celery = the API hands [실행] to the worker (target diagram, ADR-0014).
+    runner_mode: str = Field("http", pattern="^(http|local|celery)$")
+    # Job processing: runtime = app.jobs.runtime (native development, tests); celery = worker + beat containers.
+    worker_mode: str = Field("runtime", pattern="^(runtime|celery)$")
 
     @model_validator(mode="after")
     def _check(self) -> "Settings":

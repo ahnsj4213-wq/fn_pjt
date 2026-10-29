@@ -139,7 +139,7 @@ $env:E2E_PYTHON="..\.venv\Scripts\python"; npx playwright test --project=chromiu
 - 모델: Ollama에 `qwen3.5:4b`, `qwen3-embedding:0.6b`. faster-whisper `large-v3-turbo`/`small`, Supertonic-3은 처음 실행 시 Hugging Face에서 받는다(운영은 사전 반입). GPU STT는 `nvidia-cublas-cu12`, `nvidia-cudnn-cu12==9.*` 휠을 설치하고 그 `bin` 폴더를 **PATH**에 넣어야 한다.
 - 개발용 비밀번호·토큰은 모두 `dev-...-change-me` 같은 예시값이다. 운영 프로필(`AIHIRE_ENV=prod`)은 기본값이면 기동을 거부한다.
 - 외부망 차단 E2E(AC-22, Linux 전용): 저장소 루트에서 `tools/offline/run.sh` → `frontend/e2e/.fixtures/offline/ac22-report.json`. Windows에서는 `docs/offline-rehearsal.md` 3절 수동 리허설.
-- runner(Docker Desktop 필요): `docker build -t aihire-sandbox:py312 runner/sandbox` → `cd runner && ..\.venv\Scripts\python -m runner --selftest`(SBX-01~14) → 통과하면 `python -m runner`로 띄우고 backend에 `AIHIRE_CODE_EXECUTION_ENABLED=true`.
+- runner(Docker Desktop 필요): `docker build -t aihire-sandbox:py311 runner/sandbox` → `cd runner && ..\.venv\Scripts\python -m runner --selftest`(SBX-01~14) → 통과하면 `python -m runner`로 띄우고 backend에 `AIHIRE_CODE_EXECUTION_ENABLED=true`.
 - 운영자 CLI: `python -m app.cli create-company --name ...`, `create-recruiter --company-id ... --email ... --name ...`
 
 ## 6. 팀·법률 확인이 필요한 항목

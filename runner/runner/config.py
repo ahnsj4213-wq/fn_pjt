@@ -34,7 +34,7 @@ class RunnerConfig:
     env: str = field(default_factory=lambda: _env("RUNNER_ENV", "dev"))            # dev | test | prod
     host: str = field(default_factory=lambda: _env("RUNNER_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(_env("RUNNER_PORT", "8400")))
-    image: str = field(default_factory=lambda: _env("RUNNER_IMAGE", "aihire-sandbox:py312"))
+    image: str = field(default_factory=lambda: _env("RUNNER_IMAGE", "aihire-sandbox:py311"))
     docker: str = field(default_factory=lambda: _env("RUNNER_DOCKER", "docker"))
     # Hardened runtime for sandbox containers only (C1): e.g. "runsc". Empty = daemon default (dev: runc).
     runtime: str = field(default_factory=lambda: _env("RUNNER_RUNTIME", ""))
