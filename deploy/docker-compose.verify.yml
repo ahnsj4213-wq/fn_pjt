@@ -1,21 +1,28 @@
 # Override for checking the container stack on a machine without a GPU or models (CI, cloud sessions):
-# the ai service is replaced by backend/scripts/fake_ai_service.py and Ollama is not started.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.verify.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.verify.yml up -d --build --wait
 #
-# Everything else (postgres, migrate, app with WebRTC on the published UDP range, worker, runner with real sandbox
-# containers, web) is the same as the real stack.
+# - AI_MODE=fake: the app/worker use the built-in fake AI (stack_fake), so llm-rt, llm-eval, stt, tts and embed are
+#   not started (profile "models").
+# - Files on the shared `appdata` volume (STORAGE_BACKEND=local) instead of MinIO; `--profile minio` plus
+#   STORAGE_BACKEND=s3 checks MinIO as well.
+# Everything else (frontend, api with WebRTC on the published UDP range, Celery worker + beat, real sandbox
+# containers through docker.sock, postgres+pgvector, redis, mailer) is the same as the real stack.
+x-no-ai-env: &no-ai-env
+  AIHIRE_AI_MODE: fake
+  AIHIRE_STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+
 services:
-  ollama:
-    profiles: ["gpu"]
-  ollama-pull:
-    profiles: ["gpu"]
-  ai:
-    build: { context: ../backend, target: app, secrets: [build_ca] }
-    image: aihire-backend:dev
-    command: ["python", "scripts/fake_ai_service.py", "--host", "0.0.0.0", "--port", "8200"]
-    deploy: !reset {}
-    volumes: !reset []
-    healthcheck:
-      start_period: 30s
-    depends_on: !reset {}
+  api:
+    environment: *no-ai-env
+  worker:
+    environment: *no-ai-env
+  scheduler:
+    environment: *no-ai-env
+  migrate:
+    environment: *no-ai-env
+  llm-rt: { profiles: ["models"] }
+  llm-eval: { profiles: ["models"] }
+  stt: { profiles: ["models"] }
+  tts: { profiles: ["models"] }
+  embed: { profiles: ["models"] }

@@ -25,9 +25,9 @@ async def sandbox_ready() -> bool:
 
         return await published_ready()
     if s.runner_mode == "local":
-        from app.coding.sandbox_local import service
+        from app.coding.sandbox_local import local_ready
 
-        return await service().ensure_valid()
+        return await local_ready()
     try:
         async with httpx.AsyncClient(timeout=3) as c:
             r = await c.get(f"{s.runner_url}/v1/health", headers={"X-Runner-Token": s.runner_token.get_secret_value()})

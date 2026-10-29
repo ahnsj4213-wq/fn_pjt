@@ -15,6 +15,7 @@ STATUS_KEY = "aihire:sandbox:status"
 STATUS_TTL_SEC = 26 * 3600  # the runner itself expires a verification after 24 h
 
 _svc = None
+_verify_lock = asyncio.Lock()
 
 
 def service():
@@ -41,12 +42,26 @@ async def verify_and_publish(force: bool = False) -> dict:
     return state
 
 
+async def local_ready() -> bool:
+    """This process's own verification. Every Celery child keeps its own RunnerService, so a child that has not run
+    the self-test yet runs it once when the published result (from another child) says the sandbox passed."""
+    svc = service()
+    if await svc.ensure_valid():
+        return True
+    if not await published_ready():
+        return False
+    async with _verify_lock:
+        if not await svc.ensure_valid():
+            await svc.verify()
+    return await svc.ensure_valid()
+
+
 async def execute_local(code: str, cases: list[dict], *, wall_ms: int, mem_mb: int) -> list[CaseResult]:
     from runner.sandbox import Limits
 
-    svc = service()
-    if not await svc.ensure_valid():
+    if not await local_ready():
         raise RunnerUnavailable("SANDBOX_UNVERIFIED")
+    svc = service()
     limits = Limits(wall_ms, mem_mb)
     results = await asyncio.gather(*(svc.executor.run_case(code, c["stdin"].encode(), limits) for c in cases))
     out = [CaseResult(case_id=c["case_id"], verdict=r.verdict, stdout=r.stdout, stderr=r.stderr,

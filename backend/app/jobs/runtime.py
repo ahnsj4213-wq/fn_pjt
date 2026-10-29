@@ -10,10 +10,8 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 
-import httpx
 from sqlalchemy import text
 
-from app.core.config import get_settings
 from app.core.db import session_scope
 from app.core.logging import configure_logging, log_event
 from app.core.redis import get_redis
@@ -50,7 +48,6 @@ class CachedProbe:
 
 
 def default_probes() -> dict[str, Probe]:
-    s = get_settings()
 
     async def ai_ok(part: str) -> bool:
         from app.ai.client import get_ai_client
@@ -59,12 +56,9 @@ def default_probes() -> dict[str, Probe]:
         return bool(body.get(part, {}).get("up"))
 
     async def runner_ok() -> bool:
-        if not s.code_execution_enabled:
-            return False
-        async with httpx.AsyncClient(timeout=3) as c:
-            body = (await c.get(f"{s.runner_url}/v1/health",
-                                headers={"X-Runner-Token": s.runner_token.get_secret_value()})).json()
-        return bool(body.get("sandbox_verified"))
+        from app.interview.infra import sandbox_ready  # runner service, in-process sandbox or published state
+
+        return await sandbox_ready()
 
     async def always() -> bool:
         return True

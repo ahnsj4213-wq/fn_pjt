@@ -15,7 +15,16 @@ GROUPS = [("llm", "llm", 1), ("eval", "llm_eval", 1), ("runner", "runner,sandbox
           ("misc", "cpu,none,relay,periodic", 2)]
 
 
+def ensure_sandbox_image() -> None:
+    """Builds the sandbox image on the host daemon the first time (the self-test then verifies it)."""
+    image = os.environ.get("RUNNER_IMAGE", "aihire-sandbox:py311")
+    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode != 0:
+        print(f"worker: building sandbox image {image}", flush=True)
+        subprocess.run([sys.executable, "-m", "runner", "--build-image"], cwd="/srv/runner", check=False)
+
+
 def main() -> int:
+    ensure_sandbox_image()
     procs = []
     for name, queues, conc in GROUPS:
         cmd = [sys.executable, "-m", "celery", "-A", "app.celery_app", "worker", "-Q", queues, "-c", str(conc),

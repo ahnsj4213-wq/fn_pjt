@@ -34,3 +34,4 @@
 | 0011 | API 규약: 오류 형식, 상한값, 지원자/담당자 응답 분리, PDF 보기 | B | |
 | 0012 | 인증·세션·CSRF·회사 격리 | E | |
 | 0013 | Redis 작업 분배·실시간 알림(SSE). jobs 테이블은 영속 기록·outbox로 유지 | 사용자 결정 | ADR-0006 분배 부분 대체 |
+| 0014 | 컨테이너 구성도: frontend(Next.js)·api·mailer·worker(Celery)·scheduler·llm-rt·llm-eval·stt·tts·embed·postgres(pgvector)·redis·minio, 샌드박스는 worker가 실행 | 사용자 결정 | ADR-0001 서비스 분리, ADR-0010 앞단 대체 |

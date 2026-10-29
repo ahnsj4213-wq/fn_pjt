@@ -1,6 +1,8 @@
-# Backend images (deploy/docker-compose.yml). One Dockerfile, two targets:
-#   app  - API (uvicorn), worker (`python -m app.jobs.runtime`) and the one-shot migration
-#   ai   - the ai process: LLM gateway to Ollama, STT (faster-whisper, CUDA 12 / cuDNN 9 from pip wheels), TTS
+# Backend images (deploy/docker-compose.yml). One Dockerfile, three targets:
+#   app     - api (uvicorn) and the one-shot migration
+#   worker  - Celery worker and beat (scheduler); adds the docker CLI and the runner package so the worker starts the
+#             code sandbox containers itself (build context `runner` = ../runner, a compose additional context)
+#   ai      - stt / tts speech servers (faster-whisper with CUDA 12 / cuDNN 9 from pip wheels; Supertonic)
 # Build context: backend/.
 # Behind a TLS-inspecting proxy, pass its CA as the `build_ca` secret (deploy/.env BUILD_CA_FILE); unset = nothing.
 FROM python:3.12-slim AS base
@@ -24,6 +26,18 @@ EXPOSE 8000
 # --workers 1, no --reload: WebRTC sessions live in this process (TRD 01 §1).
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
+FROM docker:29-cli AS dockercli
+
+FROM app AS worker
+USER root
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=runner runner /srv/runner/runner
+COPY --from=runner sandbox /srv/runner/sandbox
+ENV PYTHONPATH=/srv/backend:/srv/runner
+# Root: the worker drives the Docker daemon through the mounted socket (the sandboxes themselves run as uid 10001
+# with no network, ADR-0007).
+CMD ["python", "-m", "app.worker_main"]
+
 FROM base AS ai
 RUN python -c "import tomllib; print('\n'.join(x.split(';')[0] for x in tomllib.load(open('pyproject.toml','rb'))['project']['optional-dependencies']['ai'] if 'nvidia' not in x))" \
       > /tmp/req-ai.txt
@@ -33,6 +47,7 @@ RUN --mount=type=secret,id=build_ca \
 # ctranslate2 finds cuBLAS/cuDNN through the loader path; the GPU driver itself comes from the NVIDIA runtime.
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib
 COPY . .
-# Model caches (Hugging Face: faster-whisper; Supertonic) live under /root/.cache, a volume in compose.
-EXPOSE 8200
-CMD ["python", "-m", "app.aisvc"]
+# Models come from the read-only /models mount (scripts/prepare_models.py); no downloads at run time.
+ENV HF_HOME=/models/hf SUPERTONIC_CACHE_DIR=/models/supertonic3
+EXPOSE 8201 8202
+CMD ["python", "-m", "app.aisvc.speech_server", "stt"]

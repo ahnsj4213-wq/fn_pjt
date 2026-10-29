@@ -57,6 +57,8 @@
 
 ### 3.4 전체 컨테이너 실행 (2026-10-29)
 
+> 이 절의 서비스 구성은 3.6(ADR-0014)으로 대체됐다. 기록으로 남긴다.
+
 `deploy/docker-compose.yml` 하나로 postgres·migrate·ollama(+ollama-pull)·ai(GPU)·runner·app·worker·web(Caddy)을 띄운다. 사용법은 `deploy/README.md`. Redis는 설계에 없다(큐는 PostgreSQL).
 
 - 이미지: `backend/Dockerfile`(target `app`=API·worker·migrate, `ai`=CUDA 12/cuDNN 9 pip 휠 포함 4.7 GB), `runner/Dockerfile`(docker CLI, 첫 기동 때 샌드박스 이미지 빌드), `frontend/Dockerfile`(빌드 + Caddy, `/api`→app).
@@ -78,6 +80,33 @@
 - 시험:
   - `tests/test_redis_dispatch.py`(4개), `tests/test_events.py`(3개), `liveUpdates.test.ts`
   - E2E의 담당자 결정이 새로고침 없이 지원 현황에 반영(로컬·컨테이너·외부망 차단 실행 모두 통과)
+
+### 3.6 구성도 전면 컨테이너화 (2026-10-29, ADR-0014)
+
+사용자 결정("구성도 그대로 전면 교체"). `deploy/docker-compose.yml` 서비스:
+frontend(Next.js)·api·mailer(Mailpit)·migrate·worker(Celery)·scheduler(beat)·llm-rt(llama.cpp GPU)·llm-eval(llama.cpp CPU)·stt·tts·embed(BGE-M3)·postgres(pgvector)·redis·minio. 사용법은 `deploy/README.md`.
+
+- 모델: `backend/scripts/prepare_models.py --out ..\models` 가 Ollama의 GGUF·Whisper·Supertonic을 `models/`로 복사한다. 컨테이너는 읽기 전용으로만 읽는다.
+- 코드 실행: worker가 docker.sock으로 샌드박스 컨테이너(python:3.11-slim, network none)를 실행한다. runner 서비스는 없다.
+  - Celery 자식 프로세스마다 자체 점검을 따로 갖는다(`sandbox_local.local_ready`).
+  - 이를 고치기 전에는 채점 작업이 QUEUED로 멈췄다. 이번에 수정했다.
+- 메일: 지원 접수 확인·결과 공개 알림. 팀 PC는 Mailpit 받은편지함(127.0.0.1:8025), 기준 PC는 `.env`의 `MAIL_RELAY_*`로 Gmail 중계.
+- MinIO: 프로필 `minio`(`COMPOSE_PROFILES=minio`). Docker Hub 공식 이미지가 없어 `MINIO_IMAGE`를 정해야 한다. 정하기 전에는 `STORAGE_BACKEND=local`.
+- 의존성: `redis==6.4.0` (celery 5.6의 kombu가 redis<6.5를 요구).
+- 클라우드 세션 확인(점검용 구성 `docker-compose.verify.yml`, 가짜 AI·로컬 파일):
+  - 전체 기동
+  - 브라우저 E2E 통과
+  - 샌드박스 VERIFIED
+  - WebRTC 127.0.0.1 PASS
+  - Mailpit 메일 3통(접수 2, 결과 1)
+  - Mailpit 중계 환경변수 적용 로그 확인
+  - backend 테스트 129개 통과
+- **사용자 PC에서 확인할 것**:
+  - llama.cpp가 qwen3.5 GGUF를 적재하는지
+  - 6 GB VRAM에 llm-rt와 STT가 함께 올라가는지(안 되면 `LLM_RT_CTX=8192`)
+  - stt·tts 모델 적재
+  - Gmail 중계
+  - MinIO 이미지
 
 ## 4. 다음 할 일 (권장 순서)
 

@@ -2,6 +2,8 @@
 
 - 작성: 에이전트 A(아키텍처). 기준: `docs/design/consolidation-round1.md`(이하 "통합 결정", 모든 설계안보다 우선), `prototypes/README.md`·`results-*.txt`(실측, 2026-10-26), 통합 PRD v1.0.
 - 관련 ADR: ADR-0001(프로세스 구성), ADR-0002(기술 스택·asyncpg), ADR-0003(LLM 레인·선점), ADR-0004(STT·TTS 배치), ADR-0006(작업 큐·상태), ADR-0007(runner·샌드박스), ADR-0009(실시간 프로토콜), ADR-0010(배포·강화).
+- **2026-10-29 변경**: 컨테이너 구성은 ADR-0014(구성도 전면 교체)를 따른다. 이 문서의 `ai`·`ollama`·`runner`·`web`(Caddy) 서비스는
+  llm-rt·llm-eval·stt·tts·embed·worker 내장 샌드박스·frontend(Next.js)로 바뀌었다. `ai`·`runner` 단일 프로세스는 네이티브 개발용으로만 남는다.
 - 표기: **[실측]** = 이 장비에서 측정한 값(출처 파일 명시), **[추정]** = 측정하지 않은 값, **(예정)** = 아직 코드가 없는 구성 요소. PRD 기능 ID·수치·AC는 바꾸지 않는다.
 
 ## 1. 시스템 구성 (7개 프로세스)

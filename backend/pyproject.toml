@@ -24,7 +24,7 @@ dependencies = [
   "av==17.1.0",                  # BSD-3, bundles LGPL FFmpeg
   "numpy==2.5.4",                # BSD-3
   "soundfile==0.14.0",           # BSD-3
-  "redis==8.1.0",                # MIT (job dispatch + real-time events, ADR-0013)
+  "redis==6.4.0",                # MIT (job dispatch + real-time events, ADR-0013)
   "minio==7.2.20",               # Apache-2.0 (S3/MinIO file storage client)
   "pgvector==0.5.1",             # MIT (question-bank embeddings, migration 0004)
   "celery[redis]==5.6.3",        # BSD-3 (worker + beat in the container stack, ADR-0014)
