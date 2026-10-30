@@ -482,3 +482,16 @@ async def test_ollama_status_matches_names_like_ollama():
     assert s["up"] and s["loaded"] and s["full_gpu"] and s["digest"] == "d1" and s["embed_available"]
     b.embed_model = "qwen3-embedding:0.6b"
     assert (await b.status())["embed_available"] is False  # a different tag is a different model
+
+
+def test_output_schema_keeps_fields_named_like_schema_keywords():
+    """The grammar schema drops pydantic's title/description labels, never fields with those names: a project
+    without `title` was required yet not allowed, so every resume with a project failed extraction (RES-03)."""
+    from app.ai.tasks.base import ollama_schema
+    from app.ai.tasks.resume import ResumeOut
+
+    s = ollama_schema(ResumeOut)
+    project = s["properties"]["projects"]["items"]
+    assert {"title", "description"} <= project["properties"].keys() and project["required"] == ["title"]
+    assert "description" in s["properties"]["experience"]["items"]["properties"]
+    assert "title" not in s and "title" not in project["properties"]["title"]  # the labels are still gone

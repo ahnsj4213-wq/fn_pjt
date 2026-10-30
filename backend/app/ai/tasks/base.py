@@ -49,7 +49,9 @@ def ollama_schema(model: type[BaseModel]) -> dict:
         if isinstance(node, dict):
             if "$ref" in node:
                 return walk(defs[node["$ref"].split("/")[-1]])
-            return {k: walk(v) for k, v in node.items()
+            # Keys of `properties` are field names: a field called title or description is not schema metadata.
+            return {k: ({name: walk(sub) for name, sub in v.items()} if k == "properties" else walk(v))
+                    for k, v in node.items()
                     if k not in ("title", "maxLength", "minLength", "maxItems", "minItems", "description", "default")}
         if isinstance(node, list):
             return [walk(x) for x in node]

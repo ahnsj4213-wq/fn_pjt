@@ -2,9 +2,11 @@
 
 - `evaluate_unit`: T5 for one answer unit (main or follow-up answer). Used by `pre_evaluate` during the interview
   and by the final run for units without a reusable pre-evaluation.
-- `build_report`: the final run. Units come from `answer_pre_evaluations` with the current manifest hash or a fresh
-  T5 call; scores are computed by code (scoring.py); T6 summary, T7 candidate feedback and T8 code review (P1, never
-  scored) produce the prose. Nothing is written here: the caller persists inside its fenced transaction.
+- `load_report_inputs` + `build_report`: the final run. The first reads everything in one short transaction; the
+  second makes the model calls with no transaction open (they take minutes on the CPU, past the 30 s
+  idle-in-transaction limit of core/db.py). Units come from `answer_pre_evaluations` with the current manifest hash
+  or a fresh T5 call; scores are computed by code (scoring.py); T6 summary, T7 candidate feedback and T8 code review
+  (P1, never scored) produce the prose. Nothing is written here: the caller persists inside its fenced transaction.
 """
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -92,7 +94,22 @@ async def _coding(db: AsyncSession, app: Application, posting: JobPosting) -> tu
     return {"passed": sub.passed, "total": sub.total, "score": sub.score, "reached": True}, sub
 
 
-async def build_report(db: AsyncSession, ai: AIClient, app: Application, manifest_hash: str) -> Report:
+@dataclass
+class ReportInputs:
+    manifest_hash: str
+    posting: JobPosting
+    weights: dict
+    questions: list[InterviewQuestion]
+    answers: dict  # question_id -> answer
+    cached: dict  # answer_id -> reusable pre-evaluation payload
+    coding: dict | None
+    submission: CodingSubmission | None
+    problem: CodingProblem | None = None  # only when there is code to review (T8)
+    public_tests: list[CodingTestcase] = field(default_factory=list)
+
+
+async def load_report_inputs(db: AsyncSession, app: Application, manifest_hash: str) -> ReportInputs:
+    """Raises CodingNotGraded before any model call when the submission is still being graded."""
     posting = await db.get(JobPosting, app.posting_id)
     settings = await db.get(PostingEvalSettings, app.eval_settings_id)
     qs = (await db.execute(select(InterviewQuestion).where(InterviewQuestion.application_id == app.id)
@@ -102,7 +119,18 @@ async def build_report(db: AsyncSession, ai: AIClient, app: Application, manifes
     cached = {p.answer_id: p.payload for p in (await db.execute(select(AnswerPreEvaluation).where(
         AnswerPreEvaluation.answer_id.in_([a.id for a in answers.values()] or [None]),
         AnswerPreEvaluation.manifest_hash == manifest_hash))).scalars()}
+    coding, sub = await _coding(db, app, posting)
+    inp = ReportInputs(manifest_hash, posting, settings.weights(), list(qs), answers, cached, coding, sub)
+    if sub is not None and sub.code.strip():
+        inp.problem = await db.get(CodingProblem, posting.coding_problem_id)
+        inp.public_tests = list((await db.execute(select(CodingTestcase).where(
+            CodingTestcase.problem_id == inp.problem.id, CodingTestcase.visibility == "PUBLIC")
+            .order_by(CodingTestcase.ordinal))).scalars().all())
+    return inp
 
+
+async def build_report(ai: AIClient, app: Application, inp: ReportInputs) -> Report:
+    posting, qs, answers, cached = inp.posting, inp.questions, inp.answers, inp.cached
     mains = [q for q in qs if q.role == "MAIN"]
     followups = {q.parent_id: q for q in qs if q.role == "FOLLOWUP"}
     units: dict = {}
@@ -127,8 +155,7 @@ async def build_report(db: AsyncSession, ai: AIClient, app: Application, manifes
     if app.attempt_status == "SUBMITTED" and len(question_scores) != MAIN_QUESTION_COUNT:
         raise EvaluationFailed(f"expected {MAIN_QUESTION_COUNT} main questions, found {len(question_scores)}")
 
-    coding, sub = await _coding(db, app, posting)
-    weights = settings.weights()
+    coding, weights = inp.coding, inp.weights
     coding_value = None
     if "coding" in weights:
         coding_value = Decimal(coding["score"]) if coding and coding.get("reached") else Decimal("0.00")
@@ -136,9 +163,9 @@ async def build_report(db: AsyncSession, ai: AIClient, app: Application, manifes
 
     summary = await _summary(ai, rows, units, scores)
     feedback = await _feedback(ai, rows, units, scores)
-    review = await _code_review(db, ai, posting, sub) if sub is not None and sub.code.strip() else None
+    review = await _code_review(ai, posting, inp) if inp.problem is not None else None
     answered_main = sum(1 for m, a, _, _ in rows if a is not None and not a.is_no_answer)
-    return Report(manifest_hash, units, scores, answered_main, summary, feedback, review, coding, rows)
+    return Report(inp.manifest_hash, units, scores, answered_main, summary, feedback, review, coding, rows)
 
 
 def _comments(payload: dict | None) -> dict:
@@ -180,13 +207,10 @@ async def _feedback(ai: AIClient, rows, units: dict, scores: ScoreResult) -> dic
     return r.output
 
 
-async def _code_review(db: AsyncSession, ai: AIClient, posting: JobPosting, sub: CodingSubmission) -> dict | None:
+async def _code_review(ai: AIClient, posting: JobPosting, report_in: ReportInputs) -> dict | None:
     """T8 gets the statement, PUBLIC examples and the code — hidden tests never reach the prompt (COD-06, SC-79)."""
-    problem = await db.get(CodingProblem, posting.coding_problem_id)
-    public = (await db.execute(select(CodingTestcase).where(CodingTestcase.problem_id == problem.id,
-                                                            CodingTestcase.visibility == "PUBLIC")
-                               .order_by(CodingTestcase.ordinal))).scalars().all()
-    inp = {"problem": problem.statement_md, "language": posting.coding_language or "python", "code": sub.code,
-           "examples": [{"input": t.input, "output": t.expected_output} for t in public]}
+    inp = {"problem": report_in.problem.statement_md, "language": posting.coding_language or "python",
+           "code": report_in.submission.code,
+           "examples": [{"input": t.input, "output": t.expected_output} for t in report_in.public_tests]}
     r = await ai.llm("code_review", inp, lane="BATCH")
     return r.output if r.status == "OK" else None  # P1, not scored: a failed review leaves it empty

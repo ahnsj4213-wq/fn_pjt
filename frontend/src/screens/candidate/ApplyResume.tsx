@@ -11,6 +11,7 @@ import { ResumeEditor } from './resume/ResumeEditor';
 
 const POLL_MS = 1500;
 const POLL_LIMIT = 40; // ~1 minute: extraction runs in the INTERACTIVE lane
+const MAX_BYTES = 10 * 1024 * 1024; // RES-02; the API checks it again (413 FILE_TOO_LARGE)
 
 /** Apply step 2: resume (RES-01~07). Start from the registered resume, a PDF extraction, or blank. */
 export function ApplyResume() {
@@ -25,6 +26,10 @@ export function ApplyResume() {
   if (!flow.consentId) return <Navigate to={`/postings/${encodeURIComponent(pid)}/apply/consent`} replace />;
 
   const onFile = async (file: File) => {
+    if (file.size > MAX_BYTES) {
+      setUpload({ busy: false, message: '파일 크기는 10MB 이하여야 합니다.', error: true });
+      return;
+    }
     setUpload({ busy: true, message: '파일을 올리고 내용을 읽는 중입니다.', error: false });
     try {
       let out: ResumeFileOut = await uploadResumeFile(file);

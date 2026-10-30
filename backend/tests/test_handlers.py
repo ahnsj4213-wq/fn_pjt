@@ -14,7 +14,7 @@ from sqlalchemy import select, text
 
 from app.ai.client import set_ai_client
 from app.ai.fake import FakeAIClient
-from app.core.db import session_scope
+from app.core.db import get_engine, session_scope
 from app.jobs import handlers, worker  # noqa: F401  registers the handlers
 from app.jobs.queue import enqueue
 from app.models import InterviewQuestion, QuestionBank, QuestionTtsAsset
@@ -236,8 +236,19 @@ async def test_evaluation_reuses_pre_evaluations_and_writes_report(client, make_
     assert len(await q("SELECT 1 FROM answer_pre_evaluations")) == 10
     calls_before = sum(c.task == "evaluate_answer" for c in fake_ai.calls)
 
+    # Model calls run with no connection checked out: on the CPU they take minutes, and a transaction left open
+    # across them is closed by the 30 s idle-in-transaction limit (every real evaluation went ON_HOLD).
+    held: list[int] = []
+    llm = fake_ai.llm
+
+    async def llm_watching_pool(task, input, **kw):
+        held.append(get_engine().pool.checkedout())
+        return await llm(task, input, **kw)
+
+    fake_ai.llm = llm_watching_pool
     await submit_and_register(app_id)
     await drain()
+    assert held and set(held) == {0}
     assert sum(c.task == "evaluate_answer" for c in fake_ai.calls) == calls_before  # EVL-05: all units reused
     (eval_status,), = await q("SELECT eval_status FROM applications WHERE id=:a", a=app_id)
     assert eval_status == "DONE"

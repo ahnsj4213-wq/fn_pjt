@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   typescript: { tsconfigPath: 'tsconfig.next.json' },
+  // The proxy cuts request bodies at 10 MB by default and forwards the rest as a hung request, so a PDF just over
+  // the limit (RES-02, 10 MB) ended in a 30 s timeout instead of the API's 413. Leave room for the multipart overhead.
+  experimental: { proxyClientMaxBodySize: '12mb' },
   async rewrites() {
     return [{ source: '/api/:path*', destination: `${apiOrigin}/api/:path*` }];
   },

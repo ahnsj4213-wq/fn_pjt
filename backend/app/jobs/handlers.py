@@ -201,11 +201,14 @@ async def evaluate_application(ctx: JobCtx) -> None:
                                      {"a": app_id, "t": ctx.lease_token})
             if run_id is None:
                 raise RuntimeError("evaluation run row missing")
-            rep = await pipeline.build_report(db, ai, app, manifest)
-            await fenced_complete(db, ctx)
-            await _write_report(db, app, run_id, rep, health)
+            inputs = await pipeline.load_report_inputs(db, app, manifest)
     except pipeline.CodingNotGraded as e:
         raise InfraUnavailable("coding submission not graded yet") from e
+    # No transaction across the model calls: they outlast the 30 s idle-in-transaction limit on the CPU.
+    rep = await pipeline.build_report(ai, app, inputs)
+    async with session_scope() as db:
+        await fenced_complete(db, ctx)
+        await _write_report(db, app, run_id, rep, health)
     log_event(log, "evaluation_done", application_id=str(app_id), count=len(rep.units))
 
 

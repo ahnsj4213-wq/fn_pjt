@@ -108,7 +108,7 @@ frontend(Next.js)·api·mailer(Mailpit)·migrate·worker(Celery)·scheduler(beat
   - Gmail 중계
   - MinIO 이미지
 
-### 3.7 사용자 PC(GTX 1660 SUPER 6GB) 실제 모델 기동 확인 (2026-10-29, 진행 중·커밋 안 함)
+### 3.7 사용자 PC(GTX 1660 SUPER 6GB) 실제 모델 기동 확인 (2026-10-29)
 
 `deploy/README.md` 순서로 전체 스택을 띄웠다(`230f320` 기준).
 
@@ -120,13 +120,24 @@ frontend(Next.js)·api·mailer(Mailpit)·migrate·worker(Celery)·scheduler(beat
   - worker 샌드박스 VERIFIED(runc), `check_container_rtc.py` PASS(Windows UDP publish 경유)
 - **고친 것 1 (`deploy/docker-compose.yml` llm-rt)**: llama.cpp CUDA 이미지에 sm_75용 커널이 없어 컨테이너를 만들 때마다 첫 prompt에서 커널 JIT 컴파일 1~2분 → T4가 전부 TIMEOUT(꼬리질문 없음). `CUDA_CACHE_PATH=/cuda-cache` + 볼륨 `cudacache`로 보관하고, healthcheck가 warm-up prompt 1회를 마친 뒤에만 healthy가 되게 했다. 확인: 캐시 빈 상태 첫 기동 141초 뒤 healthy, 이후 첫 호출 1.4초. 재생성 시 기동 7초.
 - **고친 것 2 (E2E 실제 AI 모드)**: `frontend/playwright.config.ts`에 `E2E_VOICE_WAV`(가짜 마이크로 실제 음성 재생), `e2e/candidate-flow.spec.ts`에 `E2E_REAL_AI=1`(발화 대기 8초, 채점 대기 20분, 답변은 정규식 확인), `E2E_POSTING`(공고 제목). 음성 파일 `frontend/e2e/.fixtures/voice-real.wav`는 tts 컨테이너로 만든 12.8초 한국어 답변.
-- **진행 중이던 것**: 실제 모델 E2E 실행. 결과 미확인. 다시 돌리는 명령(frontend에서, PowerShell):
+- 실제 모델 E2E: 두 번 돌렸고, 두 번 다 지원 → 점검 → 음성 면접 10문항(실제 STT·TTS·LLM) → 코딩 실행·제출까지 지나갔다. 사용자 요청으로 채점 대기 중에 중단했다(끝까지 통과한 기록은 없다). 다시 돌리는 명령(frontend에서, PowerShell):
   ```
   $env:E2E_BASE_URL='http://localhost:8080'; $env:E2E_RECRUITER='rec@demo.example'; $env:E2E_POSTING='백엔드 개발자'
   $env:E2E_REAL_AI='1'; $env:E2E_VOICE_WAV='e2e/.fixtures/voice-real.wav'
   npx playwright test e2e/candidate-flow.spec.ts --project=chromium --reporter=line
   ```
-- 남은 것: E2E 결과 확인·실패 시 수정, Mailpit(127.0.0.1:8025) 메일 수신 확인, llm-rt healthy 전에도 api의 ai-health가 up으로 보일 수 있음(첫 기동 한정, 미수정), `tools/offline/run.sh`가 CRLF(Linux 전용, `.gitattributes`에 `*.sh text eol=lf` 권장), 변경 커밋(사용자 확인 후).
+- **고친 것 3 (평가가 전부 ON_HOLD)**: `evaluate_application`이 DB 트랜잭션을 연 채 CPU LLM(1회 47~78초)을 불러, 연결 설정 `idle_in_transaction_session_timeout=30s`에 끊겨 `InterfaceError`로 두 번 실패 → 평가 보류. `pipeline.load_report_inputs`(읽기) → `build_report`(트랜잭션 없이 LLM) → 새 트랜잭션에서 쓰기로 나눴다. 코딩 미채점 판정도 LLM 호출 전으로 옮겨졌다. 시험: `test_evaluation_reuses_pre_evaluations_and_writes_report`가 모델 호출 중 커넥션 미점유를 검사(수정 전 코드에서 실패 확인). 실제 모델 재평가: 290초 뒤 DONE.
+  - `compose_questions`도 LLM 호출 동안 트랜잭션을 연다. GPU llm-rt라 호출이 수 초여서 지금은 문제없지만, STT_DEVICE=cpu 등으로 느려지면 같은 방식으로 나눌 것.
+- **고친 것 4 (PDF 추출이 프로젝트가 있으면 항상 실패)**: `ollama_schema`가 pydantic의 `title`·`description` 메타데이터를 지우면서 같은 이름의 **필드**(프로젝트 `title`, 경력·프로젝트 `description`)까지 지워, `required: ["title"]`인데 `title`을 쓸 수 없는 스키마가 llama.cpp 문법으로 강제됐다. `properties`의 키는 지우지 않게 고침. 가짜 AI는 스키마를 안 봐서 시험이 못 잡았다. 시험 `test_output_schema_keeps_fields_named_like_schema_keywords`. 실제 모델 추출 5.3초 DONE.
+- **고친 것 5 (10MB 넘는 PDF가 30초 뒤 일반 오류)**: Next.js 프록시가 본문을 10MB에서 잘라 넘기고, Starlette가 multipart 전체를 읽느라 엔드포인트의 크기 검사 전에 멈췄다. `ApplyResume.tsx`가 올리기 전에 거부, `next.config.ts` `experimental.proxyClientMaxBodySize: '12mb'`, api 미들웨어가 `Content-Length`로 먼저 413(최대 5초 본문 비우기 후 응답: 업로드 중 응답하면 연결이 끊겨 브라우저가 문구를 못 받음). 확인: 11MB 0.1초, 20MB 5초 모두 413 `FILE_TOO_LARGE`, 정상 PDF 201.
+- 메일(Mailpit): 지원 접수 메일, 결정 직후 결과 등록 메일(합불은 메일에 쓰지 않음) 수신 확인.
+- `.gitattributes`(`*.sh text eol=lf`)로 `core.autocrlf=true` PC에서도 셸 스크립트가 LF로 체크아웃된다.
+- backend 테스트 130개 통과(이 PC, 개발용 postgres·redis). frontend는 컨테이너 빌드(`next build`, 타입 검사 포함)만 확인했다. 로컬 `frontend/node_modules`는 Vite 시절 것이라 `npm ci`가 필요하다.
+- 남은 것·관찰:
+  - MinIO 이미지 결정
+  - 첫 기동(커널 캐시 없음) 약 2분 동안 api의 ai-health가 up으로 보이는 문제. 미수정: api는 의도적으로 AI를 기다리지 않고, 영향은 꼬리질문이 건너뛰어지는 것뿐이다.
+  - 품질: 무음 구간에서 STT가 "네, 감사합니다." 환각을 낸 사례 1건(hl-1 규칙 점검), 점수가 모두 1점일 때 T6 `strengths`에 약점 문장이 들어감(프롬프트 개선 필요)
+  - 실제 모델 E2E 끝까지 1회 통과(약 15~20분)
 
 ## 4. 다음 할 일 (권장 순서)
 
