@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import DEFAULT_WEIGHTS_CODING, DEFAULT_WEIGHTS_NO_CODING, WEIGHT_TOTAL
 from app.core.errors import AppError, conflict
 from app.core.timeutil import kst_end_of_day, to_kst_date, utcnow
-from app.models import Application, Company, JobPosting, PostingEvalSettings
+from app.models import Application, CodingProblem, Company, JobPosting, PostingEvalSettings
 from app.postings.schemas import (
     InterviewSettings,
     DEFAULT_QUESTION_AREAS, JOB_FAMILIES, QUESTION_AREAS, RUBRIC_VERSION, EvalSettingsOut, PostingDetailOut, PostingIn, PostingPublicOut, PostingSummaryOut,
@@ -137,9 +137,10 @@ def _apply_fields(p: JobPosting, body: PostingIn) -> bool:
     """Copy editable fields; returns True when coding_enabled flipped (weights item set changes)."""
     coding_changed = body.coding_enabled != p.coding_enabled
     locked = p.settings_locked_at is not None
+    # Companies do not pick a problem: the server assigns one (ensure_problem); an id the client omits keeps the current one.
+    problem_id = body.coding_problem_id or p.coding_problem_id
     coding_fields_changed = coding_changed or (
-        body.coding_enabled and (body.coding_problem_id != p.coding_problem_id
-                                 or body.coding_time_limit_min != p.coding_time_limit_min))
+        body.coding_enabled and (problem_id != p.coding_problem_id or body.coding_time_limit_min != p.coding_time_limit_min))
     if locked and coding_fields_changed:
         raise conflict(*SETTINGS_LOCKED)
     p.title, p.job_family = body.title, body.job_family
@@ -147,15 +148,23 @@ def _apply_fields(p: JobPosting, body: PostingIn) -> bool:
     p.experience_level, p.employment_type, p.location = body.experience_level, body.employment_type, body.location
     p.deadline_at = kst_end_of_day(body.deadline_date) if body.deadline_date else None
     p.coding_enabled = body.coding_enabled
-    p.coding_problem_id = body.coding_problem_id if body.coding_enabled else None
+    p.coding_problem_id = problem_id if body.coding_enabled else None
     p.coding_language = "python" if body.coding_enabled else None
     p.coding_time_limit_min = body.coding_time_limit_min if body.coding_enabled else None
     return coding_changed
 
 
+async def ensure_problem(db: AsyncSession, p: JobPosting) -> None:
+    """A coding posting without a problem gets a random active one (fixed for the posting, so applicants are compared fairly)."""
+    if not p.coding_enabled or p.coding_problem_id:
+        return
+    p.coding_problem_id = await db.scalar(select(CodingProblem.id).where(CodingProblem.is_active).order_by(func.random()).limit(1))
+
+
 async def create_posting(db: AsyncSession, company_id: UUID, actor: UUID, body: PostingIn) -> PostingDetailOut:
     p = JobPosting(company_id=company_id, created_by=actor, status="DRAFT")
     _apply_fields(p, body)
+    await ensure_problem(db, p)
     db.add(p)
     await db.flush()
     await add_settings(db, p, default_weights(p.coding_enabled), None, actor)
@@ -172,6 +181,7 @@ async def update_posting(db: AsyncSession, p: JobPosting, actor: UUID, body: Pos
     if p.status == "OPEN" and body.deadline_date and kst_end_of_day(body.deadline_date) <= utcnow():
         raise AppError(422, "DEADLINE_IN_PAST", "마감일은 오늘 이후여야 합니다.")
     coding_changed = _apply_fields(p, body)
+    await ensure_problem(db, p)
     if coding_changed:
         prev = await current_settings(db, p)
         await add_settings(db, p, default_weights(p.coding_enabled), prev.custom_question, actor)

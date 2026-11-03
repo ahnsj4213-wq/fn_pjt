@@ -245,3 +245,18 @@ async def test_question_areas_are_saved_with_the_settings_and_reset(client):
     assert r.json()["question_areas"] == ["JOB_SKILL", "PROJECT"]
     r = await client.post(url + "/reset")
     assert len(r.json()["question_areas"]) == 5
+
+
+async def test_coding_posting_gets_a_problem_without_the_company_choosing(client):
+    """Companies only switch the coding test on; the server assigns a problem, keeps it, and the posting can be published."""
+    await recruiter(client)
+    p = await create_posting(client, publish=False)
+    r = await client.put(f"/api/recruiter/postings/{p['id']}", json={
+        **posting_body(coding_enabled=True, coding_time_limit_min=60), "row_version": p["row_version"]})
+    assert r.status_code == 200, r.text
+    first = r.json()["coding_problem_id"]
+    assert first
+    again = await client.put(f"/api/recruiter/postings/{p['id']}", json={
+        **posting_body(coding_enabled=True, coding_time_limit_min=45), "row_version": r.json()["row_version"]})
+    assert again.status_code == 200 and again.json()["coding_problem_id"] == first
+    assert (await client.post(f"/api/recruiter/postings/{p['id']}/publish")).status_code == 200

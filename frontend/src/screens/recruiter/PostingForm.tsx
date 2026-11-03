@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { fetchCompany } from '@/api/common/auth';
-import { createPosting, fetchCodingProblems, fetchRecruiterPosting, publishPosting, savePostingTemplate, updatePosting, type PostingIn } from '@/api/recruiter';
+import { createPosting, fetchRecruiterPosting, publishPosting, savePostingTemplate, updatePosting, type PostingIn } from '@/api/recruiter';
 import { describeError } from '@/shared/http/errors';
 import { Field } from '@/shared/ui/wf';
 import { Modal } from '@/shared/ui/overlay';
@@ -16,9 +16,9 @@ const thirtyDays = () => { const d = new Date(Date.now() + 30 * 86400000); retur
 
 interface Form { title: string; job_family: string; experience_level: string; employment_type: string; location: string;
   headcount: string; deadline_date: string; duties: string; requirements: string; preferred: string; coding_enabled: boolean;
-  coding_problem_id: string; coding_time_limit_min: string }
+  coding_time_limit_min: string }
 const EMPTY: Form = { title: '', job_family: 'DEV', experience_level: '신입', employment_type: '정규직', location: '', headcount: '1',
-  deadline_date: thirtyDays(), duties: '', requirements: '', preferred: '', coding_enabled: false, coding_problem_id: '', coding_time_limit_min: '60' };
+  deadline_date: thirtyDays(), duties: '', requirements: '', preferred: '', coding_enabled: false, coding_time_limit_min: '60' };
 
 /** SC-R04 기업 관리 · 공고 작성·수정. 임시 저장은 비어 있어도 되고, 게시할 때 서버가 빠진 항목을 알려 줍니다. */
 export default function PostingForm() {
@@ -40,20 +40,14 @@ export default function PostingForm() {
     setV({ title: p.title ?? '', job_family: p.job_family ?? 'DEV', experience_level: p.experience_level ?? '', employment_type: p.employment_type ?? '',
       location: p.location ?? '', headcount: p.headcount ? String(p.headcount) : '', deadline_date: p.deadline_date ?? '',
       duties: p.duties ?? '', requirements: p.requirements ?? '', preferred: p.preferred ?? '', coding_enabled: p.coding_enabled,
-      coding_problem_id: p.coding_problem_id ?? '', coding_time_limit_min: p.coding_time_limit_min ? String(p.coding_time_limit_min) : '60' });
+      coding_time_limit_min: p.coding_time_limit_min ? String(p.coding_time_limit_min) : '60' });
   }, [existing.data]);
-  const problems = useQuery({ queryKey: ['recruiter', 'coding-problems'], queryFn: fetchCodingProblems, enabled: v.coding_enabled });
-  // Checking the box picks the first problem so a posting can be published without extra clicks.
-  useEffect(() => {
-    if (v.coding_enabled && !v.coding_problem_id && problems.data?.length) setV((s) => ({ ...s, coding_problem_id: problems.data![0].id }));
-  }, [v.coding_enabled, v.coding_problem_id, problems.data]);
 
   const body = (): PostingIn => ({
     title: v.title.trim() || '제목 없는 공고', job_family: v.job_family, experience_level: v.experience_level || null, employment_type: v.employment_type || null,
     location: v.location || null, headcount: v.headcount ? Number(v.headcount) : null, deadline_date: v.deadline_date || null,
     duties: v.duties.trim() || '(주요 업무를 입력해 주십시오)', requirements: v.requirements.trim() || '(자격 요건을 입력해 주십시오)',
     preferred: v.preferred || null, coding_enabled: v.coding_enabled,
-    coding_problem_id: v.coding_enabled ? v.coding_problem_id || null : null,
     coding_time_limit_min: v.coding_enabled ? Number(v.coding_time_limit_min) || null : null,
     ...(pid ? { row_version: rowVersion } : {}),
   });
@@ -118,12 +112,8 @@ export default function PostingForm() {
             <label className="check"><input type="checkbox" checked={v.coding_enabled} onChange={(e) => setV((s) => ({ ...s, coding_enabled: e.target.checked }))} /> 코딩테스트 포함</label>
             {v.coding_enabled && (
               <div className="row2">
-                <div className="field"><label htmlFor="pf-prob">코딩 문제</label>
-                  <select id="pf-prob" value={v.coding_problem_id} onChange={set('coding_problem_id')}>
-                    {!problems.data && <option value="">불러오는 중…</option>}
-                    {problems.data?.map((pr) => <option key={pr.id} value={pr.id}>{pr.title}</option>)}
-                  </select></div>
-                <Field label="제한 시간(분)" id="pf-limit" type="number" min={10} max={180} value={v.coding_time_limit_min} onChange={set('coding_time_limit_min')} />
+                <Field label="코딩테스트 제한 시간(분)" id="pf-limit" type="number" min={10} max={180} value={v.coding_time_limit_min} onChange={set('coding_time_limit_min')} />
+                <p className="hint" style={{ margin: 'auto 0 0' }}>문제는 서버가 하~중 난이도에서 정해 줍니다. 면접 질문이 모두 끝나면 코딩테스트가 이어서 시작됩니다.</p>
               </div>)}
             <div className="btnrow">
               <button className="btn" type="button" disabled={busy} onClick={() => setPicking(true)}>템플릿 불러오기</button>

@@ -107,6 +107,7 @@ class CodingProblem(Base):
     time_limit_ms: Mapped[int] = mapped_column(Integer)
     memory_mb: Mapped[int] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    difficulty: Mapped[str | None] = mapped_column(Text)
 
 
 class CodingTestcase(Base):
