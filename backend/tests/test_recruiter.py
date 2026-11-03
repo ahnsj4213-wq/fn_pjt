@@ -37,7 +37,8 @@ async def test_ac20_decision_requires_done_eval_and_keeps_history(client, make_c
     r = await client.post(f"/api/recruiter/applications/{aid}/decision", json={"decision": "PASS", "expected_version": 0})
     assert r.status_code == 409 and r.json()["error"]["code"] == "EVAL_NOT_DONE"
     await to_eval_done(aid)
-    assert (await client.get("/api/recruiter/dashboard")).json()["awaiting_review"] == 1
+    d = (await client.get("/api/recruiter/dashboard")).json()
+    assert d["awaiting_review"] == 1 and d["applicants_this_month"] >= 1 and d["postings"][0]["applicants"] >= 1
     r = await client.post(f"/api/recruiter/applications/{aid}/decision", json={"decision": "PASS", "expected_version": 0})
     assert r.status_code == 200 and r.json()["version"] == 1
     stale = await client.post(f"/api/recruiter/applications/{aid}/decision", json={"decision": "FAIL", "expected_version": 0})
@@ -60,6 +61,28 @@ async def test_ac20_decision_requires_done_eval_and_keeps_history(client, make_c
                              {"a": aid})
 
 
+async def test_hold_is_internal_and_the_candidate_keeps_seeing_review_in_progress(client, make_client):
+    p, cand, aid = await _setup(client, make_client)
+    await to_eval_done(aid)
+    r = await client.post(f"/api/recruiter/applications/{aid}/decision", json={"decision": "HOLD", "expected_version": 0})
+    assert r.status_code == 200 and r.json()["version"] == 1
+    mine = (await cand.get(f"/api/candidate/applications/{aid}")).json()
+    assert mine["decision"] == "UNDECIDED" and mine["status_label"] == "검토 중"
+    res = (await cand.get(f"/api/candidate/applications/{aid}/result")).json()
+    assert res["decision"] == "UNDECIDED" and res["feedback"] is None
+    assert "HOLD" not in (await cand.get("/api/candidate/applications")).text
+    lst = (await client.get("/api/recruiter/applications?decision=HOLD")).json()
+    assert lst["total"] == 1 and lst["items"][0]["decision"] == "HOLD"
+    assert (await client.get("/api/recruiter/dashboard")).json()["awaiting_review"] == 0  # decided, just not final
+    async with session_scope() as db:  # the retention clock starts with the first published decision
+        assert await db.scalar(text("SELECT first_decided_at FROM applications WHERE id=:a"), {"a": aid}) is None
+    r = await client.post(f"/api/recruiter/applications/{aid}/decision", json={"decision": "PASS", "expected_version": 1})
+    assert r.status_code == 200
+    assert (await cand.get(f"/api/candidate/applications/{aid}")).json()["decision"] == "PASS"
+    hist = (await client.get(f"/api/recruiter/applications/{aid}/decision-history")).json()
+    assert [(h["from"], h["to"]) for h in hist] == [("UNDECIDED", "HOLD"), ("HOLD", "PASS")]
+
+
 async def test_ac19_candidate_result_hidden_until_decision_and_allowlisted(client, make_client):
     p, cand, aid = await _setup(client, make_client)
     await to_eval_done(aid)
@@ -75,7 +98,7 @@ async def test_ac19_candidate_result_hidden_until_decision_and_allowlisted(clien
         assert CANARY not in r.text
         assert not (_keys(r.json()) & FORBIDDEN_KEYS), (r.url, _keys(r.json()) & FORBIDDEN_KEYS)
     fb = responses[0].json()["feedback"]
-    assert set(fb["criteria"]) == {"expertise", "logic", "specificity", "delivery"}
+    assert set(fb["criteria"]) == {"expertise", "logic", "attitude", "delivery"}
     assert fb["notice"] == "이 피드백은 AI가 만든 참고 자료입니다"
     assert fb["strengths"] and fb["improvements"]
 
@@ -91,7 +114,7 @@ async def test_recruiter_report_and_list(client, make_client):
     assert lst["total"] == 1 and lst["items"][0]["total_score"] == "67.25"
     rep = (await client.get(f"/api/recruiter/applications/{aid}/report")).json()
     assert rep["total_score"] == "67.25" and rep["notice"] == "AI 결과는 참고 자료이며 최종 결정은 담당자가 합니다"
-    assert rep["versions"]["rubric"] == "rubric-v1"
+    assert rep["versions"]["rubric"] == "rubric-v2"
     detail = (await client.get(f"/api/recruiter/applications/{aid}")).json()
     assert detail["candidate"]["email"] and detail["can_decide"] is True
     async with session_scope() as db:
@@ -151,7 +174,8 @@ async def test_ac03_other_company_cannot_touch_applications(client, make_client)
         r = await other.request(method, url, json=body)
         assert r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND", (method, url, r.status_code)
     assert (await other.get("/api/recruiter/applications")).json()["total"] == 0
-    assert (await other.get("/api/recruiter/dashboard")).json() == {"open_postings": 0, "awaiting_review": 0}
+    d = (await other.get("/api/recruiter/dashboard")).json()
+    assert d["open_postings"] == 0 and d["awaiting_review"] == 0 and d["postings"] == [] and d["applicants_this_month"] == 0
     # candidate role cannot call recruiter routes at all; another candidate cannot read this application
     assert (await cand.get(f"/api/recruiter/applications/{aid}")).status_code == 403
     stranger = make_client()
@@ -169,7 +193,7 @@ async def test_stats_scoped_to_company(client, make_client):
     await client.post(f"/api/recruiter/applications/{aid}/decision", json={"decision": "PASS", "expected_version": 0})
     s = (await client.get("/api/recruiter/stats")).json()
     assert s["monthly_applicants"][0]["count"] == 1
-    assert s["pass_rate_by_job_family"] == [{"job_family": "BACKEND", "decided": 1, "passed": 1}]
+    assert s["pass_rate_by_job_family"] == [{"job_family": "DEV", "decided": 1, "passed": 1}]
     other = make_client()
     await recruiter(other)
     assert (await other.get("/api/recruiter/stats")).json()["monthly_applicants"] == []

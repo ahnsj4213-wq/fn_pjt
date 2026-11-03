@@ -26,6 +26,7 @@ from app.auth.deps import CandidateCtx, require_candidate
 from app.auth.scope import get_for_owner
 from app.coding import runner
 from app.core.config import get_settings
+from app.notify import inbox
 from app.core.db import get_db
 from app.core.errors import AppError, conflict, not_found
 from app.core.timeutil import utcnow
@@ -185,6 +186,7 @@ async def submit_snapshot(db: AsyncSession, app: Application, code: str, kind: s
                               dedupe_key=f"grade:{app.id}")
     app.attempt_status, app.interrupted_from, app.submitted_at = "SUBMITTED", None, utcnow()
     await register_evaluation(db, app, depends_on=grade_job)
+    await inbox.interview_finished(db, app)
     return True
 
 

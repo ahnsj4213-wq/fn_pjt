@@ -64,6 +64,11 @@ async def request_finish(application_id: UUID, turn_id: UUID) -> bool:
     return s is not None and not s.closed and s.request_finish(turn_id)
 
 
+async def think_command(application_id: UUID, turn_id: UUID, cmd: str) -> bool:
+    s = _sessions.get(application_id)
+    return s is not None and s.think_command(turn_id, cmd)
+
+
 async def close_all() -> None:
     for s in list(_sessions.values()):
         await s.close("SHUTDOWN")

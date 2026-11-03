@@ -21,8 +21,9 @@ def sandbox_up(monkeypatch):
 
 async def to_coding(client, make_client, voice_ai) -> tuple[str, object]:
     (pid,), = await q("SELECT id FROM coding_problems LIMIT 1")
+    # A non-coding family keeps the separate coding test (in 개발·데이터·AI the problem is a live-coding question).
     _, app_id, cand = await setup_app(client, make_client, coding_enabled=True, coding_problem_id=str(pid),
-                                      coding_time_limit_min=30)
+                                      coding_time_limit_min=30, job_family="MGMT")
     assert (await cand.post(url(app_id, "/interview/prepare"))).status_code == 200
     await drain()
     await mark_prechecked(app_id)

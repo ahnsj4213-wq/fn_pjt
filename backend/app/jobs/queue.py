@@ -17,6 +17,7 @@ JOB_KINDS: dict[str, tuple[str, int, int]] = {
     "evaluate_application": ("LLM_EVAL", 50, 2),   # EVL-06: first attempt + one automatic regeneration
     "purge_files": ("NONE", 90, 10),
     "send_email": ("NONE", 30, 5),            # app/notify/mail.py
+    "index_question_examples": ("CPU", 80, 5),  # RAG corpus: load + embed (app/questions/rag.py)
 }
 
 

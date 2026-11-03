@@ -41,10 +41,3 @@ export function RequireRole({ role, children }: { role: Role; children: ReactNod
   }
   return <>{children}</>;
 }
-
-/** "/" -> role home or login. */
-export function HomeRedirect() {
-  const session = useSession();
-  if (session.isPending) return <Loading />;
-  return <Navigate to={session.data ? roleHome(session.data.user.role) : '/login'} replace />;
-}

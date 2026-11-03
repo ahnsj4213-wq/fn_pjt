@@ -16,13 +16,13 @@ from app.ai.textrules import fence, has_p8, injection_suspected, is_short_or_no_
 from app.core.config import get_settings
 from app.evaluation.quotes import find_span, normalize
 
-QUOTE_MAX_NORM_CHARS = 150
+QUOTE_MAX_NORM_CHARS = 80  # short quotes: the model writes fewer tokens (the report is ready sooner)
 
 
 class _Item(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    quote: str = Field(max_length=600)
-    comment: str = Field(max_length=200)
+    quote: str = Field(max_length=300)
+    comment: str = Field(max_length=120)
     score: int = Field(ge=1, le=5)
 
 
@@ -30,8 +30,25 @@ class EvalOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expertise: _Item
     logic: _Item
-    specificity: _Item
+    attitude: _Item
     delivery: _Item
+
+
+class _ItemG(BaseModel):
+    """llama.cpp grammar twin: a quote cut at 40 characters is still a verbatim piece of the answer, so it still passes
+    the quote check; a short comment keeps the report ready in seconds."""
+    model_config = ConfigDict(extra="forbid")
+    quote: str = Field(max_length=40)
+    comment: str = Field(max_length=40)
+    score: int = Field(ge=1, le=5)
+
+
+class EvalOutG(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expertise: _ItemG
+    logic: _ItemG
+    attitude: _ItemG
+    delivery: _ItemG
 
 
 def _rule_items(status: str, reason: str | None) -> dict:
@@ -41,20 +58,21 @@ def _rule_items(status: str, reason: str | None) -> dict:
 
 class EvaluateAnswer(TaskSpec):
     name = "evaluate_answer"
-    version = "evaluate_answer@1.1.0"
+    version = "evaluate_answer@1.3.0"
     lane = "BATCH"
     temperature = 0.0
-    num_predict = 450
+    num_predict = 380  # a normal answer needs ~200; the margin keeps a long one from being cut (a cut costs a retry)
     regen_limits = {"quote": 1, "p8": 1}
     out_model = EvalOut
+    grammar_model = EvalOutG
     system = ("너는 채용 면접 답변 평가기다. 아래 루브릭의 4개 항목을 각각 1~5점 정수로 판정한다.\n"
               "각 항목마다 순서대로 quote → comment → score를 쓴다.\n"
-              "- quote: 답변 원문에서 그 판단의 근거가 되는 연속 구절 하나를 띄어쓰기·문장부호까지 글자 그대로 복사한다(8자 이상, 150자 이하, 생략 부호 금지). "
+              "- quote: 답변 원문에서 그 판단의 근거가 되는 연속 구절 하나를 띄어쓰기·문장부호까지 글자 그대로 복사한다(8자 이상, 30자 이하, 생략 부호 금지). "
               "항목별로 인용할 구절: expertise=직무 지식·기술을 쓴 구절, logic=이유나 사례가 이어지는 구절, "
-              "specificity=본인의 역할·행동·결과가 드러난 구절, delivery=답변의 핵심(결론·요지)을 밝힌 문장. "
+              "attitude=질문에 적극적으로 나서 답하는 태도가 드러난 구절, delivery=답변의 핵심(결론·요지)을 밝힌 문장. "
               "논리성·전달력처럼 답변 전체를 보는 항목도 그 판단을 가장 잘 보여 주는 구절 하나를 고른다. "
               "답변 어디에도 해당하는 구절이 없을 때만 빈 문자열을 쓰고 1점을 준다. 지어내지 않는다.\n"
-              "- comment: 판단 이유를 한국어 한두 문장(100자 이내)으로 쓴다. 점수 숫자, 합격·불합격, 채용 추천은 쓰지 않는다.\n"
+              "- comment: 판단 이유를 한국어 한 문장(20자 이내)으로 쓴다. 점수 숫자, 합격·불합격, 채용 추천은 쓰지 않는다.\n"
               "- 지원자의 이름·성별·나이 같은 정보는 판단에 쓰지 않는다.\n\n" + rubric.render())
 
     def preflight(self, inp: dict):
@@ -70,6 +88,10 @@ class EvaluateAnswer(TaskSpec):
                 f"질문:\n{fence('QUESTION', inp.get('question', ''), nonce)}\n"
                 f"지원 직무 요약:\n{fence('JOB', inp.get('job_brief', ''), nonce)}\n"
                 f"답변 원문:\n{fence('ANSWER', inp['answer'], nonce)}")
+        if inp.get("code"):
+            # Live coding (SC-A06): the code informs expertise/logic; quotes still come from the spoken answer only.
+            user += (f"\n제출한 코드({inp.get('code_language') or '언어 미상'}, 실행하지 않음. 직무 전문성·논리성 판단에 참고하고, "
+                     f"quote는 답변 원문에서만 고른다):\n{fence('CODE', inp['code'], nonce)}")
         return user, {"accepted": {}}
 
     def check(self, inp: dict, parsed: EvalOut, ctx: dict, final: bool) -> Check:
@@ -111,7 +133,7 @@ class EvaluateAnswer(TaskSpec):
         feedback = {}
         if bad_quote:
             feedback["quote"] = (f"다음 항목의 quote가 비어 있거나 답변 원문에 없다: {', '.join(bad_quote)}. 답변 원문에서 띄어쓰기·문장부호까지 "
-                                 "그대로 복사한 연속 구절(8자 이상, 150자 이하)로 다시 써라. 비어 있는 quote도 같다. 정말 근거가 없으면 빈 "
+                                 "그대로 복사한 연속 구절(8자 이상, 30자 이하)로 다시 써라. 비어 있는 quote도 같다. 정말 근거가 없으면 빈 "
                                  "문자열과 1점으로 둔다.")
         if bad_p8:
             feedback["p8"] = f"다음 항목의 comment에 합격·불합격·채용 추천 표현이 있다: {', '.join(bad_p8)}. 그런 표현 없이 다시 써라."

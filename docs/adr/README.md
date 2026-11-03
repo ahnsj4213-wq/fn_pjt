@@ -35,3 +35,4 @@
 | 0012 | 인증·세션·CSRF·회사 격리 | E | |
 | 0013 | Redis 작업 분배·실시간 알림(SSE). jobs 테이블은 영속 기록·outbox로 유지 | 사용자 결정 | ADR-0006 분배 부분 대체 |
 | 0014 | 컨테이너 구성도: frontend(Next.js)·api·mailer·worker(Celery)·scheduler·llm-rt·llm-eval·stt·tts·embed·postgres(pgvector)·redis·minio, 샌드박스는 worker가 실행 | 사용자 결정 | ADR-0001 서비스 분리, ADR-0010 앞단 대체 |
+| 0015 | 컨테이너 통합 12→8: frontend·api(+migrate)·worker(+beat)·postgres·redis·llm-gpu·ai(STT·TTS·평가 LLM·임베딩)·mailer | 사용자 결정 | ADR-0014 배치 부분 대체 |

@@ -18,7 +18,7 @@ async def test_job03_draft_publish_and_tabs(client):
     assert r.status_code == 201
     draft = r.json()
     assert draft["status"] == "DRAFT" and draft["evaluation_settings"]["weights"] == {
-        "expertise": 35, "logic": 25, "specificity": 25, "delivery": 15}  # 6.4 defaults
+        "expertise": 35, "logic": 25, "attitude": 20, "delivery": 20}  # defaults
     r = await client.post(f"/api/recruiter/postings/{draft['id']}/publish")
     assert r.status_code == 422 and r.json()["error"]["code"] == "INCOMPLETE_POSTING"
     r = await client.put(f"/api/recruiter/postings/{draft['id']}", json={**posting_body(), "row_version": draft["row_version"]})
@@ -44,34 +44,34 @@ async def test_coding_toggle_resets_weights_to_coding_defaults(client):
         "row_version": p["row_version"]})
     body = r.json()
     assert body["weights_reset"] is True
-    assert body["evaluation_settings"]["weights"] == {"expertise": 30, "logic": 20, "specificity": 20,
-                                                      "delivery": 10, "coding": 20}
+    assert body["evaluation_settings"]["weights"] == {"expertise": 30, "logic": 20, "attitude": 15,
+                                                      "delivery": 15, "coding": 20}
 
 
 async def test_ac21_weights_sum_and_coding_item_rules(client):
     await recruiter(client)
     p = await create_posting(client)
     url = f"/api/recruiter/postings/{p['id']}/evaluation-settings"
-    for weights, code in (({"expertise": 35, "logic": 25, "specificity": 25, "delivery": 14}, "WEIGHT_SUM_NOT_100"),
-                          ({"expertise": 35, "logic": 25, "specificity": 25, "delivery": 16}, "WEIGHT_SUM_NOT_100"),
-                          ({"expertise": 30, "logic": 20, "specificity": 20, "delivery": 10, "coding": 20},
+    for weights, code in (({"expertise": 35, "logic": 25, "attitude": 25, "delivery": 14}, "WEIGHT_SUM_NOT_100"),
+                          ({"expertise": 35, "logic": 25, "attitude": 25, "delivery": 16}, "WEIGHT_SUM_NOT_100"),
+                          ({"expertise": 30, "logic": 20, "attitude": 20, "delivery": 10, "coding": 20},
                            "WEIGHTS_CODING_MISMATCH")):
         r = await client.put(url, json={"weights": weights})
         assert r.status_code == 422 and r.json()["error"]["code"] == code
-    r = await client.put(url, json={"weights": {"expertise": 40, "logic": 20, "specificity": 20, "delivery": 20},
+    r = await client.put(url, json={"weights": {"expertise": 40, "logic": 20, "attitude": 20, "delivery": 20},
                                     "custom_question": "우리 서비스의 결제 장애를 줄이려면 무엇부터 하겠습니까?"})
     assert r.status_code == 200 and r.json()["version"] == 2
     # DB CHECK is the second line of defence.
     async with session_scope() as db:
         with pytest.raises(DBAPIError):
             await db.execute(text(
-                "INSERT INTO posting_eval_settings(posting_id, company_id, version, w_expertise, w_logic, w_specificity, "
-                "w_delivery, rubric_version, created_by) SELECT id, company_id, 9, 40, 20, 20, 19, 'rubric-v1', created_by "
+                "INSERT INTO posting_eval_settings(posting_id, company_id, version, w_expertise, w_logic, w_attitude, "
+                "w_delivery, rubric_version, created_by) SELECT id, company_id, 9, 40, 20, 20, 19, 'rubric-v2', created_by "
                 "FROM job_postings WHERE id = :p"), {"p": p["id"]})
     # JOB-06: once the first interview starts the settings lock (simulated here; set by the start transaction).
     async with session_scope() as db:
         await db.execute(text("UPDATE job_postings SET settings_locked_at = now() WHERE id = :p"), {"p": p["id"]})
-    r = await client.put(url, json={"weights": {"expertise": 35, "logic": 25, "specificity": 25, "delivery": 15}})
+    r = await client.put(url, json={"weights": {"expertise": 35, "logic": 25, "attitude": 25, "delivery": 15}})
     assert r.status_code == 409 and r.json()["error"]["code"] == "SETTINGS_LOCKED"
     assert (await client.post(url + "/reset")).status_code == 409
     current = (await client.get(f"/api/recruiter/postings/{p['id']}")).json()
@@ -114,7 +114,7 @@ async def test_ac04_duplicate_application_rejected_even_concurrently(client, mak
     cand = make_client()
     await candidate(cand)
     c = await consent(cand, p["id"])
-    body = {"consent_id": c["consent_id"], "resume": RESUME}
+    body = {"consent_id": c["consent_id"], "resume": RESUME, "share_result": True}  # shared: counted for the company
     results = await asyncio.gather(*[cand.post(f"/api/candidate/postings/{p['id']}/applications", json=body)
                                      for _ in range(8)])
     codes = sorted(r.status_code for r in results)
@@ -137,11 +137,11 @@ async def test_ac05_required_consent_blocks_application_and_is_recorded(client, 
                         json={"consent_id": declined["consent_id"], "resume": RESUME})
     assert r.status_code == 409 and r.json()["error"]["code"] == "CONSENT_REQUIRED"
     ok = await consent(cand, p["id"])
-    assert ok["version"] == "consent-v0-draft" and ok["agreed_at"]
+    assert ok["version"] == "consent-v1-draft" and ok["agreed_at"]
     async with session_scope() as db:
         rows = (await db.execute(text("SELECT document_version, answers, agreed_at FROM consent_records "
                                       "ORDER BY agreed_at"))).all()
-        assert len(rows) == 2 and rows[0][1]["purpose"] is False and rows[1][0] == "consent-v0-draft"
+        assert len(rows) == 2 and rows[0][1]["media"] is False and rows[1][0] == "consent-v1-draft"
         with pytest.raises(DBAPIError):  # consent records are append-only
             await db.execute(text("UPDATE consent_records SET all_required_agreed = true"))
 
@@ -164,29 +164,31 @@ async def test_res06_minimum_resume_and_snapshot_is_frozen(client, make_client):
     assert (await cand.get("/api/candidate/resume")).json()["resume"] is None
 
 
-async def test_job04_delete_only_without_applicants(client, make_client):
+async def test_job04_delete_keeps_the_applicants_results(client, make_client):
+    """Screen spec SC-R04: a posting with applicants can be deleted; their results stay in the applicant list."""
     await recruiter(client)
     empty = await create_posting(client)
     assert (await client.delete(f"/api/recruiter/postings/{empty['id']}")).status_code == 204
     used = await create_posting(client)
     cand = make_client()
     await candidate(cand)
-    assert (await apply(cand, used["id"])).status_code == 201
-    r = await client.delete(f"/api/recruiter/postings/{used['id']}")
-    assert r.status_code == 409 and r.json()["error"]["code"] == "HAS_APPLICATIONS"
-    r = await client.post(f"/api/recruiter/postings/{used['id']}/close")
-    assert r.status_code == 200 and r.json()["status"] == "CLOSED"
-    # 7.4: closed postings take no new applications; the READY attempt expires (no answers -> no evaluation)
+    r = await apply(cand, used["id"])
+    assert r.status_code == 201
+    app_id = r.json()["application_id"]
+    assert (await client.delete(f"/api/recruiter/postings/{used['id']}")).status_code == 204
+    assert (await client.get(f"/api/recruiter/postings/{used['id']}")).status_code == 404
+    # the unfinished attempt ended like on a normal close (7.4); the application is still listed for the company
     apps = (await cand.get("/api/candidate/applications")).json()
     assert apps[0]["attempt_status"] == "EXPIRED" and apps[0]["can_start"] is False
+    assert app_id in [x["id"] for x in (await client.get("/api/recruiter/applications")).json()["items"]]
 
 
 async def test_ac06_upload_rules(make_client):
     cand = make_client()
     await candidate(cand)
     url = "/api/candidate/resume-files"
-    r = await cand.post(url, files={"file": ("cv.png", b"\x89PNG\r\n\x1a\n" + b"0" * 100, "image/png")})
-    assert r.status_code == 415 and r.json()["error"]["code"] == "NOT_PDF"
+    r = await cand.post(url, files={"file": ("cv.gif", b"GIF89a" + b"0" * 100, "image/gif")})
+    assert r.status_code == 415 and r.json()["error"]["code"] == "UNSUPPORTED_FILE"
     r = await cand.post(url, files={"file": ("fake.pdf", b"\x89PNG\r\n\x1a\n", "application/pdf")})
     assert r.status_code == 415
     big = b"%PDF-1.4\n" + b"0" * (10 * 1024 * 1024)
@@ -195,7 +197,8 @@ async def test_ac06_upload_rules(make_client):
     r = await cand.post(url, files={"file": ("broken.pdf", b"%PDF-1.4\n%garbage without objects", "application/pdf")})
     assert r.status_code == 422 and r.json()["error"]["code"] == "PDF_UNREADABLE"
     r = await cand.post(url, files={"file": ("scan.pdf", image_only_pdf(), "application/pdf")})
-    assert r.status_code == 201 and r.json()["text_extractable"] is False and r.json()["manual_input_required"] is True
+    # RES-04: a scanned PDF goes to OCR in the extraction job (tests/test_resume_ocr.py)
+    assert r.status_code == 201 and r.json()["text_extractable"] is False and r.json()["extraction_status"] == "PENDING"
     good = text_pdf(["김지원 이력서", "경력: 커머스랩 백엔드 개발자 2020-2024", "주문 처리 API 응답 지연 개선",
                      "기술: Python, PostgreSQL"])
     r = await cand.post(url, files={"file": ("../../etc/cv.pdf", good, "application/pdf")})
@@ -205,4 +208,40 @@ async def test_ac06_upload_rules(make_client):
         key, txt = (await db.execute(text("SELECT storage_key, extracted_text FROM resume_files "
                                           "WHERE text_extractable"))).one()
         jobs = (await db.execute(text("SELECT kind FROM jobs"))).scalars().all()
-    assert ".." not in key and "/" not in key and "커머스랩" in txt and jobs == ["extract_resume"]
+    assert ".." not in key and "/" not in key and "커머스랩" in txt and jobs == ["extract_resume", "extract_resume"]
+
+
+async def test_public_postings_need_no_login_and_count_views(client, make_client):
+    """SC-A02/SC-A03: anyone can browse; categories carry their posting counts; each detail view counts once."""
+    await recruiter(client)
+    p = await create_posting(client, experience_level="신입", employment_type="정규직", location="서울 강남")
+    await create_posting(client, job_family="DESIGN", title="UI 디자이너")
+    anon = make_client()
+    listed = (await anon.get("/api/postings")).json()
+    assert {x["title"] for x in listed} == {"백엔드 개발자", "UI 디자이너"}
+    assert (await anon.get("/api/postings", params={"job_family": "DESIGN"})).json()[0]["title"] == "UI 디자이너"
+    fams = {f["code"]: f["count"] for f in (await anon.get("/api/job-families")).json()}
+    assert list(fams) == ["DEV", "DATA_AI", "DESIGN", "MARKETING", "MGMT"] and fams["DEV"] == 1 and fams["DESIGN"] == 1
+    d = (await anon.get(f"/api/postings/{p['id']}")).json()
+    assert (d["experience_level"], d["employment_type"], d["location"]) == ("신입", "정규직", "서울 강남")
+    assert [a["label"] for a in d["question_areas"]] == ["인성", "지원 동기", "직무 기술", "프로젝트 경험", "협업"]
+    assert d["has_applied"] is False
+    await anon.get(f"/api/postings/{p['id']}")
+    await client.get(f"/api/postings/{p['id']}")  # the company's own recruiter does not count
+    mine = {x["id"]: x for x in (await client.get("/api/recruiter/postings")).json()}
+    assert mine[p["id"]]["view_count"] == 2
+
+
+async def test_question_areas_are_saved_with_the_settings_and_reset(client):
+    await recruiter(client)
+    p = await create_posting(client)
+    url = f"/api/recruiter/postings/{p['id']}/evaluation-settings"
+    w = {"expertise": 30, "logic": 30, "attitude": 20, "delivery": 20}
+    assert len((await client.get(url)).json()["question_areas"]) == 5
+    assert (await client.put(url, json={"weights": w, "question_areas": []})).status_code == 422  # at least one
+    r = await client.put(url, json={"weights": w, "question_areas": ["JOB_SKILL", "PROJECT", "JOB_SKILL"]})
+    assert r.status_code == 200 and r.json()["question_areas"] == ["JOB_SKILL", "PROJECT"]
+    r = await client.put(url, json={"weights": w})  # omitted: unchanged
+    assert r.json()["question_areas"] == ["JOB_SKILL", "PROJECT"]
+    r = await client.post(url + "/reset")
+    assert len(r.json()["question_areas"]) == 5

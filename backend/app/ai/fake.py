@@ -113,7 +113,7 @@ class FakeAIClient:
     def _reply_evaluate_answer(inp: dict) -> dict:
         quote = inp["answer"].strip()[:40]
         item = {"quote": quote, "comment": "답변에서 판단 근거가 되는 내용이 확인된다.", "score": 3}
-        return {k: dict(item) for k in ("expertise", "logic", "specificity", "delivery")}
+        return {k: dict(item) for k in ("expertise", "logic", "attitude", "delivery")}
 
     @staticmethod
     def _reply_report_summary(inp: dict) -> dict:

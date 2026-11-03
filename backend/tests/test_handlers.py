@@ -14,6 +14,7 @@ from sqlalchemy import select, text
 
 from app.ai.client import set_ai_client
 from app.ai.fake import FakeAIClient
+from app.core.constants import INTRO_QUESTION
 from app.core.db import get_engine, session_scope
 from app.jobs import handlers, worker  # noqa: F401  registers the handlers
 from app.jobs.queue import enqueue
@@ -99,26 +100,28 @@ async def prepare_and_compose(cand, app_id: str) -> list[InterviewQuestion]:
 async def test_compose_fills_fixed_slots_and_pregenerates_tts(client, make_client, fake_ai):
     custom = "우리 팀의 결제 장애 대응 절차를 개선한다면 무엇부터 하시겠습니까?"
     _, app_id, cand = await setup_app(client, make_client, settings={
-        "weights": {"expertise": 35, "logic": 25, "specificity": 25, "delivery": 15}, "custom_question": custom})
+        "weights": {"expertise": 35, "logic": 25, "attitude": 25, "delivery": 15}, "custom_question": custom})
     qs = await prepare_and_compose(cand, app_id)
-    assert [x.seq for x in qs] == list(range(1, 11)) and all(x.role == "MAIN" for x in qs)
-    assert [x.slot_type for x in qs] == ["PERSONALITY"] * 2 + ["RESUME"] * 2 + ["COMPANY"] * 2 + ["JOB"] * 4
-    assert qs[6].source == "CUSTOM" and qs[6].text == custom  # OQ-36: seq 7
-    # Resume questions are grounded in the snapshot, including the `career` section (mapped to T3 `experience`).
-    for rq in qs[2:4]:
+    # Default plan (SC-A06): 자기소개, 지원 동기, 직무, 경험, 협업; the old custom question takes the job slot.
+    assert [x.seq for x in qs] == list(range(1, 6)) and all(x.role == "MAIN" for x in qs)
+    assert [x.slot_type for x in qs] == ["PERSONALITY", "MOTIVATION", "JOB_SKILL", "PROJECT", "COLLABORATION"]
+    assert qs[0].source == "CUSTOM" and qs[0].text == INTRO_QUESTION
+    assert qs[2].source == "CUSTOM" and qs[2].text == custom
+    # The experience question is grounded in the snapshot, including the `career` section (mapped to T3 `experience`).
+    for rq in qs[3:4]:
         assert rq.source == "AI" and rq.grounding["evidence"]
         snapshot = json.dumps(RESUME, ensure_ascii=False)
         assert all(e["text"] in snapshot for e in rq.grounding["evidence"])
-    fields = {e["field"].split("[")[0] for rq in qs[2:4] for e in rq.grounding["evidence"]}
+    fields = {e["field"].split("[")[0] for rq in qs[3:4] for e in rq.grounding["evidence"]}
     assert fields <= {"education", "experience", "projects", "certifications", "skills"}
-    assert len({x.text for x in qs}) == 10
+    assert len({x.text for x in qs}) == 5
     status = await q("SELECT status FROM question_sets WHERE application_id=:a", a=app_id)
     assert status == [("READY",)]
-    # tts_pregen ran (CPU resource) and cached all 10 main questions.
+    # tts_pregen ran (CPU resource) and cached every main question.
     async with session_scope() as db:
         assets = (await db.execute(select(QuestionTtsAsset).where(
             QuestionTtsAsset.question_id.in_([x.id for x in qs])))).scalars().all()
-    assert len(assets) == 10 and all(a.voice_model == "fake-tts" and a.duration_ms > 0 for a in assets)
+    assert len(assets) == 5 and all(a.voice_model == "fake-tts" and a.duration_ms > 0 for a in assets)
     assert await q("SELECT state FROM jobs WHERE kind IN ('compose_questions','tts_pregen') AND state <> 'SUCCEEDED'") == []
 
 
@@ -127,11 +130,21 @@ async def test_compose_resume_fallback_and_company_scoped_generation(client, mak
     company only (C2) and never offered to another company's applicant."""
     fake_ai.responses["resume_question"] = lambda inp, msgs: {"questions": []}
     canary = "카나리아결제엔진"
-    company_a, app_a, cand_a = await setup_app(client, make_client, job_family="QA",
+    async with session_scope() as db:  # every category now has seed questions: take DESIGN's away for this test
+        await db.execute(text("UPDATE question_bank SET is_active = false WHERE source = 'SEED' AND job_family = 'DESIGN'"))
+    try:
+        await _compose_scoped(client, make_client, canary)
+    finally:
+        async with session_scope() as db:
+            await db.execute(text("UPDATE question_bank SET is_active = true WHERE source = 'SEED' AND job_family = 'DESIGN'"))
+
+
+async def _compose_scoped(client, make_client, canary: str) -> None:
+    # One job slot in the default plan: T2 grounds it in the first line of the brief (the title).
+    company_a, app_a, cand_a = await setup_app(client, make_client, job_family="DESIGN", title=f"{canary} QA 엔지니어",
                                                duties=f"{canary} 회귀 테스트 자동화. 릴리스 품질 지표 관리")
     qs = await prepare_and_compose(cand_a, app_a)
-    assert [x.source for x in qs[2:4]] == ["BANK_FALLBACK", "BANK_FALLBACK"]
-    assert all(x.slot_type == "RESUME" for x in qs[2:4])
+    assert qs[3].source == "BANK_FALLBACK" and qs[3].slot_type == "PROJECT"
     ai_qs = [x for x in qs if x.source == "AI"]
     assert ai_qs and all(x.grounding["basis"]["text"] for x in ai_qs) and any(canary in x.text for x in ai_qs)
     async with session_scope() as db:
@@ -139,7 +152,7 @@ async def test_compose_resume_fallback_and_company_scoped_generation(client, mak
     assert stored and {str(s.company_id) for s in stored} == {company_a}
 
     other = make_client()
-    _, app_b, cand_b = await setup_app(other, make_client, job_family="QA", duties="모바일 앱 회귀 테스트")
+    _, app_b, cand_b = await setup_app(other, make_client, job_family="DESIGN", duties="모바일 앱 회귀 테스트")
     qs_b = await prepare_and_compose(cand_b, app_b)
     assert not any(canary in x.text for x in qs_b)
 
@@ -153,7 +166,7 @@ async def test_compose_is_idempotent_and_skips_finished_attempts(client, make_cl
     await drain()
     async with session_scope() as db:
         n = (await db.execute(text("SELECT count(*) FROM interview_questions WHERE application_id=:a"), {"a": app_id})).scalar()
-    assert n == 10 and len(first) == 10
+    assert n == 5 and len(first) == 5
 
 
 # ── T1 extraction ──────────────────────────────────────────────────────────────
@@ -199,7 +212,7 @@ ANSWERS = [
 ]
 
 
-async def answer_all(app_id: str, qs: list[InterviewQuestion], *, no_answer_seq: int = 10) -> list[str]:
+async def answer_all(app_id: str, qs: list[InterviewQuestion], *, no_answer_seq: int = 5) -> list[str]:
     """Confirmed answers for every main question (seq `no_answer_seq` is a silent answer)."""
     ids = []
     async with session_scope() as db:
@@ -233,7 +246,7 @@ async def test_evaluation_reuses_pre_evaluations_and_writes_report(client, make_
         for aid in answer_ids:
             await enqueue(db, "pre_evaluate", {"answer_id": aid}, dedupe_key=f"pre:{aid}")
     await drain()
-    assert len(await q("SELECT 1 FROM answer_pre_evaluations")) == 10
+    assert len(await q("SELECT 1 FROM answer_pre_evaluations")) == 5
     calls_before = sum(c.task == "evaluate_answer" for c in fake_ai.calls)
 
     # Model calls run with no connection checked out: on the CPU they take minutes, and a transaction left open
@@ -257,9 +270,9 @@ async def test_evaluation_reuses_pre_evaluations_and_writes_report(client, make_
     assert (run_status, trig, prompt) == ("SUCCEEDED", "SUBMIT", "sha256:fake")
 
     rep = (await client.get(f"/api/recruiter/applications/{app_id}/report")).json()
-    # Fake judge: every answered unit scores 3 -> 9 answers x 3 + 1 silent answer x 1 -> (28 / 10) x 20 = 56.00.
-    assert [c["score"] for c in rep["criteria"]] == ["56.00"] * 4 and rep["total_score"] == "56.00"
-    assert rep["no_answer_count"] == 1 and rep["insufficient_count"] == 0 and rep["answered_main_count"] == 9
+    # Fake judge: every answered unit scores 3 -> 4 answers x 3 + 1 silent answer x 1 -> (13 / 5) x 20 = 52.00.
+    assert [c["score"] for c in rep["criteria"]] == ["52.00"] * 4 and rep["total_score"] == "52.00"
+    assert rep["no_answer_count"] == 1 and rep["insufficient_count"] == 0 and rep["answered_main_count"] == 4
     assert rep["strengths"] and rep["improvements"] and rep["summary"]
     answered = [a for x in rep["questions"] for a in x["answers"] if not a["no_answer"]]
     for a in answered:  # AC-16: every OK score has a quote that is a span of the stored eval_text
@@ -268,7 +281,7 @@ async def test_evaluation_reuses_pre_evaluations_and_writes_report(client, make_
             assert item["evidence"] == "OK" and a["display_text"][qt["start"]:qt["end"]] == qt["text"]
     fb = await q("SELECT score_expertise, coding_all_passed, strengths FROM candidate_feedback WHERE application_id=:a",
                  a=app_id)
-    assert str(fb[0][0]) == "56.00" and fb[0][1] is None and fb[0][2]
+    assert str(fb[0][0]) == "52.00" and fb[0][1] is None and fb[0][2]
 
 
 async def test_evaluation_failures_retry_once_then_on_hold(client, make_client, fake_ai):
@@ -366,8 +379,8 @@ async def test_grading_defers_on_sandbox_error_and_evaluation_waits(client, make
     await q("UPDATE jobs SET run_after=now() WHERE state='QUEUED' RETURNING id")
     await drain()
     rep = await q("SELECT score_coding, total_score FROM recruiter_reports WHERE application_id=:a", a=app_id)
-    # weights 30/20/20/10 + coding 20: 56 x 0.8 + 100 x 0.2 = 64.80
-    assert [(str(a), str(b)) for a, b in rep] == [("100.00", "64.80")]
+    # weights 30/20/20/10 + coding 20: 52 x 0.8 + 100 x 0.2 = 61.60
+    assert [(str(a), str(b)) for a, b in rep] == [("100.00", "61.60")]
     assert await q("SELECT coding_all_passed FROM candidate_feedback WHERE application_id=:a", a=app_id) == [(True,)]
     # T8 never sees hidden tests (COD-06, SC-79): the hidden inputs are absent from every code_review prompt.
     hidden = [i for (i,) in await q("SELECT input FROM coding_testcases WHERE visibility='HIDDEN'")]

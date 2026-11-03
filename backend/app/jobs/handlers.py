@@ -16,7 +16,7 @@ from app.ai.client import get_ai_client
 from app.coding import grading
 from app.coding.runner import RunnerUnavailable
 from app.core.config import get_settings
-from app.core.db import session_scope
+from app.core.db import session_scope, sessionmaker
 from app.core.logging import log_event
 from app.core.storage import get_storage
 from app.core.timeutil import utcnow
@@ -44,6 +44,8 @@ from app.models import (
     ResumeFile,
 )
 from app.questions import compose as composer
+from app.questions import rag
+from app.resumes import ocr
 from app.resumes.schemas import from_ai_resume
 
 log = logging.getLogger("app.worker")
@@ -66,12 +68,24 @@ async def compose_questions(ctx: JobCtx) -> None:
             live.status = "SUPERSEDED"  # weights/custom question changed before the interview (start() re-enqueues)
             await db.flush()
         settings = await db.get(PostingEvalSettings, settings_id)
-        picked = await composer.compose(db, app, settings, get_ai_client(), get_settings().embed_model)
-        qset = await composer.write_set(db, app, settings_id, picked)
+        plan, picked = await composer.compose(db, app, settings, get_ai_client(), get_settings().embed_model)
+        qset = await composer.write_set(db, app, settings, plan, picked)
         await enqueue(db, "tts_pregen", {"question_set_id": str(qset.id)}, application_id=app_id,
                       dedupe_key=f"tts:{qset.id}")
         await fenced_complete(db, ctx)
     log_event(log, "questions_composed", application_id=str(app_id), count=len(picked))
+
+
+# ── index_question_examples (RAG corpus, ai-architecture 6.1) ──────────────────
+@handler("index_question_examples")
+async def index_question_examples(ctx: JobCtx) -> None:
+    """One job embeds the whole backlog (first run ~6k rows, ~13 min on CPU); batches commit as they go, so a
+    restart resumes. Enqueued by the question_examples_sync periodic task."""
+    async with sessionmaker()() as db:  # commits per batch itself
+        counts = await rag.sync_examples(db, get_ai_client(), get_settings().embed_model)
+    async with session_scope() as db:
+        await fenced_complete(db, ctx)
+    log_event(log, "question_examples_indexed", **counts)
 
 
 # ── tts_pregen (T20: not a start condition) ────────────────────────────────────
@@ -108,20 +122,64 @@ async def extract_resume(ctx: JobCtx) -> None:
     file_id = UUID(ctx.payload["file_id"])
     async with session_scope() as db:
         rf = await db.get(ResumeFile, file_id)
-        if rf is None or rf.extraction_status != "PENDING" or not rf.extracted_text:
+        if rf is None or rf.extraction_status != "PENDING":
             await fenced_complete(db, ctx)
             return
-        source = rf.extracted_text
-    r = await get_ai_client().llm("resume_extract", {"source_text": source}, lane="INTERACTIVE")
-    async with session_scope() as db:
-        await fenced_complete(db, ctx)
+        source, ocr_pages, key = rf.extracted_text or "", rf.ocr_pages or [], rf.storage_key
+    cfg = get_settings()
+    lines: list[ocr.Line] = []
+    if ocr_pages:  # RES-04: scanned pages / photo; the text pages keep their pypdf text
+        lines, failure = await _ocr_resume(key, ocr_pages)
+        ocr_text, conf = ocr.summarize(lines)
+        if failure or not ocr_text.strip() or conf < cfg.ocr_fail_conf:
+            async with session_scope() as db:  # could not read enough: the candidate types the resume (RES-04)
+                await fenced_complete(db, ctx)
+                await db.execute(update(ResumeFile).where(ResumeFile.id == file_id,
+                                                          ResumeFile.extraction_status == "PENDING")
+                                 .values(extraction_status="NO_TEXT", extraction_method="OCR",
+                                         ocr_confidence=round(conf, 2) if lines else None))
+            log_event(log, "resume_extracted", status="OCR_FAILED", reason=failure or "LOW_CONFIDENCE")
+            return
+        source = "\n".join(x for x in (source, ocr_text) if x)
+    if len(source.strip()) < ocr.MIN_CHARS_PER_PAGE:
+        r_status, values = "NO_TEXT", {"extraction_status": "NO_TEXT"}
+    else:
+        r = await get_ai_client().llm("resume_extract", {"source_text": source}, lane="INTERACTIVE")
+        r_status = r.status
         if r.status == "OK":
-            values = {"extraction_status": "DONE", "extracted_fields": from_ai_resume(r.output)}
+            fields = from_ai_resume(r.output)
+            values = {"extraction_status": "DONE", "extracted_fields": fields}
+            if lines:
+                values["low_conf_fields"] = ocr.low_conf_fields(fields, lines, cfg.ocr_low_conf)
         else:  # the candidate types the resume instead (RES-05); no automatic retry of a model failure
             values = {"extraction_status": "FAILED"}
+    if lines:
+        values.update(extraction_method="OCR", ocr_confidence=round(ocr.summarize(lines)[1], 2))
+    else:
+        values["extraction_method"] = "TEXT"
+    async with session_scope() as db:
+        await fenced_complete(db, ctx)
         await db.execute(update(ResumeFile).where(ResumeFile.id == file_id, ResumeFile.extraction_status == "PENDING")
-                         .values(**values))
-    log_event(log, "resume_extracted", status=r.status, count=r.flags.get("dropped_values", 0))
+                         .values(extracted_text=source or None, **values))
+    log_event(log, "resume_extracted", status=r_status, method=values["extraction_method"])
+
+
+async def _ocr_resume(key: str, pages: list[int]) -> tuple[list, str | None]:
+    """OCR in its own interpreter from a private temporary file, deleted right after (no page images are kept)."""
+    import tempfile
+    from pathlib import Path
+
+    data = await get_storage().get(f"resumes/{key}")
+    if data is None:
+        return [], "FILE_MISSING"
+    suffix = Path(key).suffix
+    with tempfile.TemporaryDirectory(prefix="aihire-ocr-") as tmp:
+        path = Path(tmp) / f"upload{suffix}"
+        path.write_bytes(data)
+        try:
+            return await ocr.read(str(path), "pdf" if suffix == ".pdf" else "image", pages), None
+        except ocr.OcrFailed as e:
+            return [], str(e).split(":")[0]
 
 
 # ── pre_evaluate (EVL-05, T15) ─────────────────────────────────────────────────
@@ -204,6 +262,7 @@ async def evaluate_application(ctx: JobCtx) -> None:
             inputs = await pipeline.load_report_inputs(db, app, manifest)
     except pipeline.CodingNotGraded as e:
         raise InfraUnavailable("coding submission not graded yet") from e
+    await pipeline.wait_for_pre_evaluations(inputs)  # the last answer's pre-evaluation is usually still running
     # No transaction across the model calls: they outlast the 30 s idle-in-transaction limit on the CPU.
     rep = await pipeline.build_report(ai, app, inputs)
     async with session_scope() as db:
@@ -227,20 +286,22 @@ async def _write_report(db: AsyncSession, app: Application, run_id: UUID, rep: p
     leaves = await db.scalar(select(ProctorEvent.id).where(ProctorEvent.application_id == app.id).limit(1))
     db.add(RecruiterReport(
         application_id=app.id, company_id=app.company_id, run_id=run_id, score_expertise=sc.criteria["expertise"],
-        score_logic=sc.criteria["logic"], score_specificity=sc.criteria["specificity"],
+        score_logic=sc.criteria["logic"], score_attitude=sc.criteria["attitude"],
         score_delivery=sc.criteria["delivery"], score_coding=sc.coding, total_score=sc.total,
         insufficient_count=sc.insufficient_count, no_answer_count=sc.no_answer_count,
         insufficient_by_criterion=sc.insufficient_by_criterion, answered_main_count=rep.answered_main,
         question_scores=sc.question_scores, weights=settings.weights(), summary=rep.summary["overall"],
         strengths=[x["text"] for x in rep.summary["strengths"]],
         improvements=[x["text"] for x in rep.summary["improvements"]],
-        code_review=rep.code_review, proctor_summary={"has_events": leaves is not None}))
+        code_review=rep.code_review, proctor_summary={"has_events": leaves is not None},
+        point_refs={"strengths": [x["question_refs"] for x in rep.summary["strengths"]],
+                    "improvements": [x["question_refs"] for x in rep.summary["improvements"]]}))
     coding_all = None
     if rep.coding is not None:
         coding_all = bool(rep.coding.get("reached")) and rep.coding["passed"] == rep.coding["total"]
     db.add(CandidateFeedback(
         application_id=app.id, company_id=app.company_id, run_id=run_id, score_expertise=sc.criteria["expertise"],
-        score_logic=sc.criteria["logic"], score_specificity=sc.criteria["specificity"],
+        score_logic=sc.criteria["logic"], score_attitude=sc.criteria["attitude"],
         score_delivery=sc.criteria["delivery"], strengths=rep.feedback["strengths"],
         improvements=rep.feedback["improvements"], coding_all_passed=coding_all))
     await db.flush()

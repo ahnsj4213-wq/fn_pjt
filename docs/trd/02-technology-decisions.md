@@ -31,6 +31,8 @@
 | 인용 검증 | NFKC + 공백 전부 제거 + 따옴표 통일 + 앞뒤 문장부호만 무시, 원문 범위 저장 | 원문 그대로, 공백 축약(E), 문장부호 전부 제거(C qn-1) | 실제 인용 47/48 통과, 위조 0/7 통과 [실측 `results-quote-rules.txt`]. 문장부호 전부 제거는 위조 7/7 통과 | ADR-0008 |
 | 샌드박스 | runner + 실행마다 일회용 Docker 컨테이너(강화 옵션), 운영은 runsc 권장 | nsjail, Firecracker, 하위 프로세스 + rlimit | 강화 옵션 컨테이너가 12/12 차단, 기동 약 0.45초 [실측 `results-sandbox-escape.txt`, Docker Desktop·runc]. 개발·운영 방식이 같다 | 운영 Linux·runsc 미검증(ADR-0007) |
 | PDF 파서 | pypdf 6.21.2 (BSD-3) | PyMuPDF(AGPL), pdfminer.six | 순수 Python이라 메모리 손상 부류를 피한다. 라이선스가 허용형이다. 자식 프로세스 상한 안에서 실행 | 레이아웃 복잡한 PDF의 추출 품질 |
+| 이력서 OCR | Tesseract 5(kor+eng, worker 이미지의 apt 패키지) + pytesseract, 렌더링은 pypdfium2 300dpi | PaddleOCR, EasyOCR(GPU·대용량 모델), OCR 없음 | 팀원 구현(pdfplumber+Tesseract)을 반영. CPU만 쓰므로 LLM과 VRAM을 나누지 않는다. 글자 50자 미만 페이지·사진만 OCR, 평균 신뢰도 0.5 미만이면 직접 입력. 렌더 1장 약 10초 [실측: 2도 기울인 합성 스캔 PNG·PDF 2건, 신뢰도 0.84/0.90] | 실제 휴대폰 사진·저해상도 스캔 미검증, 일부 오인식(예: FastAP) |
+| 질문 생성 RAG | `question_examples` 테이블(pgvector HNSW, 코사인) + 기존 임베딩 서버. T2·T3 호출마다 같은 종류 예시 3개를 프롬프트에 넣는다 | 질문은행 행에 섞기, 벡터 DB 별도 도입(Qdrant 등), RAG 없음 | 팀 설계(ai-architecture v1.5 6.1)를 반영. 참고 질문은 영어 원문 번역·외국 기업명이 섞여 있어 **그대로 출제하지 않고 예시로만** 쓰므로 출제용 `question_bank`와 테이블을 나눴다. 새 인프라 없이 PostgreSQL 안에서 검색한다. 예시를 베낀 질문(어휘 80% 겹침 또는 코사인 0.9 이상)은 버린다. 첫 색인 5,859건 [실측: 아래 결과] | 예시 데이터 출처·이용 허락 확인 필요(OQ-40). 질문 품질 향상 효과는 정성 확인만 |
 | 비밀번호 해시 | Argon2id(argon2-cffi 25.1.0) | bcrypt, scrypt | SEC-05, E SC-01. 표준 저메모리 프로필 | 이 장비 검증 시간 실측 필요 |
 | 리버스 프록시 | Caddy 2 | Nginx, Traefik | `tls internal`로 사내 CA·인증서를 오프라인에서 자동 발급. 설정이 짧다 | 사내 루트 CA를 응시 PC에 배포 |
 
@@ -74,6 +76,10 @@
 | pydantic / pydantic-settings | 2.14.1 / 2.16.1 | MIT | |
 | argon2-cffi | 25.1.0 | MIT | |
 | pypdf | 6.21.2 | BSD-3 | |
+| pypdfium2 | 5.14.0 | BSD-3 / Apache-2.0 | 스캔 PDF 페이지 렌더링(OCR) |
+| pillow | 13.0.0 | MIT-CMU | 사진 이력서 열기·EXIF 회전·기울기 보정 |
+| pytesseract | 0.3.13 | Apache-2.0 | Tesseract 호출. 엔진·언어 데이터(tesseract-ocr-kor/eng, Apache-2.0)는 worker 이미지 apt |
+| openpyxl (dev) | 3.1.5 | MIT | 팀 질문 엑셀 → `app/questions/data/question_examples.jsonl` 변환 스크립트 전용. 실행 이미지에는 없음 |
 | python-multipart | 0.0.32 | Apache-2.0 | |
 | httpx | 0.28.1 | BSD-3 | 내부 서비스 호출 |
 | aiortc | 1.15.0 | BSD-3 | |
@@ -95,6 +101,7 @@
 | @tanstack/react-query | 5.105.0 | MIT |
 | react-hook-form / zod / @hookform/resolvers | 7.91.0 / 4.6.7 / 6.0.0 | MIT |
 | codemirror / @codemirror/lang-python | 6.0.2 / 6.2.1 | MIT |
+| @mediapipe/tasks-vision + blaze_face_short_range.tflite | 0.10.35 / float16 v1 | Apache-2.0 | SC-A04 얼굴 안내·SC-A06 시선 이탈 감지(브라우저 안에서만 실행). wasm은 빌드 때 `scripts/copy-vision.mjs`가 `public/vision`에 복사, 모델 파일은 저장소에 포함. **1.x는 번들에 Google 사용 통계 전송 코드(`odml.pa.googleapis.com/v1/log`)가 있어 쓰지 않는다** (2026-10-30 확인, 0.10.35에는 없음) |
 | radix-ui(필요 프리미티브만) | 1.8.1 | MIT |
 | openapi-typescript / openapi-fetch | 7.13.0 / 0.17.0 | MIT |
 | vitest / @testing-library/react / msw / jsdom | 5.0.5 / 16.3.3 / 3.0.3 / 30.1.3 | MIT |

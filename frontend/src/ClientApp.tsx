@@ -8,6 +8,7 @@ import { createQueryClient } from '@/app/queryClient';
 import { routes } from '@/app/routes';
 import { loginPath, setSession } from '@/app/session';
 import { configureHttp } from '@/shared/http/client';
+import { ToastProvider } from '@/shared/ui/overlay';
 
 /**
  * The screens are a client-side app (react-router) inside Next.js: Next serves the page and proxies /api to the
@@ -30,7 +31,9 @@ export default function ClientApp() {
   return (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <ToastProvider>
+          <RouterProvider router={router} />
+        </ToastProvider>
       </QueryClientProvider>
     </StrictMode>
   );

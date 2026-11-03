@@ -1,10 +1,20 @@
-import { Page, TodoPanel } from '@/shared/ui/components';
+import { useQuery } from '@tanstack/react-query';
+import { Link, useParams } from 'react-router';
+import { fetchPostingPreview } from '@/api/recruiter';
+import { PostingView } from '@/shared/posting/PostingView';
+import { QueryState } from '@/shared/ui/extra';
 
-/** 공고 미리보기 (JOB-03). TODO: implement after docs/trd/04-api-contract.md (and 06 for realtime screens). */
+/** SC-R06 공고 미리보기: the page candidates will see, drawn from the saved draft. */
 export default function PostingPreview() {
+  const { pid = '' } = useParams();
+  const p = useQuery({ queryKey: ['recruiter', 'preview', pid], queryFn: () => fetchPostingPreview(pid) });
   return (
-    <Page title="공고 미리보기">
-      <TodoPanel featureIds={['JOB-03']}></TodoPanel>
-    </Page>
+    <>
+      <Link to="/recruiter/postings" className="back" style={{ margin: 0 }}>‹ 공고 목록</Link>
+      <div className="banner" style={{ margin: 0 }}>지원자가 공고 상세에서 보게 될 화면입니다. 버튼은 눌러도 동작하지 않습니다.</div>
+      <QueryState isPending={p.isPending} error={p.error} onRetry={() => p.refetch()}>
+        {() => <PostingView posting={p.data!} />}
+      </QueryState>
+    </>
   );
 }

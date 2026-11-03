@@ -26,7 +26,7 @@ async def new_recruiter(company_id: str, email: str | None = None) -> str:
 async def signup(client: httpx.AsyncClient, email: str | None = None, **over) -> str:
     email = email or f"cand{next(_seq)}@mail.example"
     body = {"name": "김지원", "email": email, "password": PASSWORD, "password_confirm": PASSWORD,
-            "phone": "010-1234-5678", **over}
+            "phone": "010-1234-5678", "birth_date": "1998-03-14", "gender": "F", "terms_agreed": True, **over}
     r = await client.post("/api/auth/signup", json=body)
     assert r.status_code == 201, r.text
     return email
@@ -51,3 +51,14 @@ async def recruiter(client: httpx.AsyncClient, company_id: str | None = None) ->
     email = await new_recruiter(company_id)
     await login(client, email, role="RECRUITER")
     return company_id, email
+
+
+async def operator(client: httpx.AsyncClient) -> str:
+    from app.auth.passwords import hash_password
+    from app.models import User
+
+    email = f"op{next(_seq)}@ops.example"
+    async with session_scope() as db:
+        db.add(User(role="OPERATOR", email=email, name="운영자", password_hash=await hash_password(PASSWORD)))
+    await login(client, email, role="RECRUITER")  # operators use the 기업회원 tab
+    return email

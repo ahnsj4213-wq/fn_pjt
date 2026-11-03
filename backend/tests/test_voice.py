@@ -157,12 +157,15 @@ async def start_interviewing(app_id: str) -> None:
 
 async def answer_turn(c: Client, *, speak: float = 1.0, before_open: float = 0.0) -> dict:
     """One turn from the client side: optional speech during the question audio (must be dropped), speech after
-    the mic opens, a pause for the caption, then [답변 완료]."""
+    the mic opens, a pause for the caption, then [답변 완료]. Think time (SC-A06) is ended with [바로 답변 시작]."""
     q_ev = await c.expect("question")
     if before_open:
         c.mic.speaking = True
         await asyncio.sleep(before_open)
         c.mic.speaking = False
+    if q_ev["think_sec"]:
+        await c.expect("thinking")
+        assert await registry.think_command(uuid.UUID(c.app_id), uuid.UUID(q_ev["turn_id"]), "start")
     opened = await c.expect("answer_opened")
     assert opened["turn_id"] == q_ev["turn_id"]
     if speak:
@@ -179,12 +182,12 @@ async def answer_turn(c: Client, *, speak: float = 1.0, before_open: float = 0.0
 async def test_interview_turns_gate_captions_followup_and_completion(client, make_client, voice_ai):
     _, app_id, cand = await setup_app(client, make_client)
     qs = await prepare_and_compose(cand, app_id)
-    await answer_all(app_id, qs[:8], no_answer_seq=99)  # questions 1~8 already answered
+    await answer_all(app_id, qs[:3], no_answer_seq=99)  # questions 1~3 already answered (5 in the default plan)
     await start_interviewing(app_id)
     voice_ai.stt_texts.extend(["바나나 캐시를 도입해 응답 시간을 줄였습니다", "마지막 답변입니다 결제 장애를 줄였습니다"])
     asked = {"n": 0}
 
-    def ask_once(inp, msgs):  # follow-up only for the first decision (Q9)
+    def ask_once(inp, msgs):  # follow-up only for the first decision (Q4)
         asked["n"] += 1
         if asked["n"] > 1:
             return {"decision": "SKIP", "reason": "NONE", "anchor": None, "question": None}
@@ -197,38 +200,38 @@ async def test_interview_turns_gate_captions_followup_and_completion(client, mak
     c = Client(app_id)
     await c.connect("interview")
     hello = await c.expect("hello")
-    assert hello["purpose"] == "interview" and hello["resume"] == {"main_no": 9, "is_followup": False}
+    assert hello["purpose"] == "interview" and hello["resume"] == {"main_no": 4, "is_followup": False}
 
-    # Q9: speech while the question plays is dropped by the server gate (AC-09), speech after opening is captioned.
+    # Q4: speech while the question plays is dropped by the server gate (AC-09), speech after opening is captioned.
     t9 = await answer_turn(c, speak=1.0, before_open=0.15)
-    assert t9["question"]["main_no"] == 9 and t9["question"]["audio"] == "track"
+    assert t9["question"]["main_no"] == 4 and t9["question"]["audio"] == "track"
     assert t9["finalized"]["text"] == "바나나 캐시를 도입해 응답 시간을 줄였습니다" and not t9["finalized"]["no_answer"]
     assert voice_ai.calls_count["stt"] == 1  # only the post-opening segment reached STT
 
-    # Follow-up on Q9 (same number, 45 s), answered with silence -> 답변 없음; silence alone did not end it (AC-10).
+    # Follow-up on Q4 (same number, 45 s), answered with silence -> 답변 없음; silence alone did not end it (AC-10).
     fu = await answer_turn(c, speak=0)
-    assert fu["question"]["main_no"] == 9 and fu["question"]["is_followup"] and fu["question"]["limit_sec"] == 45
+    assert fu["question"]["main_no"] == 4 and fu["question"]["is_followup"] and fu["question"]["limit_sec"] == 45
     assert fu["finalized"]["no_answer"] is True
 
     t10 = await answer_turn(c, speak=0.8)
-    assert t10["question"]["main_no"] == 10 and t10["finalized"]["reason"] == "button"
+    assert t10["question"]["main_no"] == 5 and t10["finalized"]["reason"] == "button"
     done = await c.expect("interview_completed")
     assert done["next"] == "SUBMITTED" and done["turn_id"] is None
 
     rows = await q("SELECT attempt_status, eval_status, answered_main_count FROM applications WHERE id=:a", a=app_id)
-    assert rows == [("SUBMITTED", "PENDING", 10)]
+    assert rows == [("SUBMITTED", "PENDING", 5)]
     answers = await q("SELECT q.seq, q.role, a.end_reason, a.is_no_answer, a.audio_key IS NOT NULL, a.audio_duration_ms "
                       "FROM interview_answers a JOIN interview_questions q ON q.id=a.question_id "
-                      "WHERE a.application_id=:a AND q.seq >= 9 ORDER BY q.seq, q.role DESC", a=app_id)
-    assert [(s, r, e, n) for s, r, e, n, _, _ in answers] == [(9, "MAIN", "BUTTON", False), (9, "FOLLOWUP", "BUTTON", True),
-                                                            (10, "MAIN", "BUTTON", False)]
+                      "WHERE a.application_id=:a AND q.seq >= 4 ORDER BY q.seq, q.role DESC", a=app_id)
+    assert [(s, r, e, n) for s, r, e, n, _, _ in answers] == [(4, "MAIN", "BUTTON", False), (4, "FOLLOWUP", "BUTTON", True),
+                                                            (5, "MAIN", "BUTTON", False)]
     q9_audio_ms = answers[0][5]
     assert answers[0][4] and q9_audio_ms < 4000  # stored answer audio excludes the pre-opening speech
     # Event order inside a turn (TRD 06 §8) and every event carries turn_id + seq.
     seqs = [e["seq"] for e in c.log]
     assert seqs == sorted(seqs) and all("turn_id" in e for e in c.log)
     order = [e["type"] for e in c.log if e.get("turn_id") == t9["question"]["turn_id"]]
-    assert order[:3] == ["question", "tts_end", "answer_opened"] and order[-2:] == ["answer_finalized", "processing"]
+    assert order[:4] == ["question", "tts_end", "thinking", "answer_opened"] and order[-2:] == ["answer_finalized", "processing"]
     await c.pc.close()
     await drain()  # the pre_evaluate / evaluate jobs registered by the runtime run fine with the fake AI
 
@@ -236,11 +239,13 @@ async def test_interview_turns_gate_captions_followup_and_completion(client, mak
 async def test_disconnect_while_answering_interrupts_without_saving(client, make_client, voice_ai):
     _, app_id, cand = await setup_app(client, make_client)
     qs = await prepare_and_compose(cand, app_id)
-    await answer_all(app_id, qs[:9], no_answer_seq=99)
+    await answer_all(app_id, qs[:4], no_answer_seq=99)
     await start_interviewing(app_id)
     c = Client(app_id)
     await c.connect("interview")
     q_ev = await c.expect("question")
+    await c.expect("thinking")
+    assert await registry.think_command(uuid.UUID(app_id), uuid.UUID(q_ev["turn_id"]), "start")
     await c.expect("answer_opened")
     c.mic.speaking = True
     await asyncio.sleep(0.5)
@@ -254,18 +259,19 @@ async def test_disconnect_while_answering_interrupts_without_saving(client, make
     assert await q("SELECT state, end_reason FROM interview_turns WHERE id=:t", t=q_ev["turn_id"]) == \
         [("ABANDONED", "DISCONNECT")]
     assert await q("SELECT 1 FROM interview_answers a JOIN interview_questions q ON q.id=a.question_id "
-                   "WHERE a.application_id=:a AND q.seq=10", a=app_id) == []  # partial answer discarded (OQ-21)
+                   "WHERE a.application_id=:a AND q.seq=5", a=app_id) == []  # partial answer discarded (OQ-21)
     assert registry.get(uuid.UUID(app_id)) is None
     assert not await registry.request_finish(uuid.UUID(app_id), uuid.UUID(q_ev["turn_id"]))  # stale turn (C3)
 
 
 async def test_hanging_up_on_completion_does_not_interrupt_coding(client, make_client, voice_ai):
-    """The browser closes the connection as soon as `interview_completed` arrives; that is not a disconnect."""
+    """The browser closes the connection as soon as `interview_completed` arrives; that is not a disconnect.
+    A 경영지원 posting: no live-coding question in the interview, so the separate coding phase follows."""
     (pid,), = await q("SELECT id FROM coding_problems LIMIT 1")
-    _, app_id, cand = await setup_app(client, make_client, coding_enabled=True, coding_problem_id=str(pid),
-                                     coding_time_limit_min=30)
+    _, app_id, cand = await setup_app(client, make_client, job_family="MGMT", coding_enabled=True,
+                                     coding_problem_id=str(pid), coding_time_limit_min=30)
     qs = await prepare_and_compose(cand, app_id)
-    await answer_all(app_id, qs[:9], no_answer_seq=99)
+    await answer_all(app_id, qs[:4], no_answer_seq=99)
     await start_interviewing(app_id)
     voice_ai.stt_texts.append("마지막 답변입니다")
     voice_ai.responses["followup_decide"] = lambda inp, msgs: {"decision": "SKIP", "reason": "NONE", "anchor": None,

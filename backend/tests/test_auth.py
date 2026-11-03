@@ -11,34 +11,45 @@ from tests.helpers import PASSWORD, login, new_company, new_recruiter, signup
 pytestmark = pytest.mark.integration
 
 
-async def test_ac01_signup_requires_fields_and_has_no_birth_or_gender(client):
+async def test_ac01_signup_requires_fields_and_keeps_birth_gender_on_the_account(client):
     email = await signup(client)
     async with session_scope() as db:
         user = (await db.execute(select(User).where(User.email == email))).scalar_one()
         assert user.role == "CANDIDATE" and user.password_hash.startswith("$argon2id$")  # SEC-05
-        cols = (await db.execute(text(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema='public'"))).scalars().all()
-    forbidden = {"birth", "birthday", "birthdate", "dob", "gender", "sex", "photo", "picture", "age"}
-    assert not [c for c in cols if forbidden & set(c.split("_"))]
+        assert (str(user.birth_date), user.gender) == ("1998-03-14", "F") and user.terms_agreed_at is not None
 
-    base = {"name": "이름", "email": "x1@mail.example", "password": PASSWORD, "password_confirm": PASSWORD,
-            "phone": "010-1111-2222"}
+    base = {"name": "이름", "birth_date": "1990-01-01", "email": "x1@mail.example", "password": PASSWORD,
+            "password_confirm": PASSWORD, "gender": "M", "phone": "010-1111-2222", "terms_agreed": True}
     for missing in base:
         body = {k: v for k, v in base.items() if k != missing}
         assert (await client.post("/api/auth/signup", json=body)).status_code == 422, missing
-    for phone in ("01012345678", "010-1234-567", "011-1234-5678"):
+    for phone in ("01012345678", "010-1234-567", "012-1234-5678"):
         assert (await client.post("/api/auth/signup", json={**base, "phone": phone})).status_code == 422
-    for extra in ({"birth_date": "1990-01-01"}, {"gender": "F"}, {"role": "RECRUITER"}):
-        r = await client.post("/api/auth/signup", json={**base, **extra})
-        assert r.status_code == 422 and r.json()["error"]["code"] == "VALIDATION"
+    for bad in ({"terms_agreed": False}, {"gender": "X"}, {"birth_date": "2999-01-01"}, {"role": "RECRUITER"},
+                {"password": "onlyletters", "password_confirm": "onlyletters"},
+                {"password": "12345678", "password_confirm": "12345678"},
+                {"password": "Ab1~~~~~~", "password_confirm": "Ab1~~~~~~"},
+                {"password": "Ab1" * 7, "password_confirm": "Ab1" * 7}):
+        r = await client.post("/api/auth/signup", json={**base, **bad})
+        assert r.status_code == 422 and r.json()["error"]["code"] == "VALIDATION", bad
     r = await client.post("/api/auth/signup", json={**base, "password_confirm": "different-1"})
     assert r.status_code == 422
+    assert (await client.post("/api/auth/signup", json={**base, "phone": "011-123-4567"})).status_code == 201
+
+
+async def test_find_id_masks_the_address(client):
+    await signup(client, "jiwoo.kim@mail.example", name="박찾기", phone="010-5555-6666")
+    r = await client.post("/api/auth/find-id", json={"name": "박찾기", "phone": "010-5555-6666"})
+    assert r.status_code == 200 and r.json() == {"emails": ["jiw***@mail.example"]}
+    r = await client.post("/api/auth/find-id", json={"name": "없는사람", "phone": "010-5555-6666"})
+    assert r.json() == {"emails": []}
 
 
 async def test_signup_duplicate_email_generic_message(client):
     email = await signup(client)
     r = await client.post("/api/auth/signup", json={"name": "a", "email": email, "password": PASSWORD,
-                                                    "password_confirm": PASSWORD, "phone": "010-2222-3333"})
+                                                    "password_confirm": PASSWORD, "phone": "010-2222-3333",
+                                                    "birth_date": "1990-01-01", "gender": "M", "terms_agreed": True})
     assert r.status_code == 409 and r.json()["error"]["code"] == "EMAIL_UNAVAILABLE"
 
 
@@ -48,7 +59,7 @@ async def test_usr04_login_failures_are_indistinguishable(client, make_client):
     rec = await new_recruiter(company)
     cases = [
         {"role": "CANDIDATE", "email": "nobody@mail.example", "password": PASSWORD},  # unknown account
-        {"role": "CANDIDATE", "email": cand, "password": "wrong-password"},           # wrong password
+        {"role": "CANDIDATE", "email": cand, "password": "wrong-passw0rd"},           # wrong password
         {"role": "RECRUITER", "email": cand, "password": PASSWORD},                   # role mismatch
         {"role": "CANDIDATE", "email": rec, "password": PASSWORD},                    # recruiter as candidate
     ]

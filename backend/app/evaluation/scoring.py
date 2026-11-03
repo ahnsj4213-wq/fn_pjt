@@ -10,7 +10,7 @@ from app.core.constants import CRITERIA, Criterion
 
 SCORING_VERSION = "score-v1"
 Q = Decimal("0.01")
-WEIGHT_KEYS = {Criterion.EXPERTISE: "expertise", Criterion.LOGIC: "logic", Criterion.SPECIFICITY: "specificity",
+WEIGHT_KEYS = {Criterion.EXPERTISE: "expertise", Criterion.LOGIC: "logic", Criterion.ATTITUDE: "attitude",
                Criterion.DELIVERY: "delivery"}
 
 

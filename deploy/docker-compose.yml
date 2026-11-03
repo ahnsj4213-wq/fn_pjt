@@ -1,11 +1,16 @@
-# Whole platform on one PC (target container diagram, ADR-0014). NVIDIA Container Toolkit / Docker Desktop GPU.
+# Whole platform on one PC: 8 containers (ADR-0014, consolidated by ADR-0015). NVIDIA Container Toolkit / Docker Desktop GPU.
+#
+#   frontend  Next.js           api       FastAPI + WebRTC (runs the migration first)
+#   worker    Celery + beat     postgres  PostgreSQL 16 + pgvector       redis  Celery queue
+#   llm-gpu   llama.cpp CUDA    ai        STT + TTS + evaluation LLM + embeddings      mailer  Mailpit
+#   (minio: optional 9th, COMPOSE_PROFILES=minio with STORAGE_BACKEND=s3)
 #
 #   1) models:  ..\.venv\Scripts\python ..\backend\scripts\prepare_models.py --out ..\models   (once, with internet)
 #   2) cd deploy && copy .env.example .env && docker compose up -d --build
 #   3) open http://localhost:8080
 #
 # Networks
-#   internal  internal: true - no route out. Every service sits here; the AI containers only read ../models.
+#   internal  internal: true - no route out. Every service sits here; llm-gpu and ai only read ../models.
 #   front     carries the published ports (frontend, api). Ports are bound to 127.0.0.1 only.
 #   egress    the only way out, used by `mailer` alone (Gmail relay on the reference PC).
 # The code sandbox is not a service: the worker starts one container per run through docker.sock (network none).
@@ -18,11 +23,15 @@ x-backend-env: &backend-env
   AIHIRE_WORKER_MODE: celery
   AIHIRE_AI_MODE: ${AI_MODE:-direct}
   AIHIRE_AI_TOKEN: ${AI_TOKEN:-dev-ai-token-change-me}
-  AIHIRE_LLM_RT_URL: http://llm-rt:8080
-  AIHIRE_LLM_EVAL_URL: http://llm-eval:8080
-  AIHIRE_EMBED_URL: http://embed:8080
-  AIHIRE_STT_URL: http://stt:8201
-  AIHIRE_TTS_URL: http://tts:8202
+  AIHIRE_LLM_RT_URL: http://llm-gpu:8080
+  # Report (BATCH) calls use the GPU server's spare slots: ~50 tokens/s instead of ~7 on the CPU server in `ai`.
+  # RT is pinned to slot 0 and BATCH to slot 1, so the rubric prefix stays cached and neither waits for the other.
+  AIHIRE_LLM_EVAL_URL: ${LLM_EVAL_URL:-http://llm-gpu:8080}
+  AIHIRE_LLM_EVAL_SLOT: ${LLM_EVAL_SLOT:-1}
+  AIHIRE_LLM_RT_SLOT: ${LLM_RT_SLOT:-0}
+  AIHIRE_EMBED_URL: http://ai:8083
+  AIHIRE_STT_URL: http://ai:8201
+  AIHIRE_TTS_URL: http://ai:8202
   AIHIRE_LLM_MODEL: ${LLM_MODEL:-qwen3.5:4b}
   AIHIRE_EMBED_MODEL: bge-m3
   AIHIRE_STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
@@ -76,6 +85,8 @@ services:
   api:
     build: { <<: *backend-build, target: app }
     image: aihire-api:dev
+    # The schema migration runs first (was the one-shot `migrate` container); uvicorn starts only when it succeeds.
+    command: ["sh", "-c", "python -m alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     environment:
       <<: *backend-env
       AIHIRE_RUNNER_MODE: celery  # no docker.sock here: [실행] goes to the worker
@@ -93,8 +104,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+      start_period: 60s
     depends_on:
-      migrate: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       minio: { condition: service_healthy, required: false }  # off when STORAGE_BACKEND=local
     restart: unless-stopped
@@ -117,16 +129,8 @@ services:
     restart: unless-stopped
 
   # ── jobs ──────────────────────────────────────────────────────────────────
-  migrate:
-    image: aihire-api:dev
-    command: ["python", "-m", "alembic", "upgrade", "head"]
-    environment: *backend-env
-    networks: [internal]
-    depends_on:
-      postgres: { condition: service_healthy }
-    restart: "no"
-
   worker:
+    # Celery workers and Celery beat (periodic jobs; was the `scheduler` container) in one container.
     build: { <<: *backend-build, target: worker }
     image: aihire-worker:dev
     environment:
@@ -137,22 +141,14 @@ services:
       - appdata:/data
     networks: [internal]
     depends_on:
-      migrate: { condition: service_completed_successfully }
+      api: { condition: service_healthy }  # the schema is migrated once api is healthy
       redis: { condition: service_healthy }
       minio: { condition: service_healthy, required: false }  # off when STORAGE_BACKEND=local
     restart: unless-stopped
 
-  scheduler:
-    image: aihire-worker:dev
-    command: ["celery", "-A", "app.celery_app", "beat", "--schedule", "/tmp/celerybeat-schedule", "--loglevel", "INFO"]
-    environment: *backend-env
-    networks: [internal]
-    depends_on:
-      worker: { condition: service_started }
-    restart: unless-stopped
-
   # ── AI (models read-only from ../models, prepared by backend/scripts/prepare_models.py) ──
-  llm-rt:
+  llm-gpu:
+    # Real-time LLM on the GPU (RT/INTERACTIVE lanes: follow-up decisions during the interview).
     <<: *gpu
     image: ghcr.io/ggml-org/llama.cpp:${LLAMACPP_CUDA_TAG:-server-cuda}
     command: ["-m", "/models/llm/qwen3.5-4b.gguf", "--host", "0.0.0.0", "--port", "8080", "--jinja",
@@ -171,61 +167,32 @@ services:
       timeout: 240s
     restart: unless-stopped
 
-  llm-eval:
-    image: ghcr.io/ggml-org/llama.cpp:${LLAMACPP_CPU_TAG:-server}
-    command: ["-m", "/models/llm/qwen3.5-4b.gguf", "--host", "0.0.0.0", "--port", "8080", "--jinja",
-              "-c", "8192", "--parallel", "1", "-t", "${LLM_EVAL_THREADS:-6}", "--alias", "${LLM_MODEL:-qwen3.5:4b}"]
-    volumes: [ "../models:/models:ro" ]
-    networks: [internal]
-    healthcheck: *llama-health
-    restart: unless-stopped
-
-  stt:
+  ai:
+    # Four servers in one container (backend/scripts/ai_entrypoint.sh): STT :8201 (faster-whisper, GPU),
+    # TTS :8202 (Supertonic, CPU), evaluation LLM :8082 and embeddings :8083 (llama.cpp, CPU).
+    # If one of them exits, the container exits and Docker restarts all four.
     <<: *gpu
-    build: { <<: *backend-build, target: ai }
+    build:
+      <<: *backend-build
+      target: ai
+      args: { LLAMACPP_CPU_TAG: "${LLAMACPP_CPU_TAG:-server}" }
     image: aihire-ai:dev
-    command: ["python", "-m", "app.aisvc.speech_server", "stt"]
     environment:
       AIHIRE_AI_TOKEN: ${AI_TOKEN:-dev-ai-token-change-me}
       AIHIRE_STT_URL: http://0.0.0.0:8201
+      AIHIRE_TTS_URL: http://0.0.0.0:8202
       AIHIRE_STT_DEVICE: ${STT_DEVICE:-cuda}
       AIHIRE_MODEL_AUTO_DOWNLOAD: "false"
+      AIHIRE_LLM_MODEL: ${LLM_MODEL:-qwen3.5:4b}
+      LLM_EVAL_THREADS: ${LLM_EVAL_THREADS:-6}
     volumes: [ "../models:/models:ro" ]
     networks: [internal]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8201/readyz', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request as u; [u.urlopen(x, timeout=3) for x in ('http://127.0.0.1:8201/readyz', 'http://127.0.0.1:8202/readyz', 'http://127.0.0.1:8082/health', 'http://127.0.0.1:8083/health')]"]
       interval: 10s
-      timeout: 5s
+      timeout: 15s
       start_period: 5m
       retries: 6
-    restart: unless-stopped
-
-  tts:
-    image: aihire-ai:dev  # built by `stt`
-    command: ["python", "-m", "app.aisvc.speech_server", "tts"]
-    environment:
-      AIHIRE_AI_TOKEN: ${AI_TOKEN:-dev-ai-token-change-me}
-      AIHIRE_TTS_URL: http://0.0.0.0:8202
-      AIHIRE_MODEL_AUTO_DOWNLOAD: "false"
-    volumes: [ "../models:/models:ro" ]
-    networks: [internal]
-    depends_on:
-      stt: { condition: service_started }
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8202/readyz', timeout=3)"]
-      interval: 10s
-      timeout: 5s
-      start_period: 5m
-      retries: 6
-    restart: unless-stopped
-
-  embed:
-    image: ghcr.io/ggml-org/llama.cpp:${LLAMACPP_CPU_TAG:-server}
-    command: ["-m", "/models/embed/bge-m3.gguf", "--host", "0.0.0.0", "--port", "8080", "--embeddings",
-              "--pooling", "cls", "-c", "8192", "-t", "2", "--alias", "bge-m3"]
-    volumes: [ "../models:/models:ro" ]
-    networks: [internal]
-    healthcheck: *llama-health
     restart: unless-stopped
 
   # ── data ──────────────────────────────────────────────────────────────────
@@ -295,4 +262,4 @@ volumes:
   redisdata:
   miniodata:
   appdata:  # local-storage fallback only (STORAGE_BACKEND=local)
-  cudacache:  # llm-rt's compiled CUDA kernels
+  cudacache:  # llm-gpu's compiled CUDA kernels

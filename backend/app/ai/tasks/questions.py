@@ -23,6 +23,19 @@ def similar_question(a: str, b: str) -> bool:
     return bool(ta and tb) and len(ta & tb) / len(ta | tb) >= 0.8
 
 
+def examples_block(inp: dict, nonce: str) -> str:
+    """RAG examples (ai-architecture 6.1): reference questions for tone and level, never to be copied."""
+    ex = [e for e in (inp.get("examples") or []) if isinstance(e, str) and e.strip()]
+    if not ex:
+        return ""
+    return ("\n참고 예시 질문(말투와 난이도만 참고하고, 그대로 베끼거나 단어만 바꿔 쓰지 마라. 예시에 나온 사실을 근거로 쓰지 마라):\n"
+            + fence("EXAMPLES", "\n".join(f"- {e}" for e in ex), nonce))
+
+
+def copies_example(text: str, inp: dict) -> bool:
+    return any(similar_question(text, e) for e in (inp.get("examples") or []))
+
+
 def _shape_ok(text: str) -> bool:
     t = text.strip()
     return (0 < len(t) <= QUESTION_MAX and looks_like_question(t) and not is_forbidden_question(t) and not has_p8(t))
@@ -42,7 +55,7 @@ class GenOut(BaseModel):
 
 class QuestionGenerate(TaskSpec):
     name = "question_generate"
-    version = "question_generate@1.0.0"
+    version = "question_generate@1.1.0"
     lane = "INTERACTIVE"
     temperature = 0.7
     num_predict = 400
@@ -60,7 +73,7 @@ class QuestionGenerate(TaskSpec):
 
     def build(self, inp: dict, nonce: str) -> tuple[str, dict]:
         user = (f"질문 유형: {inp['kind']}\n직무군: {inp.get('job_family', '')}\n만들 개수: {inp.get('n', 3)}\n"
-                f"공고·회사 소개:\n{fence('POSTING', self._source(inp), nonce)}")
+                f"공고·회사 소개:\n{fence('POSTING', self._source(inp), nonce)}{examples_block(inp, nonce)}")
         return user, {}
 
     def check(self, inp: dict, p: GenOut, ctx: dict, final: bool) -> Check:
@@ -70,7 +83,7 @@ class QuestionGenerate(TaskSpec):
         for q in p.questions:
             text = q.text.strip()
             span = find_span(q.basis_quote, src, min_chars=4)
-            if span is None or not _shape_ok(text):
+            if span is None or not _shape_ok(text) or copies_example(text, inp):
                 continue
             if any(similar_question(text, x) for x in existing + [v["text"] for v in valid]):
                 continue
@@ -78,8 +91,8 @@ class QuestionGenerate(TaskSpec):
             if len(valid) >= n:
                 break
         if len(valid) < n and not final:
-            return Check(feedback={"gen": f"조건을 만족한 질문이 {len(valid)}개뿐이다. basis_quote는 공고 원문 그대로, 질문은 한 문장으로 "
-                                          f"{n}개를 다시 만들어라."})
+            return Check(feedback={"gen": f"조건을 만족한 질문이 {len(valid)}개뿐이다. basis_quote는 공고 원문 그대로, 질문은 한 문장으로, "
+                                          f"참고 예시를 베끼지 말고 {n}개를 다시 만들어라."})
         return Check(output={"questions": valid}, flags={"valid": len(valid)})
 
 
@@ -127,7 +140,7 @@ def flatten_resume(resume: dict) -> tuple[str, list[tuple[str, int, int]]]:
 
 class ResumeQuestion(TaskSpec):
     name = "resume_question"
-    version = "resume_question@1.0.0"
+    version = "resume_question@1.1.0"
     lane = "INTERACTIVE"
     temperature = 0.5
     num_predict = 500
@@ -141,7 +154,7 @@ class ResumeQuestion(TaskSpec):
     def build(self, inp: dict, nonce: str) -> tuple[str, dict]:
         flat, ranges = flatten_resume(inp.get("resume") or {})
         user = (f"지원 직무 요약:\n{fence('JOB', inp.get('job_brief', ''), nonce)}\n"
-                f"이력서 표준 항목:\n{fence('RESUME', flat, nonce)}")
+                f"이력서 표준 항목:\n{fence('RESUME', flat, nonce)}{examples_block(inp, nonce)}")
         return user, {"flat": flat, "ranges": ranges}
 
     def check(self, inp: dict, p: ResQOut, ctx: dict, final: bool) -> Check:
@@ -149,7 +162,7 @@ class ResumeQuestion(TaskSpec):
         valid: list[dict] = []
         for q in p.questions:
             text = q.text.strip()
-            if not _shape_ok(text):
+            if not _shape_ok(text) or copies_example(text, inp):
                 continue
             evidence = []
             for ev in q.evidence:

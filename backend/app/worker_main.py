@@ -3,6 +3,7 @@ its own concurrency (TRD 01 §1: one INTERACTIVE and one BATCH LLM job at a time
 
     python -m app.worker_main
 
+Celery beat (the periodic jobs) runs in the same container unless AIHIRE_WORKER_BEAT=0 (ADR-0015).
 The container exits when any worker exits (Docker restarts it). The sandbox self-test runs once at start.
 """
 import os
@@ -30,6 +31,9 @@ def main() -> int:
         cmd = [sys.executable, "-m", "celery", "-A", "app.celery_app", "worker", "-Q", queues, "-c", str(conc),
                "-n", f"{name}@%h", "--loglevel", os.environ.get("CELERY_LOGLEVEL", "INFO"), "-O", "fair"]
         procs.append(subprocess.Popen(cmd))
+    if os.environ.get("AIHIRE_WORKER_BEAT", "1") != "0":
+        procs.append(subprocess.Popen([sys.executable, "-m", "celery", "-A", "app.celery_app", "beat", "--schedule",
+                                       "/tmp/celerybeat-schedule", "--loglevel", os.environ.get("CELERY_LOGLEVEL", "INFO")]))
     subprocess.Popen([sys.executable, "-m", "celery", "-A", "app.celery_app", "call", "periodic.run",
                       "--args", '["sandbox_verify"]', "--queue", "runner"]).wait()
 

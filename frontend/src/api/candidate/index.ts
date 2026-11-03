@@ -10,9 +10,12 @@ import { uploadFile } from '@/shared/http/upload';
 const enc = encodeURIComponent;
 
 // ---- consent (SEC-01, SEC-02) ----
+/** One row of the SC-A05 consent table: what is collected, why, and for how long. */
 export interface ConsentItem {
   code: string;
   label: string;
+  purpose?: string;
+  retention?: string;
   required: boolean;
 }
 
@@ -44,6 +47,11 @@ export interface ResumeFileOut {
   text_extractable: boolean;
   extraction_status: ExtractionStatus;
   fields: ResumeContent | null;
+  /** RES-04: TEXT = text layer, OCR = scanned pages or a photo were read by OCR. */
+  method: 'TEXT' | 'OCR' | null;
+  ocr_confidence: number | null;
+  /** Form fields fed by unsure OCR lines: 'education.0', 'career.1', 'projects.0', 'skills', 'name'. */
+  low_conf_fields: string[];
   manual_input_required: boolean;
 }
 
@@ -70,6 +78,8 @@ export interface ApplyIn {
   resume: ResumeContent;
   resume_file_id?: string | null;
   update_registered: boolean;
+  /** SC-A05: unchecked = practice mode, the company never sees the result. */
+  share_result: boolean;
 }
 
 export const applyToPosting = (postingId: string, body: ApplyIn) =>
@@ -89,10 +99,15 @@ export interface CandidateApplication {
   decision: Decision;
   answered_main_count: number;
   can_start: boolean;
+  main_count: number | null;
+  share_result: boolean;
+  /** SC-A09 진행 상태 and its pill colour. */
+  progress_label: string;
+  progress_kind: 'good' | 'bad' | 'hold' | 'none';
 }
 
 export interface CandidateFeedback {
-  criteria: { expertise: string; logic: string; specificity: string; delivery: string };
+  criteria: { expertise: string; logic: string; attitude: string; delivery: string };
   strengths: string[];
   improvements: string[];
   coding: 'ALL_PASSED' | 'NOT_ALL_PASSED' | null;
@@ -111,6 +126,26 @@ export const fetchMyApplications = () => apiFetch<CandidateApplication[]>('/api/
 export const fetchMyApplication = (id: string) => apiFetch<CandidateApplication>(`/api/candidate/applications/${enc(id)}`);
 export const fetchMyResult = (id: string) => apiFetch<CandidateResult>(`/api/candidate/applications/${enc(id)}/result`);
 
+/** SC-A11 프로필. The email (id) is read-only. */
+export interface Profile { name: string; email: string; birth_date: string | null; gender: 'M' | 'F' | null; phone: string | null }
+export const fetchProfile = () => apiFetch<Profile>('/api/candidate/profile');
+export const saveProfile = (body: Omit<Profile, 'email'>) => apiFetch<Profile>('/api/candidate/profile', { method: 'PUT', body });
+export const sendPasswordLink = () => apiFetch<{ email: string }>('/api/candidate/profile/password-link', { method: 'POST' });
+
+/** SC-A15 면접 일정: dates a company sent by mail, with the candidate's answer. */
+export interface Schedule {
+  id: string; application_id: string; company_name: string; title: string; starts_at: string; place: string | null;
+  status: 'PROPOSED' | 'ACCEPTED' | 'RESCHEDULE_REQUESTED';
+}
+export const fetchSchedules = () => apiFetch<Schedule[]>('/api/candidate/schedules');
+
 /** USR-07: password re-check; 409 ACTIVE_ATTEMPT while an attempt is in progress (OQ-12). */
 export const withdrawAccount = (password: string) =>
   apiFetch<{ status: 'WITHDRAWN' }>('/api/candidate/me', { method: 'DELETE', body: { password } });
+
+// ---- SC-R15 counterpart: ask the company about one's own application ----
+export interface InquiryMessage { id: string; mine: boolean; sender: string; body: string; created_at: string }
+export interface Inquiry { id: string; subject: string; messages: InquiryMessage[] }
+export const fetchMyInquiry = (applicationId: string) => apiFetch<Inquiry | null>(`/api/candidate/applications/${encodeURIComponent(applicationId)}/inquiry`);
+export const askInquiry = (applicationId: string, body: { subject: string; body: string }) =>
+  apiFetch<Inquiry>(`/api/candidate/applications/${encodeURIComponent(applicationId)}/inquiry`, { method: 'POST', body });

@@ -84,5 +84,29 @@ async def test_withdrawn_account_gets_nothing_and_smtp_outage_is_deferred(client
     assert smtp.messages == []
 
 
+async def test_password_reset_mail_link_works_once_within_30_minutes(client, make_client, smtp):
+    from tests.helpers import login, signup
+
+    email_addr = await signup(client)
+    await login(client, email_addr)
+    other = make_client()
+    r = await other.post("/api/auth/password-reset", json={"email": email_addr})
+    assert r.status_code == 202
+    same = await other.post("/api/auth/password-reset", json={"email": "nobody@mail.example"})
+    assert same.status_code == 202 and same.json() == r.json()  # no hint whether the address exists
+    await drain()
+    (m,) = smtp.messages
+    assert m["To"] == email_addr and "/reset-password?token=" in m.get_content()
+    token = m.get_content().split("token=")[1].split()[0]
+    body = {"token": token, "password": "N3w-passw0rd", "password_confirm": "N3w-passw0rd"}
+    assert (await other.post("/api/auth/password-reset/confirm", json=body)).status_code == 204
+    assert (await client.get("/api/auth/me")).status_code == 401  # old sessions signed out
+    r = await other.post("/api/auth/password-reset/confirm", json=body)
+    assert r.status_code == 400 and r.json()["error"]["code"] == "RESET_TOKEN_INVALID"
+    login = await make_client().post("/api/auth/login", json={"role": "CANDIDATE", "email": email_addr,
+                                                               "password": "N3w-passw0rd"})
+    assert login.status_code == 200
+
+
 def test_mail_switch_off_queues_nothing():
     assert get_settings().mail_enabled is False  # default: development and tests send nothing

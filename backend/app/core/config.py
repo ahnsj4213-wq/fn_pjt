@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     retention_audio_days: int = 30
     retention_content_days: int = 365
 
+    # Resume OCR for scanned PDF pages and photos (RES-04, app/resumes/ocr.py). Tesseract runs in the worker.
+    ocr_lang: str = "kor+eng"
+    ocr_dpi: int = 300
+    ocr_fail_conf: float = 0.5   # mean line confidence below this = "could not read enough" -> manual input
+    ocr_low_conf: float = 0.7    # lines below this mark the fields they fed as "check this" on the review form
+    ocr_timeout_seconds: int = 120
+
+    # RAG for question generation (ai-architecture 6.1): reference examples per T2/T3 call, copy threshold
+    rag_example_count: int = Field(3, ge=0, le=10)
+    rag_copy_cosine: float = Field(0.9, gt=0, le=1)
+
     # EVL-02 / OQ-09
     short_answer_min_chars: int = 15
     quote_min_chars: int = 8
@@ -61,7 +72,11 @@ class Settings(BaseSettings):
     # AI service (all inference on-prem, SEC-06). ai_mode picks the client (app/ai/client.py get_ai_client).
     ai_mode: str = Field("service", pattern="^(service|direct|fake)$")
     llm_rt_url: str = "http://127.0.0.1:8081"     # direct: llama.cpp, GPU (RT + INTERACTIVE)
-    llm_eval_url: str = "http://127.0.0.1:8082"   # direct: llama.cpp, CPU (BATCH)
+    llm_eval_url: str = "http://127.0.0.1:8082"   # direct: llama.cpp (BATCH): the GPU server's spare slots, or a CPU server
+    # With the BATCH lane on the same llama.cpp server as RT, each lane is pinned to its own slot: the prompt cache of
+    # the long rubric prefix stays warm and an interview call never waits behind a report call.
+    llm_rt_slot: int | None = None
+    llm_eval_slot: int | None = None
     embed_url: str = "http://127.0.0.1:8083"      # direct: llama.cpp --embeddings, BGE-M3
     stt_url: str = "http://127.0.0.1:8201"        # direct: app.aisvc.speech_server stt
     tts_url: str = "http://127.0.0.1:8202"        # direct: app.aisvc.speech_server tts

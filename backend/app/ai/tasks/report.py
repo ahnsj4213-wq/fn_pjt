@@ -19,27 +19,42 @@ OVERLAP_CHARS = 15
 
 class _Point(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    text: str = Field(max_length=250)
+    text: str = Field(max_length=120)
     question_refs: list[int] = Field(max_length=10)
 
 
 class SummaryOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    overall: str = Field(max_length=700)
+    overall: str = Field(max_length=220)
     strengths: list[_Point] = Field(min_length=1, max_length=3)
     improvements: list[_Point] = Field(min_length=1, max_length=3)
 
 
+class _PointG(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(max_length=60)
+    question_refs: list[int] = Field(max_length=5)
+
+
+class SummaryOutG(BaseModel):
+    """llama.cpp grammar twin of SummaryOut: one strength and one improvement, short."""
+    model_config = ConfigDict(extra="forbid")
+    overall: str = Field(max_length=100)
+    strengths: list[_PointG] = Field(min_length=1, max_length=1)
+    improvements: list[_PointG] = Field(min_length=1, max_length=1)
+
+
 class ReportSummary(TaskSpec):
     name = "report_summary"
-    version = "report_summary@1.0.0"
+    version = "report_summary@1.1.0"
     lane = "BATCH"
     temperature = 0.2
-    num_predict = 600
+    num_predict = 240
     regen_limits = {"wording": 1}
     out_model = SummaryOut
-    system = ("너는 채용 담당자용 면접 리포트의 총평 작성기다. 문항별 항목 점수와 코멘트를 보고 총평(400자 이내)과 강점·개선점을 "
-              "각각 1~3개(중요한 순서) 쓴다. 각 강점·개선점에는 근거 문항 번호(question_refs)를 붙인다. 점수 숫자를 다시 쓰지 않고, "
+    grammar_model = SummaryOutG
+    system = ("너는 채용 담당자용 면접 리포트의 총평 작성기다. 문항별 항목 수준(상·중·하)과 코멘트를 보고 총평(80자 이내)과 강점·개선점을 "
+              "각각 1개(한 개당 50자 이내) 쓴다. 각 강점·개선점에는 근거 문항 번호(question_refs)를 붙인다. 점수 숫자를 다시 쓰지 않고, "
               "합격·불합격이나 채용 추천을 쓰지 않는다. 지원자의 이름·성별·나이를 언급하지 않는다.")
 
     def build(self, inp: dict, nonce: str) -> tuple[str, dict]:
@@ -47,9 +62,15 @@ class ReportSummary(TaskSpec):
         for q in inp["questions"]:
             tag = " (꼬리질문 포함)" if q.get("has_followup") else ""
             lines.append(f"[{q['no']}] 유형 {q.get('type', '')}{tag}")
-            for c, s in (q.get("scores") or {}).items():
-                comment = (q.get("comments") or {}).get(c, "")
-                lines.append(f"  - {c}: {s} / {comment}")
+            scores = q.get("scores") or {}
+            # One comment per question, the weakest criterion's: a shorter prompt is read sooner.
+            num = {c: float(v) for c, v in scores.items()}  # scores arrive as numbers or as "4.00"
+            shown = {min(num, key=num.get)} if num else set()
+            for c, s in scores.items():
+                comment = (q.get("comments") or {}).get(c, "") if c in shown else ""
+                # Words, not numbers: the summary must not repeat scores, and a model that never saw one cannot.
+                level = "상" if num[c] >= 4 else "중" if num[c] >= 3 else "하"
+                lines.append(f"  - {c}: {level}" + (f" / {comment}" if comment else ""))
             if q.get("insufficient"):
                 lines.append(f"  - 근거 부족 항목: {', '.join(q['insufficient'])}")
             if q.get("no_answer"):
@@ -94,15 +115,22 @@ def overlaps_answer(text: str, answers_norm: list[str], n: int = OVERLAP_CHARS) 
     return False
 
 
+class FeedbackOutG(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    strengths: list[str] = Field(min_length=1, max_length=1)
+    improvements: list[str] = Field(min_length=1, max_length=1)
+
+
 class CandidateFeedback(TaskSpec):
     name = "candidate_feedback"
-    version = "candidate_feedback@1.0.0"
+    version = "candidate_feedback@1.1.0"
     lane = "BATCH"
     temperature = 0.3
-    num_predict = 450
+    num_predict = 240
     regen_limits = {"wording": 1}
     out_model = FeedbackOut
-    system = ("너는 면접을 본 지원자에게 줄 피드백 작성기다. 항목별 평가 요지를 보고 강점과 개선점을 각각 1~3개, 한 항목당 150자 이내의 "
+    grammar_model = FeedbackOutG
+    system = ("너는 면접을 본 지원자에게 줄 피드백 작성기다. 항목별 평가 요지를 보고 강점과 개선점을 각각 1개, 한 항목당 70자 이내의 "
               "존중하는 문장으로 쓴다. 답변 문장을 그대로 옮기지 말고, 점수·총점·가중치·순위·다른 지원자·합격 여부를 언급하지 않는다.")
 
     def build(self, inp: dict, nonce: str) -> tuple[str, dict]:

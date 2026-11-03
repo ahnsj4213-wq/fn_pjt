@@ -57,7 +57,11 @@ erDiagram
 
 | 테이블 | 목적 | 핵심 칼럼 | 제약·인덱스 |
 |---|---|---|---|
-| `companies` | 회사 | `name`, `intro`(기업 질문 근거, 6.1) | — |
+| `companies` | 회사 | `name`, `intro`(기업 질문 근거, 6.1), `biz_no`, `verification`(APPROVED/PENDING/REJECTED, PENDING이면 공고 게시 불가), `verification_method`, `evidence_key`, `evidence_name`, `verified_at`, `reject_reason`(운영자 반려 사유, 재신청 때 비움), `suspended_at`(운영자 정지) (SC-R01, SC-O01, SC-O02) | — |
+| `recruiter_mails` | 담당자가 응시자에게 보낸 메일(SC-R14) | `application_id`, `kind`(INTERVIEW/RESULT/FREE), `subject`, `body`, `schedule_id`, `sender_id` | — |
+| `notifications` | 기업 알림(SC-R12) | `company_id`, `kind`(DEADLINE/APPLY/SCHEDULE), `text`, `dedupe_key`(회사 안에서 유일), `application_id`, `posting_id`, `done_text`, `read_at` | — |
+| `recruiter_reports.point_refs` | 강점·개선점 각각이 가리키는 질문 번호(SC-A08 ‘관련 질문 Q○ 보기’) | `{strengths: [[4,5],…], improvements: [[3],…]}` | — |
+| `signup_codes` | 기업 가입 메일 인증번호 | `email`, `code_hash`(SHA-256), `expires_at`(10분), `attempts`(최대 5), `used_at` | — |
 | `users` | 지원자·담당자·운영자 | `role` CANDIDATE/RECRUITER/OPERATOR, `company_id`, `email`(소문자), `password_hash`(Argon2id), `name`, `phone`, `status` ACTIVE/DISABLED/WITHDRAWN, `withdrawn_at` | CHECK: 담당자 ⇔ `company_id` 있음 / 탈퇴가 아니면 email·hash·name 필수 / 지원자 전화 `^010-[0-9]{4}-[0-9]{4}$`. `UNIQUE(id, company_id)`(복합 FK 대상), `ux_users_email`(email이 있을 때만 유일) |
 | `sessions` | 서버 세션(USR-06) | `token_hash`(쿠키 토큰의 SHA-256, PK), `role`, `company_id`(로그인 때 복사), `csrf_token`, `last_seen_at`, `expires_at` | `ix_sessions_user`. 로그아웃·만료·비활성은 행 삭제. 갱신은 60초 단위(`app/auth/sessions.py`) |
 | `auth_throttle` | 로그인 실패 제한(SC-04) | `key`(`e:`HMAC(email) / `i:`IP), `failures`, `window_started_at`, `locked_until` | 15분 창, 이메일 5회·IP 30회(`app/auth/throttle.py`). 없는 이메일도 같은 카운터를 쓴다 |
@@ -68,8 +72,8 @@ erDiagram
 |---|---|---|---|
 | `coding_problems` | 팀이 CLI로 등록한 문제(OQ-14) | `language`='python'(X-10), `time_limit_ms` 100~20000, `memory_mb` 32~512, `is_active` | 공고에 쓰인 뒤에는 수정하지 않는다(운영 규칙) |
 | `coding_testcases` | 공개·비공개 테스트 | `visibility` PUBLIC/HIDDEN, `input`, `expected_output` | `UNIQUE(problem_id, ordinal)`. HIDDEN은 worker 채점 경로만 읽는다(COD-06, ADR-0007) |
-| `job_postings` | 공고(7.4) | `status` DRAFT/OPEN/CLOSED, 본문 필드, `headcount`(표시만, JOB-01), `deadline_at`, `coding_enabled`, `coding_problem_id`, `coding_language`, `coding_time_limit_min` 10~180(OQ-17), `current_settings_id`, `settings_locked_at`, `published_at`, `closed_at`, `close_reason` MANUAL/DEADLINE, `deleted_at`, `row_version` | CHECK: 게시 이후 제목·직무·마감·설정 필수 / 게시 이후 코딩을 켰으면 문제·언어·시간 필수 / CLOSED ⇔ `closed_at`. `UNIQUE(id, company_id)`, `FK(created_by, company_id)→users`, `fk_postings_current_settings`(DEFERRABLE INITIALLY DEFERRED). 인덱스 `ix_postings_company`(삭제 제외), `ix_postings_open_deadline`(OPEN만) |
-| `posting_eval_settings` | 가중치·커스텀 질문 버전(INSERT 전용) | `version`, `w_expertise`·`w_logic`·`w_specificity`·`w_delivery` 0~100, `w_coding`(코딩을 끈 공고는 NULL, 6.4), `custom_question` 5~500자(1개, X-09), `rubric_version` | CHECK: 합 = 100(ADM-05, AC-21). `UNIQUE(posting_id, version)`, `UNIQUE(id, posting_id)`, `FK(posting_id, company_id)` |
+| `job_postings` | 공고(7.4) | `status` DRAFT/OPEN/CLOSED, 본문 필드, `hidden_at`·`hidden_by`(OPERATOR/SUSPENSION, 운영자 숨김, SC-O02), `headcount`(표시만, JOB-01), `deadline_at`, `coding_enabled`, `coding_problem_id`, `coding_language`, `coding_time_limit_min` 10~180(OQ-17), `current_settings_id`, `settings_locked_at`, `published_at`, `closed_at`, `close_reason` MANUAL/DEADLINE, `deleted_at`, `row_version` | CHECK: 게시 이후 제목·직무·마감·설정 필수 / 게시 이후 코딩을 켰으면 문제·언어·시간 필수 / CLOSED ⇔ `closed_at`. `UNIQUE(id, company_id)`, `FK(created_by, company_id)→users`, `fk_postings_current_settings`(DEFERRABLE INITIALLY DEFERRED). 인덱스 `ix_postings_company`(삭제 제외), `ix_postings_open_deadline`(OPEN만) |
+| `posting_eval_settings` | 가중치·커스텀 질문 버전(INSERT 전용) | `version`, `w_expertise`·`w_logic`·`w_attitude`·`w_delivery` 0~100, `w_coding`(코딩을 끈 공고는 NULL, 6.4), `custom_question` 5~500자(1개, X-09), `rubric_version` | CHECK: 합 = 100(ADM-05, AC-21). `UNIQUE(posting_id, version)`, `UNIQUE(id, posting_id)`, `FK(posting_id, company_id)` |
 
 ### 2.3 동의·이력서
 
@@ -95,6 +99,8 @@ erDiagram
 | `interviews` | 지원 건당 1행 = 1회 응시(INT-12) | `question_set_id`, `precheck_media_ok_at`(지원자 신고), `precheck_webrtc_ok_at`(서버 확인, INT-17), `current_question_id`, `current_phase` PRESENTING/ANSWERING/FINALIZING/DECIDING/DONE, `answer_opened_at`, `answer_deadline_at`(서버 시계, INT-06), `presentation_count`, `followups_used` 0~4(6.2), `text_mode_since`(INT-18), `last_heartbeat_at`, `interruption_count` | PK = `application_id`, `FK(application_id, company_id)` |
 | `interview_slots` | 서버 전체 동시 응시 상한(INT-13) | `acquired_at`, `lease_expires_at` | PK = `application_id`. 6절 |
 | `question_bank` | 질문은행(QST-01) | `kind` PERSONALITY/COMPANY/JOB, `job_family`, `company_id`, `text`, `text_norm_hash`, `source` SEED/AI, `usage_count`, `embedding real[]`, `embedding_model`, `is_active` | CHECK: JOB이면 직무 필수 / **`source=AI`이면 `company_id` 필수**(C2). `ux_qbank_exact`(유형·직무·회사·정규화 해시), `ix_qbank_pick` |
+| `interview_schedules` | 기업의 일정(SC-R11, `kind` INTERVIEW/RESULT/INTERNAL)과 메일로 보낸 면접 일정·지원자 응답(SC-A15). 직접 넣은 일정은 `application_id`·`candidate_id`·`status`가 모두 NULL, 메일 일정은 `response_token_hash`(SHA-256) 보유 | `application_id`(지원 삭제 시 함께 삭제), `company_id`, `candidate_id`, `title`, `starts_at`, `place`, `status` PROPOSED/ACCEPTED/RESCHEDULE_REQUESTED | ACCEPTED가 있으면 지원 현황 진행 상태가 '2차 면접 일정 확정'(SC-A09). 마이그레이션 0011. 담당자 쪽 일정 메일 작성 기능은 아직 없음 |
+| `question_examples` | RAG 참고 질문(ai-architecture 6.1). 출제하지 않고 T2·T3 프롬프트 예시로만 사용 | `kind` PERSONALITY/COLLABORATION/COMPANY/JOB/RESUME, `field`, `text`, `text_norm_hash`, `origin`(원본 시트), `embedding vector(1024)`, `embedding_model` | `UNIQUE(kind, text_norm_hash)`, `ix_qexamples_embedding`(HNSW 코사인). 행 적재·임베딩은 `index_question_examples` 작업(마이그레이션 0010은 테이블만) |
 | `question_sets` | 질문 구성 결과 | `settings_id`(어떤 커스텀 질문 버전으로 만들었나), `status` COMPOSING/READY/SUPERSEDED, `composer_version`, `ready_at` | `ux_qset_live`: 지원 건당 COMPOSING·READY 1개 |
 | `interview_questions` | 출제 스냅샷(QST-06) | `seq` 1~10, `role` MAIN/FOLLOWUP, `parent_id`, `slot_type`, `source` BANK/AI/CUSTOM/BANK_FALLBACK, `bank_question_id`, `text`, `grounding`, `answer_limit_sec`, `prompt_version` | CHECK: MAIN ⇔ 부모 없음 / MAIN 60초·FOLLOWUP 45초 / seq별 유형 고정(1~2 인성, 3~4 이력서, 5~6 기업, 7~10 직무, 6.1) / CUSTOM은 JOB 슬롯의 MAIN만. `ux_iq_main`, `ux_iq_followup`(본질문당 꼬리 1), `ux_iq_custom`(세트당 1). 수정·삭제 금지 트리거 |
 | `question_tts_assets` | 사전 합성 TTS 캐시 | `audio_key`, `duration_ms`, `voice_model` | 스냅샷과 분리. 사전 합성은 시작 조건이 아니다(T20) |
@@ -179,7 +185,7 @@ erDiagram
 
 ### 4.3 채용 결정 `DECISION` (PRD 7.3)
 
-UNDECIDED → PASS, UNDECIDED → FAIL, PASS → FAIL, FAIL → PASS. '검토 전'으로 돌아가는 전이는 없다(OQ-28, T24). 결정할 때 `decision_history` 행, `decided_at`·`decided_by`, 첫 결정이면 `first_decided_at`을 같은 트랜잭션에서 쓴다. 결정 칼럼은 담당자 결정 서비스만 바꾼다(P-8, E SC-19).
+UNDECIDED → PASS·FAIL·HOLD, 결정된 세 값 사이의 모든 이동(마이그레이션 0014: HOLD는 담당자 내부 보류, 지원자에게는 미공개). '검토 전'으로 돌아가는 전이는 없다(OQ-28, T24). 결정할 때 `decision_history` 행, `decided_at`·`decided_by`, 첫 결정이면 `first_decided_at`을 같은 트랜잭션에서 쓴다. 결정 칼럼은 담당자 결정 서비스만 바꾼다(P-8, E SC-19).
 
 ### 4.4 공고 상태 (PRD 7.4, `state_transitions` 밖)
 
@@ -387,3 +393,13 @@ FROM next WHERE j.id=next.id RETURNING j.*;
 | P-6 | `interviews.state_version int NOT NULL DEFAULT 0`(턴·상태가 바뀔 때마다 +1) | D의 상태 스냅샷 재동기화(D 4.2 IV-7 `version`). 지금은 `turn_id`+`state`로 대신한다(04 문서) | 0002, 선택 |
 | P-7 | `audit_logs`에 `prev_hash`, `row_hash`, `sealed_at` 추가 + 1분 주기 봉인 작업(P1) | E SC-68. 요청마다 체인을 계산하면 동시 INSERT에서 체인이 갈라진다(B 리뷰 R-15). 감사 보관 기간은 OQ-33 | 0003(P1) |
 | P-8 | 이력서 표준 항목 JSON 키를 이 문서 2.3의 `career`·`certificates`로 통일(C의 T1 출력 `experience`·`certifications`를 변환) | 같은 데이터에 키가 두 벌이면 스냅샷 검증·화면이 갈라진다(B 리뷰 R-20) | 05 문서·추출 코드 |
+
+## 13. 2026-11-02 화면정의서 반영 (마이그레이션 0018~0020)
+
+| 마이그레이션 | 내용 |
+|---|---|
+| 0018 | `recruiter_reports.point_refs`(강점·개선점과 관련 질문 번호) |
+| 0019 | 네 번째 평가 영역을 `specificity`(구체성·관련성)에서 `attitude`(표현 및 태도)로 바꿈: `posting_eval_settings.w_attitude`, `recruiter_reports.score_attitude`, `candidate_feedback.score_attitude`. `answer_evaluations.criterion` 허용값에 `ATTITUDE`를 더하고 옛 `SPECIFICITY` 행은 그대로 둔다. 루브릭 버전은 `rubric-v2` |
+| 0020 | `posting_templates`(회사별 저장 템플릿), `inquiry_threads`·`inquiry_messages`(SC-R15 문의 쪽지. 대화는 한 회사에 속하고 상대는 지원자 또는 운영자) |
+
+화이트보드는 기능에서 뺐다(2026-11-02 결정). 이미 저장된 `whiteboard_*` 열과 파일은 지우지 않고 읽는 코드만 없앴다.

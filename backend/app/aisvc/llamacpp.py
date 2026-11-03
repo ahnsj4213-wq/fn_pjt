@@ -16,7 +16,9 @@ from app.aisvc.ollama import ThinkingLeak
 
 
 class LlamaCppBackend:
-    def __init__(self, base_url: str, *, name: str = "", transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(self, base_url: str, *, name: str = "", transport: httpx.AsyncBaseTransport | None = None,
+                 slot: int | None = None) -> None:
+        self.slot = slot  # llama-server `id_slot`: keep this caller on its own slot (and its prompt cache)
         self.base_url = base_url.rstrip("/")
         self.name = name  # model label for the manifest (EVL-08); the server reports its file too
         self._transport = transport
@@ -27,8 +29,11 @@ class LlamaCppBackend:
     async def chat(self, messages: list[dict], schema: dict, options: dict) -> tuple[str, dict]:
         body = {"messages": messages, "stream": True, "temperature": options.get("temperature", 0.0),
                 "max_tokens": options.get("num_predict", 512), "seed": options.get("seed", 42), "cache_prompt": True,
-                "response_format": {"type": "json_schema", "json_schema": {"name": "output", "schema": schema}},
+                "response_format": {"type": "json_schema",
+                                    "json_schema": {"name": "output", "schema": options.get("grammar_schema") or schema}},
                 "chat_template_kwargs": {"enable_thinking": False}, "stream_options": {"include_usage": True}}
+        if self.slot is not None:
+            body["id_slot"] = self.slot
         parts: list[str] = []
         thinking = False
         usage: dict = {}

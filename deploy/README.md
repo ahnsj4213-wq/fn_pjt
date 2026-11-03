@@ -1,23 +1,18 @@
 # 컨테이너로 전체 실행하기
 
-`docker-compose.yml` 하나로 구성도(ADR-0014)의 모든 컴포넌트를 띄운다.
+`docker-compose.yml` 하나로 모든 컴포넌트를 컨테이너 8개로 띄운다(ADR-0014, 통합 ADR-0015). 컨테이너별 기술 스택: `docs/container-architecture.md`.
 
 | 서비스 | 내용 | 망 | GPU |
 |---|---|---|---|
 | `frontend` | Next.js(:3000). 화면 + `/api` 를 api로 전달 → **http://localhost:8080** | front | |
-| `api` | FastAPI + WebRTC 음성(aiortc). 127.0.0.1:8000, UDP 40000~40019 | front, internal | |
-| `mailer` | Mailpit. 팀 PC는 받은편지함(http://127.0.0.1:8025), 기준 PC는 Gmail로 중계 | internal, egress | |
-| `migrate` | 기동 시 1회 `alembic upgrade head` | internal | |
-| `worker` | Celery: 평가·채점·리포트·메일 작업, 코드 실행 샌드박스 | internal | |
-| `scheduler` | Celery beat: 주기 작업(자동 제출, 보관 삭제, 샌드박스 재점검 등) | internal | |
-| `llm-rt` | llama.cpp, 면접 실시간 LLM(꼬리질문·질문 생성) | internal | ○ |
-| `llm-eval` | llama.cpp, 채점용 LLM(답변 평가·리포트·코드 리뷰) | internal | CPU |
-| `stt` | faster-whisper large-v3-turbo | internal | ○ |
-| `tts` | Supertonic | internal | CPU |
-| `embed` | llama.cpp, BGE-M3 임베딩(질문 중복 검사, pgvector) | internal | CPU |
+| `api` | FastAPI + WebRTC 음성(aiortc). 127.0.0.1:8000, UDP 40000~40019. 뜰 때 먼저 `alembic upgrade head` | front, internal | |
+| `worker` | Celery 워커(평가·채점·리포트·메일, 코드 실행 샌드박스) + Celery beat(자동 제출, 보관 삭제, 샌드박스 재점검 등) | internal | |
 | `postgres` | PostgreSQL 16 + pgvector | internal | |
 | `redis` | Redis 7: 작업 대기줄(Celery)과 화면 실시간 알림(SSE) | internal | |
-| `minio` | 파일 저장(이력서·답변 음성·TTS), 서버 측 암호화 | internal | |
+| `llm-gpu` | llama.cpp, 면접 실시간 LLM(꼬리질문·질문 생성) | internal | ○ |
+| `ai` | 서버 4개: STT faster-whisper large-v3-turbo(:8201, GPU) · TTS Supertonic(:8202) · 채점용 LLM llama.cpp(:8082, CPU. 지금은 쓰이지 않고 채점은 llm-gpu의 슬롯 1을 쓴다, ADR-0014 개정) · BGE-M3 임베딩 llama.cpp(:8083, CPU). 하나가 죽으면 넷이 함께 재시작 | internal | ○ |
+| `mailer` | Mailpit. 팀 PC는 받은편지함(http://127.0.0.1:8025), 기준 PC는 Gmail로 중계 | internal, egress | |
+| `minio` | (선택, 9번째) 파일 저장(이력서·답변 음성·TTS), 서버 측 암호화. `COMPOSE_PROFILES=minio` | internal | |
 
 - `internal` 망은 `internal: true`라 밖으로 나가는 길이 없다. 모델은 `../models` 를 읽기 전용으로만 본다.
 - 코드 실행 샌드박스는 서비스가 아니다. worker가 docker.sock으로 실행마다 `python:3.11-slim` 기반 컨테이너를
@@ -52,7 +47,7 @@
 cd C:\big21\final_test\deploy
 copy .env.example .env
 docker compose up -d --build
-docker compose ps          # llm-rt·stt가 (healthy)가 될 때까지 1~3분
+docker compose ps          # llm-gpu·ai가 (healthy)가 될 때까지 1~3분
 docker compose exec api python scripts/seed_demo.py   # 시연용 회사·담당자·공고(코딩 포함) 1회 생성
 ```
 
@@ -69,8 +64,8 @@ docker compose exec api python scripts/seed_demo.py   # 시연용 회사·담당
 ## 3. 확인
 
 ```powershell
-docker compose ps                                   # 모두 running/healthy, migrate는 Exited (0)
-docker compose logs worker --tail 50                # "sandbox self-test" VERIFIED, 4개 워커 ready
+docker compose ps                                   # 8개 모두 running/healthy
+docker compose logs worker --tail 50                # "sandbox self-test" VERIFIED, 4개 워커 ready, celery beat starting
 docker compose exec redis redis-cli get aihire:sandbox:status   # "sandbox_verified": true
 ..\.venv\Scripts\python ..\backend\scripts\check_container_rtc.py   # 음성(WebRTC) 경로: PASS
 ```
@@ -82,9 +77,10 @@ docker compose exec redis redis-cli get aihire:sandbox:status   # "sandbox_verif
 | 증상 | 원인·조치 |
 |---|---|
 | `could not select device driver "nvidia"` | Docker에서 GPU가 안 보인다. 드라이버·WSL2 확인 |
-| llm-rt·stt가 unhealthy, 로그에 `out of memory` | 트레이 Ollama 등 다른 GPU 프로그램을 끈다. 그래도 모자라면 `.env`에 `LLM_RT_CTX=8192` |
-| llm-rt 로그에 `unknown model architecture` / `failed to load model` | Ollama의 qwen3.5 파일을 이 llama.cpp 버전이 못 읽는다. `LLAMACPP_*_TAG`를 최신으로 올리거나 Hugging Face의 Qwen3.5-4B GGUF(Q4_K_M)를 `models/llm/qwen3.5-4b.gguf`로 둔다 |
-| 면접 시작 시 "AI 서버를 사용할 수 없어…" | llm-rt 또는 stt가 아직 healthy가 아님. `docker compose logs llm-rt stt` |
+| llm-gpu·ai가 unhealthy, 로그에 `out of memory` | 트레이 Ollama 등 다른 GPU 프로그램을 끈다. 그래도 모자라면 `.env`에 `LLM_RT_CTX=8192` |
+| llm-gpu·ai 로그에 `unknown model architecture` / `failed to load model` | Ollama의 qwen3.5 파일을 이 llama.cpp 버전이 못 읽는다. `LLAMACPP_*_TAG`를 최신으로 올리거나 Hugging Face의 Qwen3.5-4B GGUF(Q4_K_M)를 `models/llm/qwen3.5-4b.gguf`로 둔다 |
+| 면접 시작 시 "AI 서버를 사용할 수 없어…" | llm-gpu 또는 ai가 아직 healthy가 아님. `docker compose logs llm-gpu ai` |
+| ai가 자꾸 재시작 | 서버 넷 중 하나가 죽는다. `docker compose logs ai` 에서 `a server exited` 앞줄을 본다 |
 | 장비 점검에서 음성 연결이 계속 실패 | UDP 40000~40019를 다른 프로그램이 쓰거나 방화벽이 막음. `check_container_rtc.py`로 확인 |
 | 코드 [실행]이 "실행 환경을 사용할 수 없습니다" | `docker compose logs worker` 에서 샌드박스 자체 점검 결과 확인 |
 | minio 이미지를 못 받음 | 1절 4번. `MINIO_IMAGE` 지정 또는 `STORAGE_BACKEND=local` + `COMPOSE_PROFILES=` |
@@ -98,7 +94,7 @@ docker compose exec redis redis-cli get aihire:sandbox:status   # "sandbox_verif
 
 ## 6. GPU·모델 없이 구성만 점검 (CI·클라우드)
 
-AI는 앱 안의 가짜 AI(`AI_MODE=fake`), 파일은 로컬 볼륨. llm-rt·llm-eval·stt·tts·embed·minio는 띄우지 않는다.
+AI는 앱 안의 가짜 AI(`AI_MODE=fake`), 파일은 로컬 볼륨. llm-gpu·ai·minio는 띄우지 않는다.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.verify.yml up -d --build --wait

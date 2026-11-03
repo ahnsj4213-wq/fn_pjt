@@ -6,6 +6,7 @@
 import type { PostingPublic } from '@/api/common/postings';
 import type { ResumeContent } from '@/api/common/resume';
 import { apiFetch } from '@/shared/http/client';
+import { uploadFile } from '@/shared/http/upload';
 
 const enc = encodeURIComponent;
 
@@ -15,15 +16,26 @@ export type PostingStatus = 'DRAFT' | 'OPEN' | 'CLOSED';
 export interface Weights {
   expertise: number;
   logic: number;
-  specificity: number;
+  attitude: number;
   delivery: number;
   coding?: number | null;
+}
+
+export type QuestionArea = 'PERSONALITY' | 'MOTIVATION' | 'JOB_SKILL' | 'PROJECT' | 'COLLABORATION';
+export interface PlanSlot { area: QuestionArea; text: string | null }
+export interface InterviewSettings {
+  question_plan: PlanSlot[] | null;
+  think_sec: 5 | 10 | 20 | 30;
+  answer_sec: 30 | 60 | 90 | 120;
+  followup_max: number;
 }
 
 export interface EvalSettings {
   version: number;
   weights: Weights;
   custom_question: string | null;
+  interview: InterviewSettings;
+  question_areas: QuestionArea[];
   rubric_version: string;
   locked: boolean;
   coding_enabled: boolean;
@@ -37,6 +49,11 @@ export interface PostingSummary {
   effective_status: PostingStatus;
   deadline_date: string | null;
   headcount: number | null;
+  experience_level: string | null;
+  employment_type: string | null;
+  location: string | null;
+  view_count: number;
+  hidden: boolean;
   coding_enabled: boolean;
   applicant_count: number;
   completed_count: number;
@@ -63,6 +80,9 @@ export interface PostingIn {
   preferred?: string | null;
   duties?: string | null;
   headcount?: number | null;
+  experience_level?: string | null;
+  employment_type?: string | null;
+  location?: string | null;
   deadline_date?: string | null;
   coding_enabled: boolean;
   coding_problem_id?: string | null;
@@ -78,7 +98,27 @@ export interface CodingProblem {
   public_examples: { input: string; output: string }[];
 }
 
-export const fetchDashboard = () => apiFetch<{ open_postings: number; awaiting_review: number }>('/api/recruiter/dashboard');
+export interface DashboardPosting {
+  id: string;
+  title: string | null;
+  job_family: string | null;
+  status: PostingStatus;
+  views: number;
+  applicants: number;
+  avg_score: string | null;
+}
+
+export interface Dashboard {
+  open_postings: number;
+  awaiting_review: number;
+  applicants_this_month: number;
+  applicants_last_month: number;
+  views_total: number;
+  completion_rate: number | null;
+  postings: DashboardPosting[];
+}
+
+export const fetchDashboard = () => apiFetch<Dashboard>('/api/recruiter/dashboard');
 export const fetchRecruiterPostings = (status?: PostingStatus) =>
   apiFetch<PostingSummary[]>(`/api/recruiter/postings${status ? `?status=${status}` : ''}`);
 export const fetchRecruiterPosting = (id: string) => apiFetch<PostingDetail>(`/api/recruiter/postings/${enc(id)}`);
@@ -90,7 +130,7 @@ export const closePosting = (id: string) => apiFetch<PostingDetail>(`/api/recrui
 export const deletePosting = (id: string) => apiFetch<void>(`/api/recruiter/postings/${enc(id)}`, { method: 'DELETE' });
 export const fetchPostingPreview = (id: string) => apiFetch<PostingPublic>(`/api/recruiter/postings/${enc(id)}/preview`);
 export const fetchEvalSettings = (id: string) => apiFetch<EvalSettings>(`/api/recruiter/postings/${enc(id)}/evaluation-settings`);
-export const saveEvalSettings = (id: string, body: { weights: Weights; custom_question: string | null }) =>
+export const saveEvalSettings = (id: string, body: { weights: Weights; custom_question?: string | null; interview?: InterviewSettings; question_areas?: QuestionArea[] }) =>
   apiFetch<EvalSettings>(`/api/recruiter/postings/${enc(id)}/evaluation-settings`, { method: 'PUT', body });
 export const resetEvalSettings = (id: string) =>
   apiFetch<EvalSettings>(`/api/recruiter/postings/${enc(id)}/evaluation-settings/reset`, { method: 'POST' });
@@ -98,7 +138,7 @@ export const fetchCodingProblems = () => apiFetch<CodingProblem[]>('/api/recruit
 
 // ---- applications (ADM-02~08, RES-08, RPT-02) ----
 export type EvalStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'ON_HOLD';
-export type Decision = 'UNDECIDED' | 'PASS' | 'FAIL';
+export type Decision = 'UNDECIDED' | 'PASS' | 'HOLD' | 'FAIL';
 
 export interface ApplicationRow {
   id: string;
@@ -109,6 +149,7 @@ export interface ApplicationRow {
   answered_main_count: number;
   eval_status: EvalStatus | null;
   total_score: string | null;
+  ai_reference: 'PASS' | 'HOLD' | 'FAIL' | null;
   decision: Decision;
 }
 
@@ -137,6 +178,7 @@ export interface ApplicationDetail {
   decision: Decision;
   decision_version: number;
   answered_main_count: number;
+  main_count: number | null;
   text_mode_used: boolean;
   can_decide: boolean;
   can_re_evaluate: boolean;
@@ -144,7 +186,7 @@ export interface ApplicationDetail {
   submitted_at: string | null;
 }
 
-export type CriterionKey = 'EXPERTISE' | 'LOGIC' | 'SPECIFICITY' | 'DELIVERY';
+export type CriterionKey = 'EXPERTISE' | 'LOGIC' | 'ATTITUDE' | 'DELIVERY';
 
 export interface ReportItem {
   key: CriterionKey;
@@ -180,6 +222,7 @@ export interface ReportQuestion {
 export interface RecruiterReport {
   application_id: string;
   total_score: string;
+  ai_reference: 'PASS' | 'HOLD' | 'FAIL' | null;
   criteria: { key: CriterionKey; score: string; weight: number; insufficient: number }[];
   coding: { score: string; weight: number | null } | null;
   insufficient_count: number;
@@ -245,7 +288,7 @@ export const fetchApplicationResume = (id: string) => apiFetch<{ snapshot: Resum
 export const resumeFileUrl = (id: string) => `${app(id)}/resume-file`;
 export const fetchReport = (id: string) => apiFetch<RecruiterReport>(`${app(id)}/report`);
 export const fetchCodingResult = (id: string) => apiFetch<CodingResult>(`${app(id)}/coding-result`);
-export const saveDecision = (id: string, body: { decision: 'PASS' | 'FAIL'; expected_version: number }) =>
+export const saveDecision = (id: string, body: { decision: 'PASS' | 'HOLD' | 'FAIL'; expected_version: number }) =>
   apiFetch<{ decision: Decision; version: number; decided_at: string }>(`${app(id)}/decision`, { method: 'POST', body });
 export const fetchDecisionHistory = (id: string) => apiFetch<DecisionHistoryRow[]>(`${app(id)}/decision-history`);
 export const reEvaluate = (id: string) => apiFetch<{ eval_status: 'PENDING' }>(`${app(id)}/re-evaluate`, { method: 'POST' });
@@ -262,3 +305,65 @@ export function fetchStats(from?: string, to?: string): Promise<Stats> {
   const qs = sp.toString();
   return apiFetch<Stats>(`/api/recruiter/stats${qs ? `?${qs}` : ''}`);
 }
+
+// ---- schedule and mail (SC-R11, SC-R14) ----
+export type EntryKind = 'DEADLINE' | 'INTERVIEW' | 'RESULT' | 'INTERNAL';
+export interface ScheduleEntry {
+  id: string;
+  starts_at: string;
+  kind: EntryKind;
+  content: string;
+  place: string | null;
+  auto: boolean;
+  editable: boolean;
+  status: 'PROPOSED' | 'ACCEPTED' | 'RESCHEDULE_REQUESTED' | null;
+  application_id: string | null;
+  candidate_name: string | null;
+}
+
+export interface EntryIn {
+  starts_at: string;
+  kind: Exclude<EntryKind, 'DEADLINE'>;
+  content: string;
+  place?: string | null;
+}
+
+export const fetchSchedule = (month: string) => apiFetch<ScheduleEntry[]>(`/api/recruiter/schedule?month=${enc(month)}`);
+export const fetchUpcoming = (limit = 4) => apiFetch<ScheduleEntry[]>(`/api/recruiter/schedule/upcoming?limit=${limit}`);
+export const addScheduleEntry = (body: EntryIn) => apiFetch<ScheduleEntry>('/api/recruiter/schedule', { method: 'POST', body });
+export const updateScheduleEntry = (id: string, body: EntryIn) =>
+  apiFetch<ScheduleEntry>(`/api/recruiter/schedule/${enc(id)}`, { method: 'PUT', body });
+export const deleteScheduleEntry = (id: string) => apiFetch<void>(`/api/recruiter/schedule/${enc(id)}`, { method: 'DELETE' });
+
+export interface MailIn {
+  kind: 'INTERVIEW' | 'RESULT' | 'FREE';
+  subject: string;
+  body: string;
+  starts_at?: string;
+  place?: string | null;
+}
+export const sendApplicantMail = (applicationId: string, body: MailIn) =>
+  apiFetch<{ mail_id: string; schedule_id: string | null }>(`/api/recruiter/applications/${enc(applicationId)}/mail`, { method: 'POST', body });
+
+// ---- SC-R05 템플릿 불러오기 ----
+export interface PostingTemplateIn {
+  name: string; job_family: string | null; experience_level: string | null; employment_type: string | null;
+  duties: string | null; requirements: string | null; preferred: string | null;
+}
+export interface PostingTemplate extends PostingTemplateIn { id: string; created_at: string }
+export const fetchPostingTemplates = () => apiFetch<PostingTemplate[]>('/api/recruiter/posting-templates');
+export const savePostingTemplate = (body: PostingTemplateIn) =>
+  apiFetch<PostingTemplate>('/api/recruiter/posting-templates', { method: 'POST', body });
+export const deletePostingTemplate = (id: string) => apiFetch<void>(`/api/recruiter/posting-templates/${enc(id)}`, { method: 'DELETE' });
+export interface ImportedPosting { title: string | null; duties: string | null; requirements: string | null; preferred: string | null; file_name: string }
+export const importPostingFile = (file: File) => uploadFile<ImportedPosting>('/api/recruiter/postings/import-file', file);
+
+// ---- SC-R15 문의 쪽지 ----
+export interface InquiryThread { id: string; kind: 'APPLICANT' | 'OPERATOR'; sender: string; subject: string; last_at: string; unread: boolean }
+export interface InquiryMessage { id: string; mine: boolean; sender: string; body: string; created_at: string }
+export interface InquiryDetail { id: string; kind: 'APPLICANT' | 'OPERATOR'; sender: string; subject: string; messages: InquiryMessage[] }
+export const fetchInquiries = () => apiFetch<InquiryThread[]>('/api/recruiter/inquiries');
+export const fetchInquiryUnread = () => apiFetch<{ unread: number }>('/api/recruiter/inquiries/unread-count');
+export const fetchInquiry = (id: string) => apiFetch<InquiryDetail>(`/api/recruiter/inquiries/${enc(id)}`);
+export const replyInquiry = (id: string, body: string) =>
+  apiFetch<InquiryDetail>(`/api/recruiter/inquiries/${enc(id)}/messages`, { method: 'POST', body: { body } });

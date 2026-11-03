@@ -12,7 +12,15 @@ interface Envelope<T extends string> {
 
 export type ServerEvent =
   | (Envelope<'hello'> & { session_id: string; purpose: 'precheck' | 'interview'; resume: { main_no: number; is_followup: boolean } | null })
-  | (Envelope<'question'> & { main_no: number; is_followup: boolean; text: string; audio: 'track' | 'none'; limit_sec: 60 | 45; presentation_no: number })
+  | (Envelope<'question'> & {
+    main_no: number; main_count: number; is_followup: boolean; area: string; text: string; audio: 'track' | 'none';
+    limit_sec: number; think_sec: number; answer_mode: 'SPEECH' | 'CODE';
+    presentation_no: number;
+  })
+  | (Envelope<'thinking'> & { think_until: string; replay_left: number })
+  | Envelope<'question_replay'>
+  | (Envelope<'interjected'> & { text: string; audio: 'track' | 'none' })
+  | (Envelope<'deadline_moved'> & { deadline_at: string; warn_at: string })
   | (Envelope<'tts_end'> & { played: boolean })
   | (Envelope<'answer_opened'> & { opened_at: string; deadline_at: string; warn_at: string; limit_sec: number })
   | (Envelope<'answer_warn'> & { remaining_sec: number })
@@ -30,7 +38,7 @@ export type ServerEvent =
 export type ServerEventType = ServerEvent['type'];
 
 const KNOWN = new Set<string>([
-  'hello', 'question', 'tts_end', 'answer_opened', 'answer_warn', 'caption_segment', 'answer_finalized', 'processing',
+  'hello', 'question', 'thinking', 'question_replay', 'interjected', 'deadline_moved', 'tts_end', 'answer_opened', 'answer_warn', 'caption_segment', 'answer_finalized', 'processing',
   'interview_completed', 'status_changed', 'session_superseded', 'precheck_listen', 'precheck_result', 'error', 'pong',
 ]);
 

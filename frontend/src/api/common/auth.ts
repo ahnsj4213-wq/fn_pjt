@@ -1,7 +1,8 @@
 /** Auth API (backend app/auth/router.py). Shared by both roles. */
 import { ApiError, apiFetch, setCsrfToken } from '@/shared/http/client';
+import { uploadFile } from '@/shared/http/upload';
 
-export type Role = 'CANDIDATE' | 'RECRUITER';
+export type Role = 'CANDIDATE' | 'RECRUITER' | 'OPERATOR';
 
 export interface SessionUser {
   id: string;
@@ -16,13 +17,16 @@ export interface SessionOut {
   csrf_token: string;
 }
 
-/** Exactly these five fields: no birth date or gender (USR-02, AC-01; backend extra="forbid"). */
+/** SC-A01. Birth date and gender stay on the account (backend never puts them in AI inputs). */
 export interface SignupIn {
   name: string;
+  birth_date: string;
   email: string;
   password: string;
   password_confirm: string;
+  gender: 'M' | 'F';
   phone: string;
+  terms_agreed: boolean;
 }
 
 export interface LoginIn {
@@ -63,3 +67,53 @@ export async function logout(): Promise<void> {
     setCsrfToken(null);
   }
 }
+
+/** SC-A12: masked addresses such as jiw***@gmail.com. */
+export function findId(body: { name: string; phone: string }): Promise<{ emails: string[] }> {
+  return apiFetch<{ emails: string[] }>('/api/auth/find-id', { method: 'POST', body, authRedirect: false });
+}
+
+/** Same answer whether or not the address exists. */
+export function requestPasswordReset(email: string): Promise<{ message: string }> {
+  return apiFetch<{ message: string }>('/api/auth/password-reset', { method: 'POST', body: { email }, authRedirect: false });
+}
+
+export function confirmPasswordReset(body: { token: string; password: string; password_confirm: string }): Promise<void> {
+  return apiFetch<void>('/api/auth/password-reset/confirm', { method: 'POST', body, authRedirect: false });
+}
+
+// ---- 기업회원 가입 (SC-R01) ----
+export interface CompanySignupIn {
+  company_name: string;
+  biz_no: string;
+  name: string;
+  email: string;
+  code: string;
+  password: string;
+  password_confirm: string;
+}
+
+export interface CompanyInfo {
+  id: string;
+  name: string;
+  biz_no: string | null;
+  verification: 'APPROVED' | 'PENDING' | 'REJECTED';
+  evidence_name: string | null;
+  reject_reason: string | null;
+  suspended: boolean;
+}
+
+/** Sends the 6-digit code; `free_mail` tells whether the address is a personal mail service (needs a document). */
+export const sendCompanyCode = (email: string) =>
+  apiFetch<{ free_mail: boolean; expires_in_sec: number }>('/api/auth/company-signup/code', {
+    method: 'POST', body: { email }, authRedirect: false });
+
+export async function companySignup(body: CompanySignupIn): Promise<SessionOut> {
+  const s = await apiFetch<SessionOut>('/api/auth/company-signup', { method: 'POST', body, authRedirect: false });
+  setCsrfToken(s.csrf_token);
+  return s;
+}
+
+export const fetchCompany = () => apiFetch<CompanyInfo>('/api/recruiter/company');
+
+export const uploadCompanyEvidence = (file: File) => uploadFile<CompanyInfo>('/api/recruiter/company/evidence', file);

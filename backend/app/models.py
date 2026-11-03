@@ -5,11 +5,11 @@ used by the application. Company-owned tables carry `company_id` and are queried
 app.auth.scope helpers (SEC-03).
 """
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text
+from sqlalchemy import BigInteger, Boolean, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -32,6 +32,14 @@ class Company(Base):
     name: Mapped[str] = mapped_column(Text)
     intro: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
+    biz_no: Mapped[str | None] = mapped_column(Text)
+    verification: Mapped[str] = mapped_column(Text, default="APPROVED")  # PENDING blocks posting (SC-R01)
+    verification_method: Mapped[str | None] = mapped_column(Text)
+    evidence_key: Mapped[str | None] = mapped_column(Text)
+    evidence_name: Mapped[str | None] = mapped_column(Text)
+    verified_at: Mapped[datetime | None] = mapped_column(TS)
+    reject_reason: Mapped[str | None] = mapped_column(Text)
+    suspended_at: Mapped[datetime | None] = mapped_column(TS)  # SC-O02
 
 
 class User(Base):
@@ -43,6 +51,9 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(Text)
     name: Mapped[str | None] = mapped_column(Text)
     phone: Mapped[str | None] = mapped_column(Text)
+    birth_date: Mapped[date | None] = mapped_column(Date)  # account only: never copied into AI inputs (SC-A01)
+    gender: Mapped[str | None] = mapped_column(Text)
+    terms_agreed_at: Mapped[datetime | None] = mapped_column(TS)
     status: Mapped[str] = mapped_column(Text, default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
     withdrawn_at: Mapped[datetime | None] = mapped_column(TS)
@@ -58,6 +69,25 @@ class Session(Base):
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
     last_seen_at: Mapped[datetime] = mapped_column(TS)
     expires_at: Mapped[datetime] = mapped_column(TS)
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    expires_at: Mapped[datetime] = mapped_column(TS)
+    used_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class SignupCode(Base):
+    __tablename__ = "signup_codes"
+    id: Mapped[uuid.UUID] = _pk()
+    email: Mapped[str] = mapped_column(Text)
+    code_hash: Mapped[bytes] = mapped_column(LargeBinary)
+    expires_at: Mapped[datetime] = mapped_column(TS)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    used_at: Mapped[datetime | None] = mapped_column(TS)
+    created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
 
 
 class AuthThrottle(Base):
@@ -100,6 +130,12 @@ class JobPosting(Base):
     preferred: Mapped[str | None] = mapped_column(Text)
     duties: Mapped[str | None] = mapped_column(Text)
     headcount: Mapped[int | None] = mapped_column(Integer)
+    experience_level: Mapped[str | None] = mapped_column(Text)
+    employment_type: Mapped[str | None] = mapped_column(Text)
+    location: Mapped[str | None] = mapped_column(Text)
+    image_key: Mapped[str | None] = mapped_column(Text)
+    view_count: Mapped[int] = mapped_column(Integer, default=0)
+    question_areas: Mapped[list | None] = mapped_column(JSONB)
     deadline_at: Mapped[datetime | None] = mapped_column(TS)
     coding_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     coding_problem_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("coding_problems.id"))
@@ -111,6 +147,8 @@ class JobPosting(Base):
     closed_at: Mapped[datetime | None] = mapped_column(TS)
     close_reason: Mapped[str | None] = mapped_column(Text)
     deleted_at: Mapped[datetime | None] = mapped_column(TS)
+    hidden_at: Mapped[datetime | None] = mapped_column(TS)  # SC-O02
+    hidden_by: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
     updated_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
@@ -125,16 +163,20 @@ class PostingEvalSettings(Base):
     version: Mapped[int] = mapped_column(Integer)
     w_expertise: Mapped[int] = mapped_column(SmallInteger)
     w_logic: Mapped[int] = mapped_column(SmallInteger)
-    w_specificity: Mapped[int] = mapped_column(SmallInteger)
+    w_attitude: Mapped[int] = mapped_column(SmallInteger)
     w_delivery: Mapped[int] = mapped_column(SmallInteger)
     w_coding: Mapped[int | None] = mapped_column(SmallInteger)
     custom_question: Mapped[str | None] = mapped_column(Text)
+    question_plan: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))  # None is SQL NULL, not JSON null (CHECK)
+    think_sec: Mapped[int] = mapped_column(SmallInteger, default=10)
+    answer_sec: Mapped[int] = mapped_column(SmallInteger, default=60)
+    followup_max: Mapped[int] = mapped_column(SmallInteger, default=2)
     rubric_version: Mapped[str] = mapped_column(Text)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
 
     def weights(self) -> dict[str, int]:
-        w = {"expertise": self.w_expertise, "logic": self.w_logic, "specificity": self.w_specificity,
+        w = {"expertise": self.w_expertise, "logic": self.w_logic, "attitude": self.w_attitude,
              "delivery": self.w_delivery}
         if self.w_coding is not None:
             w["coding"] = self.w_coding
@@ -174,6 +216,10 @@ class ResumeFile(Base):
     extracted_text: Mapped[str | None] = mapped_column(Text)
     extraction_status: Mapped[str] = mapped_column(Text, default="PENDING")
     extracted_fields: Mapped[dict | None] = mapped_column(JSONB)
+    ocr_pages: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))  # RES-04: pages read by OCR in the job
+    extraction_method: Mapped[str | None] = mapped_column(Text)  # TEXT | OCR
+    ocr_confidence: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
+    low_conf_fields: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
 
 
@@ -202,6 +248,7 @@ class Application(Base):
     decision_status: Mapped[str] = mapped_column(Text, default="UNDECIDED")
     eval_settings_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     answered_main_count: Mapped[int] = mapped_column(SmallInteger, default=0)
+    share_result: Mapped[bool] = mapped_column(Boolean, default=True)
     interrupted_from: Mapped[str | None] = mapped_column(Text)
     applied_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
     interview_started_at: Mapped[datetime | None] = mapped_column(TS)
@@ -232,6 +279,7 @@ class Interview(Base):
     text_mode_since: Mapped[datetime | None] = mapped_column(TS)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(TS)
     interruption_count: Mapped[int] = mapped_column(SmallInteger, default=0)
+    gaze_warning_count: Mapped[int] = mapped_column(SmallInteger, default=0)
     started_at: Mapped[datetime | None] = mapped_column(TS)
     ended_at: Mapped[datetime | None] = mapped_column(TS)
 
@@ -259,6 +307,66 @@ class QuestionBank(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class InterviewSchedule(Base):
+    """SC-A15: an interview date the company sent by mail, with the candidate's answer (migration 0011)."""
+    __tablename__ = "interview_schedules"
+    id: Mapped[uuid.UUID] = _pk()
+    application_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("applications.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    candidate_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    title: Mapped[str] = mapped_column(Text)
+    starts_at: Mapped[datetime] = mapped_column(TS)
+    place: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(Text)  # NULL for the company's own entries (SC-R11, migration 0016)
+    kind: Mapped[str] = mapped_column(Text, default="INTERVIEW")
+    response_token_hash: Mapped[bytes | None] = mapped_column(LargeBinary)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
+
+
+class RecruiterMail(Base):
+    """SC-R14: a mail a recruiter sent from an applicant's page (migration 0016)."""
+    __tablename__ = "recruiter_mails"
+    id: Mapped[uuid.UUID] = _pk()
+    application_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("applications.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    sender_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    kind: Mapped[str] = mapped_column(Text)
+    subject: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
+
+
+class Notification(Base):
+    """SC-R12: one event of a company's notification inbox (migration 0017)."""
+    __tablename__ = "notifications"
+    id: Mapped[uuid.UUID] = _pk()
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    kind: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text)
+    dedupe_key: Mapped[str] = mapped_column(Text)
+    application_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    posting_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    done_text: Mapped[str | None] = mapped_column(Text)
+    read_at: Mapped[datetime | None] = mapped_column(TS)
+    created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
+
+
+class QuestionExample(Base):
+    """RAG reference questions (migration 0010): shown to T2/T3 as examples, never asked as they are."""
+    __tablename__ = "question_examples"
+    id: Mapped[uuid.UUID] = _pk()
+    kind: Mapped[str] = mapped_column(Text)
+    field: Mapped[str | None] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text)
+    text_norm_hash: Mapped[bytes] = mapped_column(LargeBinary)
+    origin: Mapped[str | None] = mapped_column(Text)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))
+    embedding_model: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
 class QuestionSet(Base):
     __tablename__ = "question_sets"
     id: Mapped[uuid.UUID] = _pk()
@@ -267,6 +375,8 @@ class QuestionSet(Base):
     settings_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     status: Mapped[str] = mapped_column(Text)
     composer_version: Mapped[str] = mapped_column(Text)
+    main_count: Mapped[int] = mapped_column(SmallInteger, default=10)
+    followup_max: Mapped[int] = mapped_column(SmallInteger, default=4)
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
     ready_at: Mapped[datetime | None] = mapped_column(TS)
 
@@ -286,6 +396,9 @@ class InterviewQuestion(Base):
     text: Mapped[str] = mapped_column(Text)
     grounding: Mapped[dict | None] = mapped_column(JSONB)
     answer_limit_sec: Mapped[int] = mapped_column(SmallInteger)
+    answer_mode: Mapped[str] = mapped_column(Text, default="SPEECH")
+    think_sec: Mapped[int] = mapped_column(SmallInteger, default=0)
+    whiteboard_optional: Mapped[bool] = mapped_column(Boolean, default=False)
     prompt_version: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
 
@@ -312,6 +425,12 @@ class InterviewTurn(Base):
     deadline_at: Mapped[datetime | None] = mapped_column(TS)
     closed_at: Mapped[datetime | None] = mapped_column(TS)
     end_reason: Mapped[str | None] = mapped_column(Text)
+    think_until: Mapped[datetime | None] = mapped_column(TS)
+    replayed_at: Mapped[datetime | None] = mapped_column(TS)
+    interjected_at: Mapped[datetime | None] = mapped_column(TS)
+    code_text: Mapped[str | None] = mapped_column(Text)
+    code_language: Mapped[str | None] = mapped_column(Text)
+    whiteboard_key: Mapped[str | None] = mapped_column(Text)
 
 
 class InterviewAnswer(Base):
@@ -333,6 +452,10 @@ class InterviewAnswer(Base):
     opened_at: Mapped[datetime] = mapped_column(TS)
     confirmed_at: Mapped[datetime] = mapped_column(TS)
     reask_count: Mapped[int] = mapped_column(SmallInteger, default=0)
+    code_text: Mapped[str | None] = mapped_column(Text)
+    code_language: Mapped[str | None] = mapped_column(Text)
+    whiteboard_key: Mapped[str | None] = mapped_column(Text)
+    interjected: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class FollowupDecision(Base):
@@ -458,7 +581,7 @@ class RecruiterReport(Base):
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     score_expertise: Mapped[Decimal] = mapped_column(Numeric(5, 2))
     score_logic: Mapped[Decimal] = mapped_column(Numeric(5, 2))
-    score_specificity: Mapped[Decimal] = mapped_column(Numeric(5, 2))
+    score_attitude: Mapped[Decimal] = mapped_column(Numeric(5, 2))
     score_delivery: Mapped[Decimal] = mapped_column(Numeric(5, 2))
     score_coding: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     total_score: Mapped[Decimal] = mapped_column(Numeric(5, 2))
@@ -472,6 +595,7 @@ class RecruiterReport(Base):
     strengths: Mapped[list] = mapped_column(JSONB)
     improvements: Mapped[list] = mapped_column(JSONB)
     code_review: Mapped[dict | None] = mapped_column(JSONB)
+    point_refs: Mapped[dict | None] = mapped_column(JSONB)  # SC-A08: question numbers behind each point
     proctor_summary: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
 
@@ -483,7 +607,7 @@ class CandidateFeedback(Base):
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     score_expertise: Mapped[Decimal] = mapped_column(Numeric(5, 2))
     score_logic: Mapped[Decimal] = mapped_column(Numeric(5, 2))
-    score_specificity: Mapped[Decimal] = mapped_column(Numeric(5, 2))
+    score_attitude: Mapped[Decimal] = mapped_column(Numeric(5, 2))
     score_delivery: Mapped[Decimal] = mapped_column(Numeric(5, 2))
     strengths: Mapped[list] = mapped_column(JSONB)
     improvements: Mapped[list] = mapped_column(JSONB)
@@ -553,3 +677,45 @@ class Job(Base):
     started_at: Mapped[datetime | None] = mapped_column(TS)
     finished_at: Mapped[datetime | None] = mapped_column(TS)
     dispatched_at: Mapped[datetime | None] = mapped_column(TS)  # last hand-off to Redis (ADR-0013)
+
+
+class PostingTemplate(Base):
+    """SC-R05: a posting body the company saved to start new postings from (migration 0020)."""
+    __tablename__ = "posting_templates"
+    id: Mapped[uuid.UUID] = _pk()
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    name: Mapped[str] = mapped_column(Text)
+    job_family: Mapped[str | None] = mapped_column(Text)
+    experience_level: Mapped[str | None] = mapped_column(Text)
+    employment_type: Mapped[str | None] = mapped_column(Text)
+    duties: Mapped[str | None] = mapped_column(Text)
+    requirements: Mapped[str | None] = mapped_column(Text)
+    preferred: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
+
+
+class InquiryThread(Base):
+    """SC-R15: one conversation of a company with an applicant or with the operator (migration 0020)."""
+    __tablename__ = "inquiry_threads"
+    id: Mapped[uuid.UUID] = _pk()
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    kind: Mapped[str] = mapped_column(Text)  # APPLICANT | OPERATOR
+    applicant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    applicant_name: Mapped[str | None] = mapped_column(Text)
+    posting_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    subject: Mapped[str] = mapped_column(Text)
+    last_from: Mapped[str] = mapped_column(Text)  # COMPANY | OTHER
+    last_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
+    company_read_at: Mapped[datetime | None] = mapped_column(TS)
+    created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
+
+
+class InquiryMessage(Base):
+    __tablename__ = "inquiry_messages"
+    id: Mapped[uuid.UUID] = _pk()
+    thread_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("inquiry_threads.id"))
+    from_side: Mapped[str] = mapped_column(Text)  # COMPANY | OTHER
+    sender_label: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")

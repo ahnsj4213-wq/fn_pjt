@@ -41,6 +41,8 @@ async def record_consent(posting_id: UUID, body: ConsentIn, ctx: CandidateCtx = 
     posting = await db.get(JobPosting, posting_id)
     if posting is None or posting.deleted_at is not None or posting.status == "DRAFT":
         raise not_found()
+    if posting.hidden_at is not None:  # SC-O02: taken down by the operator
+        raise not_found()
     if not is_open(posting):
         raise conflict("POSTING_CLOSED", "마감된 공고에는 지원할 수 없습니다.")
     doc = await current_document(db)

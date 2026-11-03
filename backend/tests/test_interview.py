@@ -10,6 +10,7 @@ from aiortc import RTCSessionDescription
 
 from app.core.constants import CAPACITY_FULL_MESSAGE
 from app.voice import registry
+from tests.helpers import candidate
 from tests.test_handlers import drain, q, setup_app
 from tests.test_voice import Client
 
@@ -73,7 +74,8 @@ async def test_ac08_start_needs_media_and_server_verified_webrtc(client, make_cl
 
     assert await start_code() == "PRECHECK_REQUIRED"
     assert (await cand.post(url(app_id, "/precheck/media"), json={"mic_ok": True, "camera_ok": True})).status_code == 204
-    assert await start_code() == "PRECHECK_REQUIRED"  # media alone is not enough: WebRTC must be server-verified
+    # Screen spec SC-A04 (supersedes the PRD AC-08 WebRTC gate): the camera/mic/speaker check is enough to start;
+    # the voice link is verified when the interview session connects. The server utterance check stays optional.
 
     # Interview connection is refused while PREPARING; video m-lines are refused; utterance needs a connection.
     c = Client(app_id)
@@ -96,8 +98,7 @@ async def test_ac08_start_needs_media_and_server_verified_webrtc(client, make_cl
     await connect_http(cand, c, "PRECHECK")
     await c.expect("hello")
     assert (await cand.post(url(app_id, "/precheck/utterance"))).status_code == 202
-    assert (await c.expect("precheck_result"))["reason"] == "NO_SPEECH"  # silence: still blocked
-    assert await start_code() == "PRECHECK_REQUIRED"
+    assert (await c.expect("precheck_result"))["reason"] == "NO_SPEECH"  # silence is reported as such
     voice_ai.stt_texts.append("안녕하세요 들리시나요")
     assert (await cand.post(url(app_id, "/precheck/utterance"))).status_code == 202
     await c.expect("precheck_listen")
@@ -148,13 +149,23 @@ async def test_ac12_followups_at_most_one_per_main_and_four_total(client, make_c
                             json={"text": f"{t['main_no']}번 질문에는 결제 API의 지연을 캐시로 줄인 경험으로 답하겠습니다."})
         assert r.status_code == 202, r.text
     followups = [m for m, fu, _ in seen if fu]
-    assert followups == [1, 2, 3, 4]  # 6.2: one per main, four in total
-    assert [m for m, fu, _ in seen if not fu] == list(range(1, 11))
-    assert all(limit == (45 if fu else 60) for _, fu, limit in seen)
+    assert followups == [1, 2]  # one per main, at most the posting's follow-up count (default 2, SC-R07)
+    assert [m for m, fu, _ in seen if not fu] == list(range(1, 6))
+    # Main 3 is the live-coding question of a 개발 posting (3 min); the others use the posting's 60 s.
+    assert all(limit == (45 if fu else 180 if m == 3 else 60) for m, fu, limit in seen)
     st = (await cand.get(url(app_id, "/interview/state"))).json()
-    assert st["attempt_status"] == "SUBMITTED" and st["answered_main"] == 10
+    assert st["attempt_status"] == "SUBMITTED" and st["answered_main"] == 5
     assert await q("SELECT DISTINCT input_mode FROM interview_answers WHERE application_id=:a", a=app_id) == [("TEXT",)]
-    assert await q("SELECT followups_used FROM interviews WHERE application_id=:a", a=app_id) == [(4,)]
+    assert await q("SELECT followups_used FROM interviews WHERE application_id=:a", a=app_id) == [(2,)]
+    # SC-A07 면접 요약: counts only, owner only.
+    sm = (await cand.get(url(app_id, "/interview/summary"))).json()
+    assert {k: sm[k] for k in ("main_count", "answered_main", "followups_used", "interjections", "gaze_warnings",
+                               "share_result")} == {"main_count": 5, "answered_main": 5, "followups_used": 2,
+                                                    "interjections": 0, "gaze_warnings": 0, "share_result": True}
+    assert sm["duration_sec"] is not None and "score" not in str(sm)
+    stranger = make_client()
+    await candidate(stranger)
+    assert (await stranger.get(url(app_id, "/interview/summary"))).status_code == 404
 
 
 # ── AC-11 (fake clock) ─────────────────────────────────────────────────────────

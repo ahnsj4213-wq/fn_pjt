@@ -4,6 +4,7 @@ import { createMemoryRouter, type RouteObject } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
 import type { SessionOut } from '@/api/common/auth';
 import { SESSION_KEY } from '@/app/session';
+import { ToastProvider } from '@/shared/ui/overlay';
 
 /** Renders routes in a memory router with a fresh QueryClient; optionally seeds the session. */
 export function renderRoutes(routes: RouteObject[], { path = '/', session }: { path?: string; session?: SessionOut | null } = {}) {
@@ -12,7 +13,9 @@ export function renderRoutes(routes: RouteObject[], { path = '/', session }: { p
   const router = createMemoryRouter(routes, { initialEntries: [path] });
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <ToastProvider>
+        <RouterProvider router={router} />
+      </ToastProvider>
     </QueryClientProvider>,
   );
   return { ...utils, router, queryClient };

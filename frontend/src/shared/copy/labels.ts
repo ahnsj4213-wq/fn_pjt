@@ -1,18 +1,18 @@
 /** Korean labels for server enum codes (PRD terms: 6.3, 7.1~7.4). Unknown codes fall back to the code. */
 
 export const CRITERION_LABEL: Record<string, string> = {
-  EXPERTISE: '직무 전문성',
+  EXPERTISE: '전문성',
   LOGIC: '논리성',
-  SPECIFICITY: '구체성·관련성',
+  ATTITUDE: '표현 및 태도',
   DELIVERY: '전달력',
-  expertise: '직무 전문성',
+  expertise: '전문성',
   logic: '논리성',
-  specificity: '구체성·관련성',
+  attitude: '표현 및 태도',
   delivery: '전달력',
   coding: '코딩테스트',
 };
 
-export const CANDIDATE_CRITERIA = ['expertise', 'logic', 'specificity', 'delivery'] as const;
+export const CANDIDATE_CRITERIA = ['logic', 'delivery', 'attitude', 'expertise'] as const;
 
 export const SLOT_LABEL: Record<string, string> = { PERSONALITY: '인성', RESUME: '이력서', COMPANY: '기업', JOB: '직무' };
 

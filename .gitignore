@@ -42,3 +42,6 @@ backend/.e2e-data/
 
 # Local build CA for TLS-inspecting proxies (deploy/.env BUILD_CA_FILE)
 deploy/*.local.pem
+
+# Copied from node_modules by frontend/scripts/copy-vision.mjs
+frontend/public/vision/vision_wasm_*

@@ -34,7 +34,7 @@ class OllamaBackend:
 
     async def chat(self, messages: list[dict], schema: dict, options: dict) -> tuple[str, dict]:
         body = {"model": self.model, "messages": messages, "stream": True, "think": False, "keep_alive": -1,
-                "format": schema, "options": {**options, "num_ctx": self.num_ctx}}
+                "format": schema, "options": {**{k: v for k, v in options.items() if k != "grammar_schema"}, "num_ctx": self.num_ctx}}
         parts: list[str] = []
         thinking = False
         final: dict = {}

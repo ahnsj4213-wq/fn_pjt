@@ -18,6 +18,9 @@ dependencies = [
   "pydantic-settings==2.16.1",   # MIT
   "argon2-cffi==25.1.0",         # MIT
   "pypdf==6.21.2",               # BSD-3
+  "pypdfium2==5.14.0",           # BSD-3 / Apache-2.0; renders scanned resume pages for OCR (RES-04)
+  "pillow==13.0.0",              # MIT-CMU; OCR image handling (deskew, EXIF rotation)
+  "pytesseract==0.3.13",         # Apache-2.0; Tesseract wrapper (binary + kor data in the worker image)
   "python-multipart==0.0.32",    # Apache-2.0
   "httpx==0.28.1",               # BSD-3
   "aiortc==1.15.0",              # BSD-3 (WebRTC)
@@ -47,6 +50,7 @@ dev = [
   "reportlab==5.1.0",            # BSD; builds test PDF fixtures locally
   "moto[server]==5.2.5",           # Apache-2.0; S3 server for storage tests
   "aiosmtpd==1.4.6",             # Apache-2.0; SMTP sink for mail tests
+  "openpyxl==3.1.5",             # MIT; scripts/build_question_examples.py reads the team question spreadsheets
 ]
 
 [tool.setuptools.packages.find]

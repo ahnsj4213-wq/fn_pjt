@@ -35,7 +35,8 @@ async def main(base: str, ip: str) -> int:
     async with httpx.AsyncClient(base_url=base, headers={"Origin": base}, timeout=30) as c:
         email = f"rtc-check-{int(time.time())}@check.example"
         r = await c.post("/api/auth/signup", json={"name": "점검", "email": email, "password": PASSWORD,
-                                                   "password_confirm": PASSWORD, "phone": "010-0000-0000"})
+                                                   "password_confirm": PASSWORD, "phone": "010-0000-0000",
+                                                   "birth_date": "1998-03-14", "gender": "F", "terms_agreed": True})
         r.raise_for_status()
         r = await c.post("/api/auth/login", json={"role": "CANDIDATE", "email": email, "password": PASSWORD})
         r.raise_for_status()

@@ -13,6 +13,20 @@ from app.models import JobPosting
 from app.notify import mail  # noqa: F401  registers send_email
 
 
+@periodic("question_examples_sync")
+async def question_examples_sync() -> None:
+    """RAG corpus: rows of data/question_examples.jsonl not loaded or not embedded yet -> index job (deduped)."""
+    from app.jobs.queue import enqueue
+    from app.questions import rag
+
+    async with session_scope() as db:
+        loaded, pending = (await db.execute(text(
+            "SELECT count(*), count(*) FILTER (WHERE embedding IS NULL OR embedding_model IS DISTINCT FROM :m) "
+            "FROM question_examples"), {"m": get_settings().embed_model})).one()
+        if pending or loaded < len(rag.load_file()):
+            await enqueue(db, "index_question_examples", {}, dedupe_key="index_question_examples")
+
+
 @periodic("job_reaper")
 async def job_reaper() -> None:
     await worker.reap()

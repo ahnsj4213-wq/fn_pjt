@@ -49,7 +49,7 @@ def unit(s: int) -> UnitScores:
 
 def oracle(questions: list[tuple[list[int], list[int] | None]], weights: dict[str, int], coding: Fraction | None):
     """Independent re-implementation of 6.4 with exact fractions; rounding per T18 applied at the end."""
-    keys = ["expertise", "logic", "specificity", "delivery"]
+    keys = ["expertise", "logic", "attitude", "delivery"]
 
     def round2(fr: Fraction) -> Decimal:
         return (Decimal(fr.numerator) / Decimal(fr.denominator)).quantize(Decimal("0.01"), "ROUND_HALF_UP")
@@ -72,7 +72,7 @@ def test_ac17_total_matches_hand_computation():
     r = compute(qs, DEFAULT_WEIGHTS_CODING, coding_score(3, 5))
     # expertise: (3.5 + 1 + 5 + 3*7) / 10 * 20 = 61.00 ; logic: (3.5 + 1 + 1 + 21)/10*20 = 53.00
     assert r.criteria == {"expertise": Decimal("61.00"), "logic": Decimal("53.00"),
-                          "specificity": Decimal("61.00"), "delivery": Decimal("61.00")}
+                          "attitude": Decimal("61.00"), "delivery": Decimal("61.00")}
     assert r.coding == Decimal("60.00")
     # 61*0.30 + 53*0.20 + 61*0.20 + 61*0.10 + 60*0.20 = 18.3 + 10.6 + 12.2 + 6.1 + 12 = 59.20
     assert r.total == Decimal("59.20")
@@ -110,6 +110,6 @@ def test_coding_score_edges():
 def test_weights_must_sum_to_100_and_match_coding():
     qs = [QuestionScores(1, unit(3))]
     with pytest.raises(ValueError):
-        compute(qs, {"expertise": 35, "logic": 25, "specificity": 25, "delivery": 14}, None)
+        compute(qs, {"expertise": 35, "logic": 25, "attitude": 25, "delivery": 14}, None)
     with pytest.raises(ValueError):
         compute(qs, DEFAULT_WEIGHTS_NO_CODING, Decimal("50"))

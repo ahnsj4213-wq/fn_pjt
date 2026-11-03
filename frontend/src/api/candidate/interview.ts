@@ -9,15 +9,7 @@ import type { AttemptStatus } from './index';
 const enc = encodeURIComponent;
 const base = (aid: string) => `/api/candidate/applications/${enc(aid)}`;
 
-export interface InterviewGuide {
-  main_count: number;
-  main_answer_sec: number;
-  followup_answer_sec: number;
-  followup_max_total: number;
-  warning_sec: number;
-  coding: { enabled: boolean; time_limit_min: number | null; language: string | null };
-}
-
+export type AnswerMode = 'SPEECH' | 'CODE';
 export type TurnPhase = 'PRESENTING' | 'ANSWERING' | 'FINALIZING';
 
 export interface TurnView {
@@ -27,7 +19,10 @@ export interface TurnView {
   presentation_no: number;
   phase: TurnPhase;
   question_text: string;
+  area: string;
+  answer_mode: AnswerMode;
   limit_sec: number;
+  think_until: string | null;
   opened_at: string | null;
   deadline_at: string | null;
 }
@@ -40,6 +35,9 @@ export interface InterviewState {
   server_now: string;
   total_main: number;
   answered_main: number;
+  followups_used: number;
+  followup_max: number | null;
+  gaze_warnings: number;
   next_after_interview: 'CODING' | 'DONE';
   warnings: string[];
   turn: TurnView | null;
@@ -54,10 +52,8 @@ export interface AiHealth {
   can_start: boolean;
 }
 
-export const fetchGuide = (aid: string) => apiFetch<InterviewGuide>(`${base(aid)}/interview/guide`);
 export const prepareInterview = (aid: string) =>
   apiFetch<{ attempt_status: AttemptStatus; questions_ready: boolean }>(`${base(aid)}/interview/prepare`, { method: 'POST' });
-export const leavePrepare = (aid: string) => apiFetch<{ attempt_status: AttemptStatus }>(`${base(aid)}/interview/leave-prepare`, { method: 'POST' });
 export const fetchInterviewState = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/state`);
 export const startInterview = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/start`, { method: 'POST' });
 export const resumeInterview = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/resume`, { method: 'POST' });
@@ -65,12 +61,38 @@ export const enterTextMode = (aid: string) => apiFetch<InterviewState>(`${base(a
 export const nextTextQuestion = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/next`, { method: 'POST' });
 export const finishTurn = (aid: string, turnId: string) =>
   apiFetch<{ turn_id: string; state: string }>(`${base(aid)}/interview/turns/${enc(turnId)}/done`, { method: 'POST' });
+/** [질문 다시 듣기] (once) and [바로 답변 시작], only during the think time (SC-A06). */
+export const replayQuestion = (aid: string, turnId: string) =>
+  apiFetch<{ turn_id: string }>(`${base(aid)}/interview/turns/${enc(turnId)}/replay`, { method: 'POST' });
+export const startAnswer = (aid: string, turnId: string) =>
+  apiFetch<{ turn_id: string }>(`${base(aid)}/interview/turns/${enc(turnId)}/start-answer`, { method: 'POST' });
+/** Live coding [코드 제출]: the last submission inside the answer window counts. Never executed. */
+export const submitTurnCode = (aid: string, turnId: string, language: string, code: string) =>
+  apiFetch<{ turn_id: string; saved_at: string }>(`${base(aid)}/interview/turns/${enc(turnId)}/code`,
+    { method: 'PUT', body: { language, code } });
 export const sendTextAnswer = (aid: string, turnId: string, text: string) =>
   apiFetch<{ turn_id: string; state: string }>(`${base(aid)}/interview/turns/${enc(turnId)}/text-answer`,
     { method: 'POST', body: { text } });
 export const heartbeat = (aid: string) => apiFetch<void>(`${base(aid)}/heartbeat`, { method: 'POST' });
-export const reportProctor = (aid: string, kind: 'LEAVE' | 'RETURN', awayMs?: number) =>
-  apiFetch<void>(`${base(aid)}/interview/proctor-events`, { method: 'POST', body: { kind, away_ms: awayMs ?? null } });
+export const reportProctor = (aid: string, kind: 'LEAVE' | 'RETURN' | 'GAZE_AWAY', awayMs?: number) =>
+  apiFetch<{ gaze_warnings: number; suspected: boolean }>(`${base(aid)}/interview/proctor-events`,
+    { method: 'POST', body: { kind, away_ms: awayMs ?? null } });
+
+/** SC-A07 면접 요약: counts only, no scores. */
+export interface InterviewSummary {
+  posting: { title: string; company_name: string };
+  attempt_status: AttemptStatus;
+  eval_status: string | null;
+  main_count: number | null;
+  answered_main: number;
+  followups_used: number;
+  interjections: number;
+  gaze_warnings: number;
+  gaze_suspected: boolean;
+  share_result: boolean;
+  duration_sec: number | null;
+}
+export const fetchInterviewSummary = (aid: string) => apiFetch<InterviewSummary>(`${base(aid)}/interview/summary`);
 export const fetchAiHealth = () => apiFetch<AiHealth>('/api/system/ai-health');
 
 // ---- precheck (INT-01, INT-17) ----

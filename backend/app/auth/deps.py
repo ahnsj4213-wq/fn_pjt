@@ -37,6 +37,11 @@ async def get_principal(request: Request, db: AsyncSession = Depends(get_db)) ->
     return principal
 
 
+async def get_optional_principal(request: Request, db: AsyncSession = Depends(get_db)) -> Principal | None:
+    """Public pages (SC-A02, SC-A03): anonymous visitors get None; a signed-in user is recognised. GET only."""
+    return await load_session(db, request.cookies.get(get_settings().cookie_name))
+
+
 @dataclass(frozen=True)
 class CandidateCtx:
     user_id: UUID

@@ -5,14 +5,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.applications.lifecycle import touch
 from app.auth.deps import CandidateCtx, require_candidate
 from app.auth.scope import get_for_owner
 from app.core.constants import (
-    CAPACITY_FULL_MESSAGE, FOLLOWUP_ANSWER_LIMIT_SEC, MAIN_ANSWER_LIMIT_SEC, MAIN_QUESTION_COUNT, MAX_FOLLOWUPS_TOTAL,
+    CAPACITY_FULL_MESSAGE, CODE_ANSWER_LIMIT_SEC, FOLLOWUP_ANSWER_LIMIT_SEC, FOLLOWUP_THINK_SEC, GAZE_SUSPECT_COUNT,
     WARNING_REMAINING_SEC,
 )
 from app.core.config import get_settings
@@ -21,9 +21,12 @@ from app.core.errors import AppError, conflict
 from app.core.timeutil import utcnow
 from app.interview import infra, slots, turns
 from app.jobs.queue import enqueue
+from app.core.storage import get_storage
 from app.models import (
-    Application, CodingAttempt, Interview, InterviewQuestion, InterviewTurn, JobPosting, ProctorEvent, QuestionSet,
+    Application, CodingAttempt, Company, Interview, InterviewAnswer, InterviewQuestion, InterviewTurn, JobPosting,
+    PostingEvalSettings, ProctorEvent, QuestionSet,
 )
+from app.questions.compose import plan_of
 from app.postings.service import is_open
 
 router = APIRouter(prefix="/api/candidate/applications/{aid}", tags=["candidate"])
@@ -57,13 +60,20 @@ async def interview_state(db: AsyncSession, app: Application) -> dict:
             q = await db.get(InterviewQuestion, turn.question_id)
             turn_view = {"turn_id": turn.id, "main_no": q.seq, "is_followup": q.role == "FOLLOWUP",
                          "presentation_no": turn.presentation_no, "phase": turn.state, "question_text": q.text,
-                         "limit_sec": q.answer_limit_sec, "opened_at": turn.opened_at, "deadline_at": turn.deadline_at}
+                         "area": q.slot_type, "answer_mode": q.answer_mode,
+                         "limit_sec": q.answer_limit_sec, "think_until": turn.think_until,
+                         "opened_at": turn.opened_at, "deadline_at": turn.deadline_at}
+    qset = await db.get(QuestionSet, iv.question_set_id) if iv is not None and iv.question_set_id else None
+    live_coding = await db.scalar(select(func.count()).select_from(InterviewQuestion).where(
+        InterviewQuestion.question_set_id == qset.id, InterviewQuestion.answer_mode == "CODE")) if qset else 0
     coding = await db.get(CodingAttempt, app.id)
     slot_until = await db.scalar(text("SELECT lease_expires_at FROM interview_slots WHERE application_id=:a"), {"a": app.id})
     return {"attempt_status": app.attempt_status, "interrupted_from": app.interrupted_from,
             "mode": "TEXT" if iv is not None and iv.text_mode_since else "VOICE", "server_now": utcnow(),
-            "total_main": MAIN_QUESTION_COUNT, "answered_main": app.answered_main_count,
-            "next_after_interview": "CODING" if posting.coding_enabled else "DONE", "warnings": [],
+            "total_main": qset.main_count if qset else None, "answered_main": app.answered_main_count,
+            "followups_used": iv.followups_used if iv else 0, "followup_max": qset.followup_max if qset else None,
+            "gaze_warnings": iv.gaze_warning_count if iv else 0,
+            "next_after_interview": "CODING" if posting.coding_enabled and not live_coding else "DONE", "warnings": [],
             "turn": turn_view, "slot_grace_until": slot_until if app.attempt_status == "INTERRUPTED" else None,
             "coding_deadline_at": coding.deadline_at if coding else None}
 
@@ -72,11 +82,35 @@ async def interview_state(db: AsyncSession, app: Application) -> dict:
 async def guide(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: AsyncSession = Depends(get_db)) -> dict:
     app = await _own(db, ctx, aid)
     posting = await db.get(JobPosting, app.posting_id)
-    return {"main_count": MAIN_QUESTION_COUNT, "main_answer_sec": MAIN_ANSWER_LIMIT_SEC,
-            "followup_answer_sec": FOLLOWUP_ANSWER_LIMIT_SEC, "followup_max_total": MAX_FOLLOWUPS_TOTAL,
+    st = await db.get(PostingEvalSettings, posting.current_settings_id)
+    return {"main_count": len(plan_of(st)), "main_answer_sec": st.answer_sec, "think_sec": st.think_sec,
+            "followup_answer_sec": FOLLOWUP_ANSWER_LIMIT_SEC, "followup_think_sec": FOLLOWUP_THINK_SEC,
+            "followup_max_total": st.followup_max, "code_answer_sec": CODE_ANSWER_LIMIT_SEC,
             "warning_sec": WARNING_REMAINING_SEC,
             "coding": {"enabled": posting.coding_enabled, "time_limit_min": posting.coding_time_limit_min,
                        "language": posting.coding_language}}
+
+
+@router.get("/interview/summary")
+async def summary(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: AsyncSession = Depends(get_db)) -> dict:
+    """SC-A07 면접 요약: what the candidate did in this attempt. No scores (the report is SC-A08)."""
+    app = await _own(db, ctx, aid)
+    posting = await db.get(JobPosting, app.posting_id)
+    company = await db.get(Company, app.company_id)
+    iv = await db.get(Interview, app.id)
+    qset = await db.get(QuestionSet, iv.question_set_id) if iv is not None and iv.question_set_id else None
+    interjections = await db.scalar(select(func.count()).select_from(InterviewAnswer).where(
+        InterviewAnswer.application_id == app.id, InterviewAnswer.interjected.is_(True)))
+    end = app.submitted_at or (iv.ended_at if iv else None)
+    start = iv.started_at if iv and iv.started_at else app.interview_started_at
+    return {"posting": {"title": posting.title, "company_name": company.name},
+            "attempt_status": app.attempt_status, "eval_status": app.eval_status,
+            "main_count": qset.main_count if qset else None, "answered_main": app.answered_main_count,
+            "followups_used": iv.followups_used if iv else 0, "interjections": interjections or 0,
+            "gaze_warnings": iv.gaze_warning_count if iv else 0,
+            "gaze_suspected": bool(iv and iv.gaze_warning_count >= GAZE_SUSPECT_COUNT),
+            "share_result": app.share_result,
+            "duration_sec": int((end - start).total_seconds()) if start and end else None}
 
 
 @router.post("/interview/prepare")
@@ -151,9 +185,10 @@ async def start(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: A
         raise conflict("POSTING_CLOSED", "마감된 공고는 응시할 수 없습니다.")
     iv = await db.get(Interview, app.id, with_for_update=True)
     now = utcnow()
-    if (iv.precheck_media_ok_at is None or iv.precheck_webrtc_ok_at is None
-            or now - iv.precheck_media_ok_at > PRECHECK_VALID or now - iv.precheck_webrtc_ok_at > PRECHECK_VALID):
-        raise conflict("PRECHECK_REQUIRED", "마이크·카메라·음성 연결 점검을 먼저 통과해야 합니다.")  # AC-08
+    # Screen spec SC-A04: camera, mic and speaker are checked in the browser; the voice connection itself is
+    # verified when the interview session connects (the separate server utterance check is optional now).
+    if iv.precheck_media_ok_at is None or now - iv.precheck_media_ok_at > PRECHECK_VALID:
+        raise conflict("PRECHECK_REQUIRED", "카메라·마이크·스피커 점검을 먼저 마쳐 주십시오.")  # AC-08
     qset = (await db.execute(select(QuestionSet).where(QuestionSet.application_id == app.id,
                                                        QuestionSet.status.in_(["COMPOSING", "READY"])))).scalar_one_or_none()
     if qset is None or qset.status != "READY" or qset.settings_id != posting.current_settings_id:
@@ -281,6 +316,53 @@ async def turn_done(aid: UUID, turn_id: UUID, ctx: CandidateCtx = Depends(requir
     return {"turn_id": turn.id, "state": "FINALIZING"}
 
 
+@router.post("/interview/turns/{turn_id}/replay", status_code=202)
+async def turn_replay(aid: UUID, turn_id: UUID, ctx: CandidateCtx = Depends(require_candidate),
+                      db: AsyncSession = Depends(get_db)) -> dict:
+    """[질문 다시 듣기]: once per question, only during the think time (SC-A06)."""
+    return await _think_command(db, ctx, aid, turn_id, "replay")
+
+
+@router.post("/interview/turns/{turn_id}/start-answer", status_code=202)
+async def turn_start_answer(aid: UUID, turn_id: UUID, ctx: CandidateCtx = Depends(require_candidate),
+                            db: AsyncSession = Depends(get_db)) -> dict:
+    """[바로 답변 시작]: skip the rest of the think time."""
+    return await _think_command(db, ctx, aid, turn_id, "start")
+
+
+async def _think_command(db: AsyncSession, ctx: CandidateCtx, aid: UUID, turn_id: UUID, cmd: str) -> dict:
+    from app.voice.registry import think_command
+
+    app = await _own(db, ctx, aid)
+    turn = await _turn(db, app, turn_id)
+    if turn.state != "PRESENTING" or turn.think_until is None:
+        raise conflict("STATE_CONFLICT", "생각할 시간에만 할 수 있습니다.", state=turn.state)
+    if cmd == "replay" and turn.replayed_at is not None:
+        raise conflict("REPLAY_USED", "질문 다시 듣기는 한 번만 할 수 있습니다.")
+    if not await think_command(app.id, turn.id, cmd):
+        raise conflict("STALE_TURN", "이미 지난 질문에 대한 요청입니다.")
+    return {"turn_id": turn.id}
+
+
+class CodeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: str = Field(pattern="^(python|java|javascript)$")
+    code: str = Field(max_length=20_000)
+
+
+@router.put("/interview/turns/{turn_id}/code")
+async def turn_code(aid: UUID, turn_id: UUID, body: CodeIn, ctx: CandidateCtx = Depends(require_candidate),
+                    db: AsyncSession = Depends(get_db)) -> dict:
+    """Live coding [코드 제출] / [다시 제출]: the last submission inside the answer window counts (SC-A06)."""
+    app = await _own(db, ctx, aid)
+    await _turn(db, app, turn_id)
+    if not await turns.save_code(db, turn_id, body.code, body.language, get_settings().answer_grace_seconds):
+        raise conflict("TURN_CLOSED", "이 질문의 답변 시간이 끝났습니다.")
+    await db.commit()
+    return {"turn_id": turn_id, "saved_at": utcnow()}
+
+
+
 class TextAnswerIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(max_length=2000)
@@ -315,15 +397,22 @@ async def heartbeat(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), d
 
 class ProctorIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: str = Field(pattern="^(LEAVE|RETURN)$")
+    kind: str = Field(pattern="^(LEAVE|RETURN|GAZE_AWAY)$")
     away_ms: int | None = Field(None, ge=0, le=86_400_000)
 
 
-@router.post("/interview/proctor-events", status_code=204)
+@router.post("/interview/proctor-events")
 async def proctor(aid: UUID, body: ProctorIn, ctx: CandidateCtx = Depends(require_candidate),
-                  db: AsyncSession = Depends(get_db)) -> None:
+                  db: AsyncSession = Depends(get_db)) -> dict:
+    """Tab leave/return and gaze-away (browser face detection, SC-A06): warn and record only (X-06)."""
     app = await _own(db, ctx, aid)
-    if app.attempt_status not in ("INTERVIEWING", "CODING"):
-        return  # X-06: warn and record only; never changes the attempt state
+    iv = await db.get(Interview, app.id)
+    if app.attempt_status not in ("INTERVIEWING", "CODING") or iv is None:
+        return {"gaze_warnings": iv.gaze_warning_count if iv else 0, "suspected": False}
     db.add(ProctorEvent(application_id=app.id, kind=body.kind, occurred_at=utcnow(), away_ms=body.away_ms))
+    if body.kind == "GAZE_AWAY":
+        await db.execute(update(Interview).where(Interview.application_id == app.id).values(
+            gaze_warning_count=Interview.gaze_warning_count + 1))
     await db.commit()
+    count = await db.scalar(select(Interview.gaze_warning_count).where(Interview.application_id == app.id))
+    return {"gaze_warnings": count, "suspected": count >= GAZE_SUSPECT_COUNT}

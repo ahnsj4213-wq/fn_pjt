@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerEvent } from '@/media/dcEvents';
-import { initialUi, micOn, reduce, type InterviewUi } from './machine';
+import { initialUi, micOn, progressOf, reduce, type InterviewUi } from './machine';
 
 const env = { v: 1 as const, seq: 1, server_now: '2026-10-28T00:00:00.000Z' };
 const q = (turn: string, extra: Partial<Extract<ServerEvent, { type: 'question' }>> = {}): ServerEvent =>
-  ({ ...env, type: 'question', turn_id: turn, main_no: 3, is_followup: false, text: '질문', audio: 'track', limit_sec: 60,
-    presentation_no: 1, ...extra });
+  ({ ...env, type: 'question', turn_id: turn, main_no: 3, main_count: 5, is_followup: false, area: 'JOB_SKILL', text: '질문',
+    audio: 'track', limit_sec: 60, think_sec: 10, answer_mode: 'SPEECH', presentation_no: 1,
+    ...extra });
 const ev = (e: Record<string, unknown>) => ({ type: 'event' as const, ev: { ...env, ...e } as ServerEvent });
 
 function run(...actions: Parameters<typeof reduce>[1][]): InterviewUi {
@@ -60,5 +61,37 @@ describe('interview machine', () => {
     expect(run(ev({ type: 'session_superseded', turn_id: null })).phase).toBe('SUPERSEDED');
     expect(run(ev({ type: 'error', turn_id: null, code: 'TEXT_MODE_REQUIRED' })).attempts).toBe(99);
     expect(reduce(run(ev({ type: 'session_superseded', turn_id: null })), { type: 'lost' }).phase).toBe('SUPERSEDED');
+  });
+
+  it('think time, one replay, then the answer opens', () => {
+    let s = run({ type: 'event', ev: q('t4') }, ev({ type: 'tts_end', turn_id: 't4', played: true }));
+    s = reduce(s, ev({ type: 'thinking', turn_id: 't4', think_until: '2026-10-28T00:00:10.000Z', replay_left: 1 }));
+    expect(s).toMatchObject({ phase: 'THINKING', replayLeft: 1, replaying: false });
+    expect(micOn(s)).toBe(false);
+    s = reduce(s, ev({ type: 'question_replay', turn_id: 't4' }));
+    expect(s).toMatchObject({ phase: 'THINKING', replaying: true, replayLeft: 0 });
+    s = reduce(s, ev({ type: 'thinking', turn_id: 't4', think_until: '2026-10-28T00:00:12.000Z', replay_left: 0 }));
+    expect(s).toMatchObject({ replaying: false, thinkUntil: Date.parse('2026-10-28T00:00:12.000Z') });
+    s = reduce(s, ev({ type: 'answer_opened', turn_id: 't4', opened_at: env.server_now, deadline_at: env.server_now,
+      warn_at: env.server_now, limit_sec: 60 }));
+    expect(s).toMatchObject({ phase: 'ANSWERING', thinkUntil: null });
+  });
+
+  it('interjection moves the deadline and is counted; follow-ups are counted once per turn', () => {
+    let s = run({ type: 'event', ev: q('t5') }, ev({ type: 'answer_opened', turn_id: 't5', opened_at: env.server_now,
+      deadline_at: '2026-10-28T00:01:00.000Z', warn_at: env.server_now, limit_sec: 60 }));
+    s = reduce(s, ev({ type: 'interjected', turn_id: 't5', text: '핵심만', audio: 'track' }));
+    expect(s).toMatchObject({ interjecting: true, interjections: 1 });
+    s = reduce(s, ev({ type: 'deadline_moved', turn_id: 't5', deadline_at: '2026-10-28T00:00:40.000Z', warn_at: env.server_now }));
+    expect(s).toMatchObject({ interjecting: false, deadlineAt: Date.parse('2026-10-28T00:00:40.000Z') });
+    s = reduce(s, { type: 'event', ev: q('t6', { is_followup: true }) });
+    s = reduce(s, { type: 'event', ev: q('t6', { is_followup: true, presentation_no: 2 }) }); // presented again
+    expect(s.followups).toBe(1);
+  });
+
+  it('progress follows the wireframe split', () => {
+    const s = run({ type: 'event', ev: q('t7', { main_no: 2 }) });
+    expect(progressOf(s, 0)).toBeCloseTo(0.2);
+    expect(progressOf({ ...s, phase: 'ANSWERING' }, 1)).toBeCloseTo((1 + 0.8) / 5);
   });
 });

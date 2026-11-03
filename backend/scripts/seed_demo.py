@@ -38,7 +38,7 @@ async def seed_demo(app, *, title: str, recruiter_email: str = RECRUITER_EMAIL) 
         r = await rc.post("/api/auth/login", json={"role": "RECRUITER", "email": recruiter_email, "password": PASSWORD})
         r.raise_for_status()
         rc.headers["X-CSRF-Token"] = r.json()["csrf_token"]
-        body = {"title": title, "job_family": "BACKEND", "requirements": "Python 웹 서비스 개발 경험",
+        body = {"title": title, "job_family": "DEV", "requirements": "Python 웹 서비스 개발 경험",
                 "preferred": "대용량 트래픽 경험", "duties": "주문·결제 API 개발", "headcount": 1,
                 "deadline_date": (date.today() + timedelta(days=14)).isoformat(), "coding_enabled": True,
                 "coding_problem_id": str(pid), "coding_time_limit_min": 30}

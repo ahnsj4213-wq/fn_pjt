@@ -17,7 +17,7 @@ RESUME = {
 
 
 def posting_body(**over) -> dict:
-    body = {"title": "백엔드 개발자", "job_family": "BACKEND", "requirements": "Python 웹 서비스 개발 경험 3년 이상",
+    body = {"title": "백엔드 개발자", "job_family": "DEV", "requirements": "Python 웹 서비스 개발 경험 3년 이상",
             "preferred": "대용량 트래픽 경험", "duties": "주문·결제 API 개발과 운영", "headcount": 2,
             "deadline_date": (date.today() + timedelta(days=14)).isoformat(), "coding_enabled": False}
     body.update(over)
@@ -45,10 +45,11 @@ async def consent(cc: httpx.AsyncClient, posting_id: str, agree_all: bool = True
     return r.json()
 
 
-async def apply(cc: httpx.AsyncClient, posting_id: str, resume: dict | None = None) -> httpx.Response:
+async def apply(cc: httpx.AsyncClient, posting_id: str, resume: dict | None = None,
+                share_result: bool = True) -> httpx.Response:
     c = await consent(cc, posting_id)
     return await cc.post(f"/api/candidate/postings/{posting_id}/applications",
-                         json={"consent_id": c["consent_id"], "resume": resume or RESUME})
+                         json={"consent_id": c["consent_id"], "resume": resume or RESUME, "share_result": share_result})
 
 
 # Korean-capable system fonts (no downloads). AIHIRE_TEST_FONT overrides; .ttc files use the first face.

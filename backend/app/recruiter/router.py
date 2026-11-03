@@ -1,15 +1,17 @@
 """Recruiter application endpoints (ADM-01~08, RES-08, RPT-02, AC-03, AC-20). Every query is company-scoped.
 Contract: docs/trd/04-api-contract.md 4.2·4.3."""
 from datetime import date
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.applications.lifecycle import register_evaluation
+from app.applications.report import ReportOut, build_report, crit_key, legacy_keys
 from app.audit import audit
 from app.auth.deps import RecruiterCtx, require_recruiter
 from app.auth.scope import get_for_company
@@ -38,13 +40,17 @@ from app.models import (
     User,
 )
 from app.notify.mail import queue_mail
+from app.resumes.router import media_type
 
 router = APIRouter(prefix="/api/recruiter", tags=["recruiter"])
 WITHDRAWN_NAME = "탈퇴한 지원자"  # USR-07: the account is anonymised; the application row stays (OQ-12)
 
 
 async def _app(db: AsyncSession, ctx: RecruiterCtx, aid: UUID, lock: bool = False) -> Application:
-    return await get_for_company(db, Application, aid, ctx.company_id, for_update=lock)
+    a = await get_for_company(db, Application, aid, ctx.company_id, for_update=lock)
+    if not a.share_result:
+        raise not_found()  # practice mode (SC-A05): the company never sees it, not even that it exists
+    return a
 
 
 def _audit(db, ctx: RecruiterCtx, request: Request, action: str, target_type: str, target_id, **detail):
@@ -59,21 +65,49 @@ async def dashboard(ctx: RecruiterCtx = Depends(require_recruiter), db: AsyncSes
         JobPosting.company_id == ctx.company_id, JobPosting.status == "OPEN", JobPosting.deleted_at.is_(None),
         JobPosting.deadline_at > utcnow()))
     awaiting = await db.scalar(select(func.count()).select_from(Application).where(
-        Application.company_id == ctx.company_id, Application.eval_status == "DONE",
+        Application.company_id == ctx.company_id, Application.share_result, Application.eval_status == "DONE",
         Application.decision_status == "UNDECIDED"))
-    return {"open_postings": open_postings, "awaiting_review": awaiting}
+    # SC-R13 numbers. Applicants are applications; this month is Asia/Seoul calendar month.
+    month = func.date_trunc("month", func.timezone("Asia/Seoul", Application.applied_at))
+    now_month = func.date_trunc("month", func.timezone("Asia/Seoul", func.now()))
+    mine = Application.company_id == ctx.company_id
+    this_m = await db.scalar(select(func.count()).select_from(Application).where(mine, month == now_month))
+    last_m = await db.scalar(select(func.count()).select_from(Application).where(mine, month == now_month - text("interval '1 month'")))
+    total = await db.scalar(select(func.count()).select_from(Application).where(mine))
+    finished = await db.scalar(select(func.count()).select_from(Application).where(mine, Application.attempt_status.in_(["SUBMITTED", "EXPIRED"])))
+    rows = (await db.execute(
+        select(JobPosting.id, JobPosting.title, JobPosting.job_family, JobPosting.status, JobPosting.view_count,
+               func.count(Application.id), func.avg(RecruiterReport.total_score))
+        .join(Application, Application.posting_id == JobPosting.id, isouter=True)
+        .join(RecruiterReport, RecruiterReport.application_id == Application.id, isouter=True)
+        .where(JobPosting.company_id == ctx.company_id, JobPosting.deleted_at.is_(None), JobPosting.status != "DRAFT")
+        .group_by(JobPosting.id).order_by(JobPosting.created_at.desc()))).all()
+    postings = [{"id": i, "title": t, "job_family": f, "status": st, "views": v, "applicants": n,
+                 "avg_score": None if avg is None else str(round(avg, 1))} for i, t, f, st, v, n, avg in rows]
+    return {"open_postings": open_postings, "awaiting_review": awaiting, "applicants_this_month": this_m,
+            "applicants_last_month": last_m, "views_total": sum(p["views"] for p in postings),
+            "completion_rate": round(finished * 100 / total) if total else None, "postings": postings}
+
+
+def ai_reference(score) -> str | None:
+    """화면정의서 SC-R09: 참고값 computed from the total by code (never by the model). 75+ 합격, 65~74 보류, else 불합격.
+    Shown to the recruiter only; the decision is the recruiter's own."""
+    if score is None:
+        return None
+    v = float(score)
+    return "PASS" if v >= 75 else "HOLD" if v >= 65 else "FAIL"
 
 
 @router.get("/applications")
 async def list_applications(posting_id: UUID | None = None,
-                            decision: str | None = Query(None, pattern="^(UNDECIDED|PASS|FAIL)$"),
+                            decision: str | None = Query(None, pattern="^(UNDECIDED|PASS|HOLD|FAIL)$"),
                             eval_status: str | None = Query(None, pattern="^(PENDING|RUNNING|DONE|ON_HOLD|NONE)$"),
                             attempt_status: str | None = None,
                             sort: str = Query("applied_at", pattern="^(applied_at|total_score)$"),
                             page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=50),
                             ctx: RecruiterCtx = Depends(require_recruiter),
                             db: AsyncSession = Depends(get_db)) -> dict:
-    conds = [Application.company_id == ctx.company_id]
+    conds = [Application.company_id == ctx.company_id, Application.share_result]
     if posting_id:
         conds.append(Application.posting_id == posting_id)
     if decision:
@@ -95,6 +129,7 @@ async def list_applications(posting_id: UUID | None = None,
               "applied_at": a.applied_at, "attempt_status": a.attempt_status, "answered_main_count": a.answered_main_count,
               "eval_status": a.eval_status,
               "total_score": str(score) if a.eval_status == "DONE" and score is not None else None,  # ADM-02
+              "ai_reference": ai_reference(score) if a.eval_status == "DONE" else None,
               "decision": a.decision_status} for a, name, title, score in rows]
     return {"items": items, "total": total, "page": page, "size": size}
 
@@ -115,11 +150,13 @@ async def get_application(aid: UUID, ctx: RecruiterCtx = Depends(require_recruit
     posting = await db.get(JobPosting, a.posting_id)
     text_used = await db.scalar(select(func.count()).select_from(InterviewAnswer).where(
         InterviewAnswer.application_id == a.id, InterviewAnswer.input_mode == "TEXT"))
+    main_count = await db.scalar(select(func.count()).select_from(InterviewQuestion).where(
+        InterviewQuestion.application_id == a.id, InterviewQuestion.role == "MAIN"))
     return {"id": a.id, "candidate": {"name": cand.name or WITHDRAWN_NAME, "email": cand.email, "phone": cand.phone},
             "posting": {"id": posting.id, "title": posting.title}, "attempt_status": a.attempt_status,
             "interrupted_from": a.interrupted_from, "eval_status": a.eval_status, "decision": a.decision_status,
             "decision_version": await _decision_version(db, a.id), "answered_main_count": a.answered_main_count,
-            "text_mode_used": bool(text_used), "can_decide": _can_decide(a), "can_re_evaluate": a.eval_status == "ON_HOLD",
+            "main_count": main_count or None, "text_mode_used": bool(text_used), "can_decide": _can_decide(a), "can_re_evaluate": a.eval_status == "ON_HOLD",
             "applied_at": a.applied_at, "submitted_at": a.submitted_at, "notice": RECRUITER_AI_NOTICE}
 
 
@@ -142,8 +179,9 @@ async def get_resume_file(aid: UUID, request: Request, ctx: RecruiterCtx = Depen
     await _audit(db, ctx, request, "RESUME_FILE_VIEW", "application", a.id)
     await db.commit()
     # T26: inline view in a sandboxed document, never sniffed or cached
-    return Response(data, media_type="application/pdf", headers={
-        "Content-Disposition": 'inline; filename="resume.pdf"', "Content-Security-Policy": "sandbox",
+    ext = Path(rf.storage_key).suffix
+    return Response(data, media_type=media_type(rf.storage_key), headers={
+        "Content-Disposition": f'inline; filename="resume{ext}"', "Content-Security-Policy": "sandbox",
         "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
 
@@ -156,9 +194,10 @@ async def get_report(aid: UUID, request: Request, ctx: RecruiterCtx = Depends(re
         raise conflict("REPORT_NOT_READY", "평가가 아직 끝나지 않았습니다.")
     run = await db.get(EvaluationRun, rep.run_id)
     settings = await db.get(PostingEvalSettings, run.eval_settings_id)
-    weights = rep.weights
+    weights = legacy_keys(rep.weights)
+    insufficient = legacy_keys(rep.insufficient_by_criterion)
     crit_keys = [("EXPERTISE", "expertise", rep.score_expertise), ("LOGIC", "logic", rep.score_logic),
-                 ("SPECIFICITY", "specificity", rep.score_specificity), ("DELIVERY", "delivery", rep.score_delivery)]
+                 ("ATTITUDE", "attitude", rep.score_attitude), ("DELIVERY", "delivery", rep.score_delivery)]
     questions = await _question_report(db, a.id, rep)
     proctor = await db.execute(select(func.count(), func.coalesce(func.sum(ProctorEvent.away_ms), 0)).where(
         ProctorEvent.application_id == a.id, ProctorEvent.kind == "LEAVE"))
@@ -166,8 +205,8 @@ async def get_report(aid: UUID, request: Request, ctx: RecruiterCtx = Depends(re
     await _audit(db, ctx, request, "REPORT_VIEW", "application", a.id)
     await db.commit()
     return {
-        "application_id": a.id, "total_score": str(rep.total_score),
-        "criteria": [{"key": k, "score": str(v), "weight": weights[w], "insufficient": rep.insufficient_by_criterion.get(w, 0)}
+        "application_id": a.id, "total_score": str(rep.total_score), "ai_reference": ai_reference(rep.total_score),
+        "criteria": [{"key": k, "score": str(v), "weight": weights[w], "insufficient": insufficient.get(w, 0)}
                      for k, w, v in crit_keys],
         "coding": {"score": str(rep.score_coding), "weight": weights.get("coding")} if rep.score_coding is not None else None,
         "insufficient_count": rep.insufficient_count, "no_answer_count": rep.no_answer_count,
@@ -191,7 +230,7 @@ async def _question_report(db: AsyncSession, aid: UUID, rep: RecruiterReport) ->
     fdec = {f.main_question_id: f for f in (await db.execute(select(FollowupDecision).where(
         FollowupDecision.application_id == aid))).scalars()}
     qscores = {q["seq"]: q for q in rep.question_scores}
-    order = ["EXPERTISE", "LOGIC", "SPECIFICITY", "DELIVERY"]
+    order = ["EXPERTISE", "LOGIC", "ATTITUDE", "DELIVERY"]
     out: dict[int, dict] = {}
     for q in qs:
         if q.role == "MAIN":
@@ -206,11 +245,11 @@ async def _question_report(db: AsyncSession, aid: UUID, rep: RecruiterReport) ->
             continue
         if q.role == "MAIN":
             out[q.seq]["reasked"] = ans.reask_count
-        items = sorted(evals.get(ans.id, []), key=lambda e: order.index(e.criterion))
+        items = sorted(evals.get(ans.id, []), key=lambda e: order.index(crit_key(e)))
         out[q.seq]["answers"].append({
             "role": q.role, "input_mode": ans.input_mode, "end_reason": ans.end_reason, "no_answer": ans.is_no_answer,
             "stt_failed": ans.stt_failed, "display_text": ans.eval_text, "transcript": ans.transcript,
-            "items": [{"key": e.criterion, "score": e.score, "evidence": e.evidence_status,
+            "items": [{"key": crit_key(e), "score": e.score, "evidence": e.evidence_status,
                        "insufficient_reason": e.insufficient_reason,
                        "quote": {"text": e.quote, "start": e.quote_start, "end": e.quote_end} if e.quote else None,
                        "comment": e.comment} for e in items]})
@@ -241,7 +280,7 @@ async def coding_result(aid: UUID, ctx: RecruiterCtx = Depends(require_recruiter
 
 class DecisionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    decision: str = Field(pattern="^(PASS|FAIL)$")
+    decision: str = Field(pattern="^(PASS|HOLD|FAIL)$")
     expected_version: int = Field(ge=0)
 
 
@@ -261,8 +300,10 @@ async def decide(aid: UUID, body: DecisionIn, request: Request, ctx: RecruiterCt
                            to_status=body.decision, decided_by=ctx.user_id, decided_at=now))
     await _audit(db, ctx, request, "DECISION_SET", "application", a.id, **{"from": a.decision_status, "to": body.decision})
     a.decision_status, a.decided_at, a.decided_by = body.decision, now, ctx.user_id
-    a.first_decided_at = a.first_decided_at or now
-    await queue_mail(db, "RESULT_RELEASED", a.id)  # every change: the candidate should look again
+    if body.decision != "HOLD":  # the retention clock starts with the first published decision
+        a.first_decided_at = a.first_decided_at or now
+    if body.decision != "HOLD":  # HOLD is internal: nothing is published, so nothing to announce
+        await queue_mail(db, "RESULT_RELEASED", a.id)  # every published change: the candidate should look again
     await db.commit()
     return {"decision": a.decision_status, "version": version + 1, "decided_at": now}
 
@@ -297,6 +338,18 @@ class NoteIn(BaseModel):
 def _note_out(n: RecruiterNote, author_name: str) -> dict:
     return {"id": n.id, "author": {"id": n.author_id, "name": author_name}, "body": n.body,
             "created_at": n.created_at, "updated_at": n.updated_at}
+
+
+class RecruiterReportView(ReportOut):
+    ai_reference: str | None  # PASS | HOLD | FAIL, computed from the total by code; the recruiter's eyes only
+
+
+@router.get("/applications/{aid}/report-view")
+async def report_view(aid: UUID, ctx: RecruiterCtx = Depends(require_recruiter), db: AsyncSession = Depends(get_db)) -> RecruiterReportView:
+    """SC-R10: the same report the applicant sees (SC-A08) plus the AI reference badge."""
+    a = await _app(db, ctx, aid)
+    r = await build_report(db, a)
+    return RecruiterReportView(**r.model_dump(), ai_reference=ai_reference(r.total))
 
 
 @router.get("/applications/{aid}/notes")
@@ -354,7 +407,7 @@ async def stats(from_: str | None = Query(None, alias="from", pattern=r"^\d{4}-\
                 ctx: RecruiterCtx = Depends(require_recruiter), db: AsyncSession = Depends(get_db)) -> dict:
     """ADM-08 (P1): monthly applicants, average total by job family, pass rate over decided applications."""
     month = func.to_char(func.timezone("Asia/Seoul", Application.applied_at), "YYYY-MM")
-    conds = [Application.company_id == ctx.company_id]
+    conds = [Application.company_id == ctx.company_id, Application.share_result]
     if from_:
         conds.append(month >= from_)
     if to:

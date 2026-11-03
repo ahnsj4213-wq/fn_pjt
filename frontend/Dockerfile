@@ -21,6 +21,7 @@ ARG API_ORIGIN=http://api:8000
 ENV API_ORIGIN=${API_ORIGIN}
 COPY --from=build --chown=node:node /src/.next/standalone ./
 COPY --from=build --chown=node:node /src/.next/static ./.next/static
+COPY --from=build --chown=node:node /src/public ./public
 USER node
 EXPOSE 3000
 CMD ["node", "server.js"]

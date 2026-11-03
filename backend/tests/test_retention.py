@@ -64,7 +64,7 @@ async def test_retention_purges_audio_then_content_and_keeps_records(client, mak
     r = await client.post(f"/api/recruiter/applications/{app_id}/decision", json={"decision": "PASS", "expected_version": 0})
     assert r.status_code == 200, r.text
     before = await counts(app_id)
-    assert before["interview_answers"] == 10 and before["recruiter_reports"] == 1 and before["recruiter_notes"] == 1
+    assert before["interview_answers"] == 5 and before["recruiter_reports"] == 1 and before["recruiter_notes"] == 1
     tts_before = (await q("SELECT count(*) FROM question_tts_assets"))[0][0]
     assert tts_before > 0
     now = utcnow()
@@ -120,7 +120,7 @@ async def test_retention_skips_undecided_open_postings_and_active_attempts(clien
     await prepare_and_compose(cand, app_id)  # PREPARING, posting open, no decision: the clock has not started
     c = await purge(utcnow() + timedelta(days=10_000))
     assert (c.audio_apps, c.content_apps) == (0, 0)
-    assert (await q("SELECT count(*) FROM interview_questions WHERE application_id=:a", a=app_id))[0][0] == 10
+    assert (await q("SELECT count(*) FROM interview_questions WHERE application_id=:a", a=app_id))[0][0] == 5
 
 
 async def test_withdrawal_reauth_active_attempt_and_anonymisation(client, make_client):
@@ -164,5 +164,6 @@ async def test_withdrawal_reauth_active_attempt_and_anonymisation(client, make_c
     r = await cand.post("/api/auth/login", json={"role": "CANDIDATE", "email": email, "password": PASSWORD})
     assert r.status_code == 401
     r = await make_client().post("/api/auth/signup", json={"name": "새사람", "email": email, "password": PASSWORD,
-                                                           "password_confirm": PASSWORD, "phone": "010-1111-2222"})
+                                                           "password_confirm": PASSWORD, "phone": "010-1111-2222",
+                                                           "birth_date": "1998-03-14", "gender": "F", "terms_agreed": True})
     assert r.status_code == 201, r.text

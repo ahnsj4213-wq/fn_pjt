@@ -1,12 +1,12 @@
-"""Posting endpoints: recruiter management (company-scoped) and the public view (any signed-in user, T21)."""
+"""Posting endpoints: recruiter management (company-scoped) and the public view (anyone, signed in or not: screen spec SC-A02/A03)."""
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import exists, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import audit
-from app.auth.deps import RecruiterCtx, get_principal, require_recruiter
+from app.auth.deps import RecruiterCtx, get_optional_principal, require_recruiter
 from app.auth.scope import get_for_company
 from app.auth.sessions import Principal
 from app.core.db import get_db
@@ -15,7 +15,7 @@ from app.core.timeutil import utcnow
 from app.models import Application, CodingProblem, CodingTestcase, JobPosting
 from app.postings import service
 from app.postings.schemas import (
-    JOB_FAMILIES, EvalSettingsIn, EvalSettingsOut, PostingDetailOut, PostingIn, PostingPublicOut, PostingSummaryOut,
+    JOB_FAMILIES, EvalSettingsIn, EvalSettingsOut, InterviewSettings, PostingDetailOut, PostingIn, PostingPublicOut, PostingSummaryOut,
 )
 
 recruiter_router = APIRouter(prefix="/api/recruiter", tags=["recruiter"])
@@ -115,7 +115,11 @@ async def put_settings(posting_id: UUID, body: EvalSettingsIn, ctx: RecruiterCtx
     if body.custom_question is not None and body.custom_question and len(body.custom_question) < 5:
         from app.core.errors import AppError
         raise AppError(422, "CUSTOM_QUESTION_TOO_SHORT", "커스텀 질문은 5자 이상이어야 합니다.")
-    s = await service.add_settings(db, p, weights, body.custom_question, ctx.user_id)
+    prev = await service.current_settings(db, p)
+    s = await service.add_settings(db, p, weights, body.custom_question, ctx.user_id,
+                                   service.interview_values(body.interview, prev))
+    if body.question_areas is not None:
+        p.question_areas = list(dict.fromkeys(body.question_areas))
     p.updated_at = utcnow()
     await audit(db, action="SETTINGS_CHANGE", target_type="posting", target_id=p.id, actor_id=ctx.user_id,
                 actor_role="RECRUITER", company_id=ctx.company_id, version=s.version)
@@ -127,7 +131,10 @@ async def put_settings(posting_id: UUID, body: EvalSettingsIn, ctx: RecruiterCtx
 async def reset_settings(posting_id: UUID, ctx: RecruiterCtx = Depends(require_recruiter),
                          db: AsyncSession = Depends(get_db)) -> EvalSettingsOut:
     p = await _posting(db, ctx, posting_id, lock=True)
-    s = await service.add_settings(db, p, service.default_weights(p.coding_enabled), None, ctx.user_id)
+    prev = await service.current_settings(db, p)  # SC-R07: reset leaves the weights as they are
+    s = await service.add_settings(db, p, prev.weights(), None, ctx.user_id,
+                                   service.interview_values(InterviewSettings(), None))
+    p.question_areas = None  # back to all five
     await audit(db, action="SETTINGS_CHANGE", target_type="posting", target_id=p.id, actor_id=ctx.user_id,
                 actor_role="RECRUITER", company_id=ctx.company_id, version=s.version, reset=True)
     await db.commit()
@@ -148,38 +155,54 @@ async def list_coding_problems(ctx: RecruiterCtx = Depends(require_recruiter),
 
 
 @public_router.get("/job-families")
-async def job_families(p: Principal = Depends(get_principal)) -> list[dict]:
-    return [{"code": k, "label": v} for k, v in JOB_FAMILIES.items()]
+async def job_families(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """SC-A02 category buttons: label and the number of postings on the main page."""
+    rows = dict((await db.execute(select(JobPosting.job_family, func.count()).where(*_listed())
+                                  .group_by(JobPosting.job_family))).all())
+    return [{"code": k, "label": v, "count": rows.get(k, 0)} for k, v in JOB_FAMILIES.items()]
+
+
+def _listed() -> tuple:
+    """Postings on the main page: published, not deleted, deadline ahead."""
+    return (JobPosting.status == "OPEN", JobPosting.deleted_at.is_(None), JobPosting.hidden_at.is_(None),
+            JobPosting.deadline_at > utcnow())
+
+
+async def _applied(db: AsyncSession, p: Principal | None, posting_ids: list[UUID]) -> set[UUID]:
+    if p is None or p.role != "CANDIDATE" or not posting_ids:
+        return set()
+    return set((await db.execute(select(Application.posting_id).where(
+        Application.candidate_id == p.user_id, Application.posting_id.in_(posting_ids)))).scalars())
 
 
 @public_router.get("/postings")
 async def list_public(q: str | None = Query(None, max_length=100), job_family: str | None = None,
-                      p: Principal = Depends(get_principal), db: AsyncSession = Depends(get_db)) -> list[PostingPublicOut]:
-    stmt = (select(JobPosting).where(JobPosting.status == "OPEN", JobPosting.deleted_at.is_(None),
-                                     JobPosting.deadline_at > utcnow()).order_by(JobPosting.deadline_at))
+                      p: Principal | None = Depends(get_optional_principal),
+                      db: AsyncSession = Depends(get_db)) -> list[PostingPublicOut]:
+    """No login needed (SC-A02)."""
+    stmt = select(JobPosting).where(*_listed()).order_by(JobPosting.deadline_at)
     if job_family:
         stmt = stmt.where(JobPosting.job_family == job_family)  # JOB-08
     if q:
         like = f"%{q}%"
         stmt = stmt.where(JobPosting.title.ilike(like) | JobPosting.duties.ilike(like) | JobPosting.requirements.ilike(like))
     rows = (await db.execute(stmt)).scalars().all()
-    applied = set()
-    if p.role == "CANDIDATE" and rows:
-        applied = set((await db.execute(select(Application.posting_id).where(
-            Application.candidate_id == p.user_id, Application.posting_id.in_([r.id for r in rows])))).scalars())
+    applied = await _applied(db, p, [r.id for r in rows])
     return [await service.public_out(db, r, r.id in applied) for r in rows]
 
 
 @public_router.get("/postings/{posting_id}")
-async def get_public(posting_id: UUID, p: Principal = Depends(get_principal),
+async def get_public(posting_id: UUID, p: Principal | None = Depends(get_optional_principal),
                      db: AsyncSession = Depends(get_db)) -> PostingPublicOut:
+    """No login needed (SC-A03). Each view adds one to the posting's view count (SC-R03, SC-R13)."""
     posting = await db.get(JobPosting, posting_id)
     if posting is None or posting.deleted_at is not None or posting.status == "DRAFT":
         raise not_found()
-    has_applied = False
-    if p.role == "CANDIDATE":
-        has_applied = await db.scalar(select(exists().where(Application.posting_id == posting.id,
-                                                            Application.candidate_id == p.user_id)))
-    if posting.status == "CLOSED" and not has_applied:
+    has_applied = posting.id in await _applied(db, p, [posting.id])
+    if (posting.status == "CLOSED" or posting.hidden_at is not None) and not has_applied:  # hidden by the operator (SC-O02)
         raise not_found()
-    return await service.public_out(db, posting, bool(has_applied))
+    if p is None or p.role == "CANDIDATE":
+        await db.execute(update(JobPosting).where(JobPosting.id == posting.id)
+                         .values(view_count=JobPosting.view_count + 1))
+        await db.commit()
+    return await service.public_out(db, posting, has_applied)

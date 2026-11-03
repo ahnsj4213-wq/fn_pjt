@@ -17,7 +17,7 @@ const APP_LAYER_MODULES = ['@/app', '@/app/*', '@/pages', '@/pages/*', '**/app/*
 const restrict = (group, message) => ['error', { patterns: [{ group, message }] }];
 
 export default defineConfig(
-  { ignores: ['dist', '.next', 'next-env.d.ts', 'coverage', 'node_modules', 'playwright-report', 'test-results'] },
+  { ignores: ['public/vision/**', 'dist', '.next', 'next-env.d.ts', 'coverage', 'node_modules', 'playwright-report', 'test-results'] },
   js.configs.recommended,
   tseslint.configs.recommended,
   {

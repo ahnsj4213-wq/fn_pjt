@@ -3,8 +3,12 @@
 Interview turn loop (TRD 06 §5):
   S1 present_next -> `question` + TTS on the downlink track
   S2 last TTS frame sent -> `tts_end`, 0.3 s playout guard          (no TTS -> tts_end{played:false}, open at once)
+  S2b think time (screen spec SC-A06) -> `thinking`; mic still closed. [질문 다시 듣기] once (`question_replay`, the
+      remaining think time resumes after the audio), [바로 답변 시작] ends it early.
   S3 open_answer -> `answer_opened`; frames received before opened_at or after deadline + grace are dropped
   S4 deadline - 10 s -> `answer_warn`
+  S4b a speech answer still going at 2/3 of its limit: the interviewer cuts in once (`interjected` + TTS), then the
+      answer continues for min(remaining, 30 s) after the speech (`deadline_moved`)
   S5 [답변 완료] (request_finish) -> 0.3 s drain, gate closes     S6 deadline + grace -> gate closes
   S7 last VAD segment -> STT -> finalize (one transaction) -> `answer_finalized`, `processing`
   S10 follow-up decision (RT lane, answer end + 5 s) -> next turn, or finish -> `interview_completed`
@@ -32,6 +36,7 @@ from sqlalchemy import text
 
 from app.ai.client import get_ai_client
 from app.core.config import get_settings
+from app.core.constants import INTERJECT_AT_FRACTION, INTERJECT_REMAINING_SEC, INTERJECT_TEXT
 from app.core.db import session_scope
 from app.core.logging import log_event
 from app.core.storage import get_storage
@@ -57,6 +62,7 @@ TTS_TIMEOUT_SEC = 10.0
 PRECHECK_WINDOW_SEC = 6.0
 PRECHECK_MIN_SPEECH_FRAMES = 15  # 0.3 s
 PRECHECK_IDLE_SEC = 600.0
+SPEAKING_RECENT_SEC = 1.5  # the candidate counts as still talking if speech was heard this recently
 _WORDISH = re.compile(r"[0-9A-Za-z가-힣]")
 
 
@@ -75,6 +81,7 @@ class Gate:
     stt_model: str | None = None
     finalized: bool = False
     dropped_samples: int = 0
+    last_speech: float | None = None  # monotonic time of the last speech frame
 
     def accepts(self, now: datetime) -> bool:
         return self.opened_at <= now <= self.close_at
@@ -95,6 +102,8 @@ class VoiceSession:
         self.finish = asyncio.Event()
         self.finish_reason: str | None = None
         self.finish_at: datetime | None = None
+        self.think_turn: UUID | None = None
+        self.think_cmd: asyncio.Queue = asyncio.Queue()
         self.finalizing = False
         self._finalize_done = asyncio.Event()
         self._finalize_done.set()
@@ -204,8 +213,11 @@ class VoiceSession:
                     gate.dropped_samples += len(pcm)
                     continue
                 gate.audio.append(pcm)
+                before = gate.vad.speech_frames_total
                 for seg in gate.vad.feed(pcm):
                     gate.queue.put_nowait(seg)
+                if gate.vad.speech_frames_total > before:
+                    gate.last_speech = time.monotonic()
 
     async def _stt_worker(self, gate: Gate, purpose: str) -> None:
         """Segments in order, one at a time; one retry per segment (TRD 06 §6)."""
@@ -282,15 +294,16 @@ class VoiceSession:
             return False
 
         audio = await self._question_audio(view)
-        self.send("question", view.turn_id, main_no=view.main_no, is_followup=view.is_followup, text=view.text,
-                  audio="track" if audio else "none", limit_sec=view.limit_sec, presentation_no=view.presentation_no)
-        if audio:
-            ended = asyncio.Event()
-            self.tts.play(audio, ended.set)
-            await ended.wait()
+        self.send("question", view.turn_id, main_no=view.main_no, main_count=view.main_count,
+                  is_followup=view.is_followup, area=view.area, text=view.text, audio="track" if audio else "none",
+                  limit_sec=view.limit_sec, think_sec=view.think_sec, answer_mode=view.answer_mode,
+                  presentation_no=view.presentation_no)
+        await self._play(audio)
         self.send("tts_end", view.turn_id, played=bool(audio))
         if audio:
             await asyncio.sleep(PLAYOUT_GUARD_SEC)
+        if view.think_sec > 0:
+            await self._think(view, audio)
 
         async with session_scope() as db:
             opened_at, deadline_at = await turns.open_answer(db, view.turn_id)
@@ -304,12 +317,13 @@ class VoiceSession:
         self.send("answer_opened", view.turn_id, opened_at=dcp.iso(opened_at), deadline_at=dcp.iso(deadline_at),
                   warn_at=dcp.iso(warn_at), limit_sec=view.limit_sec)
         warn = self._spawn(self._warn_at(view.turn_id, warn_at))
-
-        try:
-            await asyncio.wait_for(self.finish.wait(), max(0.0, (gate.close_at - utcnow()).total_seconds()))
-            reason = self.finish_reason or "BUTTON"
-        except TimeoutError:
-            reason = "TIMEOUT"
+        if view.answer_mode == "SPEECH" and not view.is_followup:
+            check_at = opened_at + timedelta(seconds=view.limit_sec * INTERJECT_AT_FRACTION)
+            reason = await self._wait_finish(gate, until=check_at)
+            if reason is None and self._speaking(gate):
+                warn.cancel()
+                warn = await self._interject(view, gate, grace)
+        reason = await self._wait_finish(gate)
         warn.cancel()
         self.finalizing = True
         self._finalize_done.clear()
@@ -334,6 +348,100 @@ class VoiceSession:
         if not view.is_followup:
             await turns.decide_followup(self.app_id, answer.id)
         return not self.closed
+
+    async def _play(self, audio: bytes | None) -> None:
+        if audio:
+            ended = asyncio.Event()
+            self.tts.play(audio, ended.set)
+            await ended.wait()
+
+    async def _think(self, view: turns.TurnView, audio: bytes | None) -> None:
+        """Think time: countdown on the client, the mic stays closed. Commands come from `think_command`."""
+        while not self.think_cmd.empty():
+            self.think_cmd.get_nowait()
+        async with session_scope() as db:
+            until = await turns.open_think(db, view.turn_id, view.think_sec)
+        if until is None:
+            return
+        self.think_turn, replay_left = view.turn_id, 1
+        self.send("thinking", view.turn_id, think_until=dcp.iso(until), replay_left=replay_left)
+        try:
+            while True:
+                left = (until - utcnow()).total_seconds()
+                if left <= 0:
+                    return
+                try:
+                    cmd = await asyncio.wait_for(self.think_cmd.get(), left)
+                except TimeoutError:
+                    return
+                if cmd == "start":
+                    return
+                if cmd == "replay" and replay_left:
+                    async with session_scope() as db:
+                        if not await turns.mark_replayed(db, view.turn_id):
+                            continue
+                    replay_left, remaining = 0, max(0.0, (until - utcnow()).total_seconds())
+                    self.send("question_replay", view.turn_id)
+                    await self._play(audio)
+                    until = utcnow() + timedelta(seconds=remaining)
+                    async with session_scope() as db:
+                        await db.execute(text("UPDATE interview_turns SET think_until=:u WHERE id=:t"),
+                                         {"u": until, "t": view.turn_id})
+                    self.send("thinking", view.turn_id, think_until=dcp.iso(until), replay_left=0)
+        finally:
+            self.think_turn = None
+
+    def think_command(self, turn_id: UUID, cmd: str) -> bool:
+        """[질문 다시 듣기] / [바로 답변 시작] from the HTTPS side; only for the turn that is thinking now."""
+        if self.closed or self.think_turn != turn_id:
+            return False
+        self.think_cmd.put_nowait(cmd)
+        return True
+
+    async def _wait_finish(self, gate: Gate, until: datetime | None = None) -> str | None:
+        """Wait for [답변 완료] or the gate closing; with `until`, return None if neither happened by then."""
+        end = gate.close_at if until is None else min(until, gate.close_at)
+        try:
+            await asyncio.wait_for(self.finish.wait(), max(0.0, (end - utcnow()).total_seconds()))
+            return self.finish_reason or "BUTTON"
+        except TimeoutError:
+            return "TIMEOUT" if until is None or until >= gate.close_at else None
+
+    @staticmethod
+    def _speaking(gate: Gate) -> bool:
+        return gate.last_speech is not None and time.monotonic() - gate.last_speech <= SPEAKING_RECENT_SEC
+
+    async def _interject(self, view: turns.TurnView, gate: Gate, grace: timedelta) -> asyncio.Task:
+        """The interviewer cuts in (screen spec SC-A06). The mic stays open; the clock restarts after the speech."""
+        audio = await self._interject_audio()
+        remaining = max(0.0, (gate.close_at - grace - utcnow()).total_seconds())
+        self.send("interjected", view.turn_id, text=INTERJECT_TEXT, audio="track" if audio else "none")
+        await self._play(audio)
+        deadline = utcnow() + timedelta(seconds=min(remaining, INTERJECT_REMAINING_SEC))
+        async with session_scope() as db:
+            if not await turns.interject(db, view.turn_id, deadline):
+                return self._spawn(asyncio.sleep(0))
+        gate.close_at = deadline + grace
+        warn_at = deadline - timedelta(seconds=WARN_BEFORE_SEC)
+        self.send("deadline_moved", view.turn_id, deadline_at=dcp.iso(deadline), warn_at=dcp.iso(warn_at))
+        log_event(log, "interviewer_interjected", application_id=str(self.app_id))
+        return self._spawn(self._warn_at(view.turn_id, warn_at))
+
+    async def _interject_audio(self) -> bytes | None:
+        """The fixed interjection line, synthesised once and cached in storage."""
+        key = "tts/interject-v1.pcm"
+        storage = get_storage()
+        data = await storage.get(key)
+        if data:
+            return data
+        try:
+            out = await asyncio.wait_for(get_ai_client().tts(INTERJECT_TEXT), TTS_TIMEOUT_SEC)
+        except Exception as e:  # noqa: BLE001 - TTS down: the line is shown as text only
+            log_event(log, "tts_failed", application_id=str(self.app_id), error_code=type(e).__name__)
+            return None
+        if out.pcm48k:
+            await storage.put(key, out.pcm48k, "application/octet-stream")
+        return out.pcm48k or None
 
     async def _finalize(self, gate: Gate, reason: str) -> InterviewAnswer | None:
         transcript = " ".join(gate.captions)

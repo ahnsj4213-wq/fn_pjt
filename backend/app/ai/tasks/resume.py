@@ -3,6 +3,8 @@
 Every string value must be copied verbatim from the PDF text; values that fail the ADR-0008 source check are dropped
 (counted in flags.dropped_values) so only text actually written in the resume reaches the form (RES-03).
 Long sources are split at page/line boundaries and merged.
+Descriptions are the first one or two sentences of the source only: copying whole career paragraphs used to run the
+output past num_predict, and a cut JSON fails every retry the same way (temperature 0, fixed seed).
 """
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,7 +12,7 @@ from app.ai.tasks.base import Check, TaskSpec
 from app.ai.textrules import fence
 from app.evaluation.quotes import find_span
 
-CHUNK_CHARS = 6000
+CHUNK_CHARS = 4000  # one chunk's output must fit num_predict
 S = str | None
 
 
@@ -56,7 +58,7 @@ class ResumeOut(BaseModel):
 
 
 REQUIRED = {"education": "school", "experience": "company", "projects": "title", "certifications": "name"}
-DESC_MAX = 300
+DESC_MAX = 150
 
 
 def _verify(value: str | None, source: str) -> str | None:
@@ -68,14 +70,15 @@ def _verify(value: str | None, source: str) -> str | None:
 
 class ResumeExtract(TaskSpec):
     name = "resume_extract"
-    version = "resume_extract@1.0.0"
+    version = "resume_extract@1.1.0"
     lane = "INTERACTIVE"
     temperature = 0.0
-    num_predict = 1500
+    num_predict = 3000  # 4000-char chunk (~2.5k tokens) + output stays inside one 8k llama.cpp slot
     out_model = ResumeOut
     system = ("너는 이력서 텍스트에서 표준 항목(성명, 학력, 경력, 프로젝트, 기술 스택, 자격증)을 뽑는 추출기다. "
               "모든 값은 원문에 적힌 글자를 그대로 복사한다. 날짜·학위명·회사명을 바꿔 쓰거나 요약·번역하지 않는다. "
-              "원문에 없는 항목은 null 또는 빈 배열로 둔다. description은 원문의 연속 구절(300자 이내)만 쓴다.")
+              "원문에 없는 항목은 null 또는 빈 배열로 둔다. "
+              "description은 원문 설명의 앞부분 한두 문장(150자 이내)만 글자 그대로 복사하고 나머지는 쓰지 않는다.")
 
     def split(self, inp: dict) -> list[dict]:
         text = inp["source_text"]

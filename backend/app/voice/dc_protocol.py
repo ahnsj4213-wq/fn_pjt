@@ -27,11 +27,30 @@ class Hello(_Ev):
 
 class Question(_Ev):
     main_no: int = Field(ge=1, le=10)
+    main_count: int = Field(ge=1, le=10)
     is_followup: bool
+    area: str
     text: str
     audio: Literal["track", "none"]
-    limit_sec: Literal[60, 45]
+    limit_sec: int = Field(ge=30, le=180)
+    think_sec: int = Field(ge=0, le=30)
+    answer_mode: Literal["SPEECH", "CODE"]
     presentation_no: int = Field(ge=1, le=3)
+
+
+class Thinking(_Ev):
+    think_until: str
+    replay_left: int
+
+
+class Interjected(_Ev):
+    text: str
+    audio: Literal["track", "none"]
+
+
+class DeadlineMoved(_Ev):
+    deadline_at: str
+    warn_at: str
 
 
 class TtsEnd(_Ev):
@@ -94,7 +113,8 @@ class Pong(_Ev):
 
 
 SERVER_EVENTS: dict[str, type[_Ev]] = {
-    "hello": Hello, "question": Question, "tts_end": TtsEnd, "answer_opened": AnswerOpened, "answer_warn": AnswerWarn,
+    "hello": Hello, "question": Question, "tts_end": TtsEnd, "thinking": Thinking, "question_replay": Empty,
+    "interjected": Interjected, "deadline_moved": DeadlineMoved, "answer_opened": AnswerOpened, "answer_warn": AnswerWarn,
     "caption_segment": CaptionSegment, "answer_finalized": AnswerFinalized, "processing": Empty,
     "interview_completed": InterviewCompleted, "status_changed": StatusChanged, "session_superseded": Empty,
     "precheck_listen": PrecheckListen, "precheck_result": PrecheckResult, "error": Error, "pong": Pong,

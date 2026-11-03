@@ -10,7 +10,8 @@ from celery import Celery
 from app.core.config import get_settings
 
 PERIODIC_SECONDS = {"job_reaper": 15, "attempt_sweeper": 30, "coding_autosubmit": 15, "posting_autoclose": 60,
-                    "retention_purge": 3600, "file_gc": 3600, "session_gc": 3600, "sandbox_verify": 3600}
+                    "retention_purge": 3600, "file_gc": 3600, "session_gc": 3600, "sandbox_verify": 3600,
+                    "question_examples_sync": 600}
 
 _url = get_settings().redis_url or "redis://127.0.0.1:6379/0"
 celery = Celery("aihire", broker=_url, backend=_url, include=["app.jobs.celery_tasks"])

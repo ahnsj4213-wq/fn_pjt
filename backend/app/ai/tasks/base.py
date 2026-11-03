@@ -40,8 +40,11 @@ class Outcome:
     error: str | None = None
 
 
-def ollama_schema(model: type[BaseModel]) -> dict:
-    """Pydantic JSON schema with $refs inlined and length/title noise removed (Ollama `format` grammar)."""
+def ollama_schema(model: type[BaseModel], keep_limits: bool = False) -> dict:
+    """Pydantic JSON schema with $refs inlined and title noise removed. Length limits are removed too (Ollama `format`
+    grammar), unless `keep_limits`: llama.cpp turns maxLength/maxItems into grammar, so the model cannot run on."""
+    dropped = ("title", "description", "default") if keep_limits else (
+        "title", "maxLength", "minLength", "maxItems", "minItems", "description", "default")
     raw = model.model_json_schema()
     defs = raw.pop("$defs", {})
 
@@ -52,7 +55,7 @@ def ollama_schema(model: type[BaseModel]) -> dict:
             # Keys of `properties` are field names: a field called title or description is not schema metadata.
             return {k: ({name: walk(sub) for name, sub in v.items()} if k == "properties" else walk(v))
                     for k, v in node.items()
-                    if k not in ("title", "maxLength", "minLength", "maxItems", "minItems", "description", "default")}
+                    if k not in dropped}
         if isinstance(node, list):
             return [walk(x) for x in node]
         return node
@@ -69,6 +72,8 @@ class TaskSpec:
     format_retries: ClassVar[int] = 2
     regen_limits: ClassVar[dict[str, int]] = {}
     out_model: ClassVar[type[BaseModel]]
+    # Stricter twin of out_model for llama.cpp grammar only: short strings and lists decide how long the answer takes.
+    grammar_model: ClassVar[type[BaseModel] | None] = None
     system: ClassVar[str]
 
     # ── hooks ──
@@ -96,7 +101,10 @@ class TaskSpec:
         return ollama_schema(self.out_model)
 
     def options(self) -> dict:
-        return {"temperature": self.temperature, "num_predict": self.num_predict, "seed": 42}
+        opts = {"temperature": self.temperature, "num_predict": self.num_predict, "seed": 42}
+        if self.grammar_model is not None:
+            opts["grammar_schema"] = ollama_schema(self.grammar_model, keep_limits=True)
+        return opts
 
     def prompt_hash(self) -> str:
         body = json.dumps({"system": self.system_prompt(), "schema": self.schema()}, ensure_ascii=False, sort_keys=True)
@@ -152,6 +160,12 @@ async def _run_one(spec: TaskSpec, inp: dict, call: LLMCall, usage: dict, attemp
             attempts["format"] += 1
             if fmt > spec.format_retries:
                 return Outcome("INVALID", {}, attempts, {}, usage, f"format: {type(e).__name__}")
+            if (u or {}).get("completion_tokens", 0) >= options.get("num_predict", 0) > 0:
+                # Cut at the token limit: asking for "the same format" again only repeats the cut, ask for less.
+                messages += [{"role": "assistant", "content": content[:4000]},
+                             {"role": "user", "content": "출력이 길이 제한에서 잘렸다. 문자열 값을 훨씬 짧게 줄여서 "
+                                                         "JSON 전체를 끝까지 다시 출력하라."}]
+                continue
             messages += [{"role": "assistant", "content": content[:4000]},
                          {"role": "user", "content": "출력이 JSON 스키마·값 범위에 맞지 않는다. 오류: "
                                                      f"{_short_error(e)}. 같은 형식으로 다시 출력하라."}]

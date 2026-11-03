@@ -8,15 +8,18 @@
   or a fresh T5 call; scores are computed by code (scoring.py); T6 summary, T7 candidate feedback and T8 code review
   (P1, never scored) produce the prose. Nothing is written here: the caller persists inside its fenced transaction.
 """
+import asyncio
+import time
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import rubric
 from app.ai.client import AIClient
-from app.core.constants import CRITERIA, MAIN_QUESTION_COUNT, Criterion
+from app.core.constants import CRITERIA, Criterion
+from app.core.db import session_scope
 from app.evaluation.scoring import QuestionScores, ScoreResult, UnitScores, compute, no_answer_unit
 from app.models import (
     AnswerPreEvaluation,
@@ -26,6 +29,7 @@ from app.models import (
     CodingTestcase,
     InterviewAnswer,
     InterviewQuestion,
+    Job,
     JobPosting,
     PostingEvalSettings,
 )
@@ -43,10 +47,16 @@ class CodingNotGraded(Exception):
     """The coding submission is still being graded: wait without consuming an attempt."""
 
 
+CODE_MAX_CHARS = 6000  # keeps the prompt inside the eval model's context next to the answer
+
+
 def unit_input(q: InterviewQuestion, a: InterviewAnswer, posting: JobPosting) -> dict:
     """T5 input: no resume, name, gender, age, photo or contact (EVL-07). eval_text is already redacted (rd-1)."""
-    return {"question": q.text, "question_type": q.slot_type, "job_brief": job_brief(posting),
-            "answer": a.eval_text or "", "is_no_answer": a.is_no_answer}
+    inp = {"question": q.text, "question_type": q.slot_type, "job_brief": job_brief(posting),
+           "answer": a.eval_text or "", "is_no_answer": a.is_no_answer}
+    if a.code_text:  # SC-A06 live coding: the submitted code is read with the answer (never executed)
+        inp["code"], inp["code_language"] = a.code_text[:CODE_MAX_CHARS], a.code_language or ""
+    return inp
 
 
 async def evaluate_unit(ai: AIClient, q: InterviewQuestion, a: InterviewAnswer, posting: JobPosting) -> tuple[dict, str]:
@@ -129,16 +139,42 @@ async def load_report_inputs(db: AsyncSession, app: Application, manifest_hash: 
     return inp
 
 
+async def wait_for_pre_evaluations(inp: ReportInputs, max_wait_sec: float = 45.0) -> None:
+    """Answers whose `pre_evaluate` job is still queued or running are waited for instead of being evaluated a second
+    time: the same answer twice would occupy the model slot for twice as long. No job in flight = evaluate here."""
+    deadline = time.monotonic() + max_wait_sec
+    while True:
+        missing = [a.id for a in inp.answers.values() if a.id not in inp.cached]
+        if not missing or time.monotonic() >= deadline:
+            return
+        async with session_scope() as db:
+            running = await db.scalar(select(func.count()).select_from(Job).where(
+                Job.kind == "pre_evaluate", Job.state.in_(["QUEUED", "RUNNING"]),
+                Job.dedupe_key.in_([f"pre:{m}" for m in missing])))
+            for p in (await db.execute(select(AnswerPreEvaluation).where(
+                    AnswerPreEvaluation.answer_id.in_(missing), AnswerPreEvaluation.manifest_hash == inp.manifest_hash))).scalars():
+                inp.cached[p.answer_id] = p.payload
+        if not running:
+            return
+        await asyncio.sleep(0.4)
+
+
 async def build_report(ai: AIClient, app: Application, inp: ReportInputs) -> Report:
     posting, qs, answers, cached = inp.posting, inp.questions, inp.answers, inp.cached
     mains = [q for q in qs if q.role == "MAIN"]
     followups = {q.parent_id: q for q in qs if q.role == "FOLLOWUP"}
     units: dict = {}
+    todo = []
     for q in qs:
         a = answers.get(q.id)
         if a is None:
             continue
-        units[a.id] = cached.get(a.id) or (await evaluate_unit(ai, q, a, posting))[0]
+        if cached.get(a.id):
+            units[a.id] = cached[a.id]
+        else:
+            todo.append((q, a))
+    for q, a in todo:  # normally only the last answer: the interview pre-evaluated the others
+        units[a.id] = (await evaluate_unit(ai, q, a, posting))[0]
 
     rows, question_scores = [], []
     for m in mains:
@@ -152,8 +188,8 @@ async def build_report(ai: AIClient, app: Application, inp: ReportInputs) -> Rep
             continue  # EXPIRED: only answered main questions count (OQ-07)
         question_scores.append(QuestionScores(m.seq, unit_scores(units[a.id]),
                                               unit_scores(units[fa.id]) if fa else None))
-    if app.attempt_status == "SUBMITTED" and len(question_scores) != MAIN_QUESTION_COUNT:
-        raise EvaluationFailed(f"expected {MAIN_QUESTION_COUNT} main questions, found {len(question_scores)}")
+    if app.attempt_status == "SUBMITTED" and len(question_scores) != len(mains):
+        raise EvaluationFailed(f"expected {len(mains)} main questions, found {len(question_scores)}")
 
     coding, weights = inp.coding, inp.weights
     coding_value = None

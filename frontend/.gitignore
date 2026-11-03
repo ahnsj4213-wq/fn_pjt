@@ -7,3 +7,4 @@ playwright-report/
 *.local
 .next/
 next-env.d.ts
+public/vision/vision_wasm_*

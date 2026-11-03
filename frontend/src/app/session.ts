@@ -12,14 +12,43 @@ export function setSession(qc: QueryClient, s: SessionOut | null): void {
   qc.setQueryData(SESSION_KEY, s);
 }
 
+/** Candidates land on the main page (SC-A02), recruiters on the company dashboard (SC-R13). */
 export function roleHome(role: Role): string {
-  return role === 'RECRUITER' ? '/recruiter' : '/postings';
+  return role === 'RECRUITER' ? '/recruiter' : role === 'OPERATOR' ? '/operator' : '/';
+}
+
+/**
+ * "지원하기" pressed while logged out (SC-A02, SC-C01): remembered for this tab only so login or signup can carry on
+ * with that posting. The logo clears it (SC-C00).
+ */
+const PENDING_APPLY = 'pendingApply';
+
+export function setPendingApply(postingId: string | null): void {
+  try {
+    if (postingId) sessionStorage.setItem(PENDING_APPLY, postingId);
+    else sessionStorage.removeItem(PENDING_APPLY);
+  } catch {
+    // Storage blocked: the user simply starts again from the posting.
+  }
+}
+
+export function getPendingApply(): string | null {
+  try {
+    return sessionStorage.getItem(PENDING_APPLY);
+  } catch {
+    return null;
+  }
+}
+
+/** First step of applying: SC-A04 환경 점검. */
+export function applyStartPath(postingId: string): string {
+  return `/postings/${encodeURIComponent(postingId)}/apply`;
 }
 
 /** Only same-origin app paths are accepted as ?next= targets (no open redirect). */
 export function safeNext(next: string | null): string | null {
   if (!next || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/\\')) return null;
-  if (next.startsWith('/login') || next.startsWith('/signup')) return null;
+  if (next.startsWith('/login') || next.startsWith('/signup') || next.startsWith('/reset-password')) return null;
   return next;
 }
 

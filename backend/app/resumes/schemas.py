@@ -1,4 +1,6 @@
 """Standard resume fields (RES-03) and the flattened text used to ground resume questions (QST-03)."""
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -40,6 +42,10 @@ class ResumeContent(_Item):
     projects: list[Project] = Field(default_factory=list, max_length=30)
     skills: list[str] = Field(default_factory=list, max_length=100)
     certificates: list[Certificate] = Field(default_factory=list, max_length=30)
+    # SC-A10 form fields. Kept on the resume only: not part of the AI contract (to_ai_resume drops them).
+    desired_job: Literal["DEV", "DATA_AI", "DESIGN", "MARKETING", "MGMT"] | None = None
+    experience_level: Literal["NEW", "Y1_3", "Y3_5", "Y5_PLUS"] | None = None
+    intro: str | None = Field(None, max_length=3000)
 
     @model_validator(mode="after")
     def _minimum(self) -> "ResumeContent":
@@ -51,6 +57,7 @@ class ResumeContent(_Item):
 
 # The AI contract (TRD 05 T1 "resume-schema v1") names two sections differently from the stored form/snapshot.
 _AI_TO_FORM = {"experience": "career", "certifications": "certificates"}
+_FORM_ONLY = {"name", "desired_job", "experience_level", "intro"}
 _FORM_TO_AI = {v: k for k, v in _AI_TO_FORM.items()}
 
 
@@ -66,7 +73,7 @@ def from_ai_resume(fields: dict) -> dict:
 
 def to_ai_resume(content: dict) -> dict:
     """Snapshot -> T3 input (experience, certifications). The name is not passed (questions never need it)."""
-    return {_FORM_TO_AI.get(k, k): v for k, v in (content or {}).items() if k != "name"}
+    return {_FORM_TO_AI.get(k, k): v for k, v in (content or {}).items() if k not in _FORM_ONLY}
 
 
 def flatten(c: ResumeContent) -> str:

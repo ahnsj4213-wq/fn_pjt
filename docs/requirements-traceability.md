@@ -4,7 +4,7 @@
 - 상태 값: **미착수 / 진행 중 / 구현 / 검증 완료 / 보류**. `구현`은 코드가 있으나 자동 테스트로 확인하지 않은 상태, `검증 완료`는 표의 테스트 ID가 실제로 실행되어 통과한 상태다.
 - 테스트 ID 규칙: `T-<요구사항ID>`(단위·통합), `AC-xx`(인수 기준 테스트). 실제 테스트 함수와의 대응은 `docs/trd/08-testing-and-operations.md` 4절에 둔다.
 - 도메인/API 칸의 경로는 `docs/trd/04-api-contract.md`의 확정 계약을 따른다. 구현 칸은 저장소 상대 경로다.
-- 마지막 갱신: Phase 0 (모든 항목 미착수). 단계가 끝날 때마다 갱신한다.
+- 마지막 갱신: 2026-11-02. 아래 `미착수`로 남은 행 가운데 코드가 이미 있는 것이 많다(Phase 2~5 구현). 이번에 코드·테스트로 확인해 고친 행은 USR-08(기업회원 가입·운영자 인증), ADM-01~04·08, JOB-03·04·07·09, RES-07, RPT-01~03이다. 아래 11절은 화면정의서(pptx 78쪽)에서 새로 생긴 요구를 따로 적었다. 나머지 행은 아직 대조하지 않았으니 `미착수`를 구현 안 됨으로 읽지 말 것.
 
 ## 1. 기능 요구사항
 
@@ -15,6 +15,7 @@
 | USR-01 | 역할(지원자/담당자) 선택 로그인, 이메일·비밀번호 형식 검사 | P0 | auth / `POST /api/auth/login` | backend `app/auth`, frontend `pages/Login` | T-USR-01 | 미착수 | 선택한 역할과 계정 역할이 다르면 USR-04와 같은 일반 오류로 응답 |
 | USR-02 | 지원자 가입: 이름·이메일·비밀번호·확인·연락처(010-0000-0000) 필수, 생년월일·성별 없음 | P0 | auth / `POST /api/auth/signup` | `app/auth`, `pages/Signup` | T-USR-02, AC-01 | 미착수 | DB 스키마에 생년월일·성별 칼럼 자체를 두지 않는다 (8.5) |
 | USR-03 | 담당자 계정은 운영자가 회사별 발급, 담당자 가입 없음 | P0 | auth / CLI `create-recruiter` | `app/cli.py` | T-USR-03, AC-02 | 미착수 | 가입 API는 role=candidate만 생성 |
+| USR-08 | 기업회원 가입(화면정의서 SC-R01): 메일 인증번호, 회사 도메인 메일은 즉시 승인, 개인 메일은 승인 대기(공고 게시 차단) | P0 | auth / `POST /api/auth/company-signup[/code]`, `GET/POST /api/recruiter/company[/evidence]` | `app/auth/company_signup.py`, `CompanySignupModal.tsx`, `PendingBanner.tsx` | `test_company_signup.py`, `CompanySignup.test.tsx` | 구현 | 화면정의서가 USR-03(담당자 가입 없음)보다 우선(결정 기록). 운영자 승인 화면 SC-O01은 미구현, 당분간 CLI `approve-company` |
 | USR-04 | 로그인 실패 문구로 계정 존재 여부 비노출 | P0 | auth / `POST /api/auth/login` | `app/auth` | T-USR-04 | 미착수 | 존재하지 않는 계정도 해시 검증을 수행해 응답 시간 차이도 줄인다 |
 | USR-05 | 담당자 계정으로 지원자 기능 접근 차단·안내 | P0 | auth guard / 모든 `/api/candidate/*` | `app/auth/deps.py`, frontend 라우트 가드 | T-USR-05, AC-02 | 미착수 | 서버 403 + 화면 안내. 프런트 숨김만으로 대체하지 않음 (SEC-03) |
 | USR-06 | 마지막 요청 후 2시간 세션 유지 | P1 | auth / 세션 미들웨어 | `app/auth/sessions.py` | T-USR-06 | 미착수 | 서버 세션 테이블에 슬라이딩 만료 |
@@ -28,12 +29,12 @@
 | JOB-01 | 로그인 후 공고 목록·상세(제목·지원요건·우대·업무·정원·마감일·코딩테스트 여부). 정원은 표시만 | P0 | postings / `GET /api/postings`, `GET /api/postings/{id}` | `app/postings`, `pages/candidate/Postings*` | T-JOB-01 | 미착수 | 게시(OPEN) 공고만 노출. 정원으로 마감하지 않음 |
 | JOB-02 | 같은 공고 1회 지원 | P0 | applications / `POST /api/candidate/postings/{id}/applications` | `app/applications`, DB `UNIQUE(posting_id, candidate_id)` | T-JOB-02, AC-04 | 미착수 | DB 제약조건 + API 409 |
 | JOB-03 | 공고 작성·수정·임시저장·미리보기·게시·마감, 마감일 경과 시 자동 마감 | P0 | postings / `/api/recruiter/postings*` | `app/postings`, worker 주기 작업 | T-JOB-03 | 미착수 | 상태: DRAFT→OPEN→CLOSED (7.4). 자동 마감은 조회 시점 판정 + 주기 작업 |
-| JOB-04 | 지원자 있는 공고는 삭제 불가, 마감만 | P0 | postings / `DELETE /api/recruiter/postings/{id}` | `app/postings`, DB FK `RESTRICT` | T-JOB-04 | 미착수 | |
+| JOB-04 | ~~지원자 있는 공고는 삭제 불가, 마감만~~ → **변경(화면정의서 SC-R04)**: 지원자가 있어도 삭제할 수 있고 응시자 결과는 응시자 목록에 남는다 | P0 | postings / `DELETE /api/recruiter/postings/{id}` | `app/postings/service.py` `delete`(게시 중이면 먼저 마감, `deleted_at`), `Postings.tsx` | `test_postings_apply.py::test_job04_delete_keeps_the_applicants_results` | 검증 완료 | 화면정의서가 PRD보다 우선(2026-10-30). 응시자 데이터는 지우지 않는다 |
 | JOB-05 | 공고별 코딩테스트 사용 여부, 문제·허용 언어·제한시간 지정 | P0 | postings / `PUT .../postings/{id}` | `app/postings`, `app/coding` | T-JOB-05 | 미착수 | 언어는 Python 1종 (X-10) |
 | JOB-06 | 첫 응시 시작 후 코딩테스트 설정·가중치 잠금 | P0 | postings / 설정 변경 API 409 | `app/postings`, `app/interview` | T-JOB-06, AC-21 | 미착수 | 첫 응시 시작(=PREPARING 진입이 아니라 INTERVIEWING 진입) 정의는 OQ-05 |
 | JOB-07 | 공고 목록 진행 중·마감·임시저장 탭, 공고별 지원자 수·응시 완료 수 | P0 | postings / `GET /api/recruiter/postings?status=` | `app/postings`, `pages/recruiter/Postings` | T-JOB-07 | 미착수 | |
 | JOB-08 | 직무 필터·키워드 검색 | P1 | postings / `GET /api/postings?q=&job_family=` | `app/postings` | T-JOB-08 | 미착수 | |
-| JOB-09 | 공고 템플릿 저장·불러오기 | P2 | — | — | — | 미착수 | |
+| JOB-09 | 공고 템플릿 저장·불러오기(SC-R05: 이전 공고·기본 템플릿·저장한 템플릿·외부 파일 DOCX/PDF) | P2 | recruiter / `/api/recruiter/posting-templates`, `POST /api/recruiter/postings/import-file` | `app/recruiter/templates.py`, `TemplateModal.tsx`, `PostingForm.tsx` | `test_templates_inquiries.py`, `Inquiries.test.tsx` | 검증 완료 | HWP는 읽지 못하고 DOCX·PDF 저장을 안내한다. 마감일은 템플릿에 넣지 않는다 |
 | JOB-10 | AI 공고 초안 자동 생성 | P2 | — | — | — | 미착수 | |
 
 ### 5.3 이력서 (RES)
@@ -43,10 +44,10 @@
 | RES-01 | 지원 시 이력서 필수. 등록본 불러오기 / PDF 업로드 / 직접 작성 | P0 | resumes, applications | `app/resumes`, `pages/candidate/Apply` | T-RES-01 | 미착수 | |
 | RES-02 | PDF만, 10MB 이하, 드래그 앤 드롭, 다른 형식·손상 파일 거부와 이유 안내 | P0 | resumes / `POST /api/candidate/resume-files` | `app/resumes/pdf.py` | T-RES-02, AC-06 | 미착수 | 서버에서 크기·매직바이트·파싱 가능 여부 재검사 |
 | RES-03 | PDF 텍스트 추출 → 표준 항목(성명·학력·경력·프로젝트·기술 스택·자격증), 원문에 있는 내용만 | P0 | resumes | `app/resumes/extract.py` | T-RES-03, AC-06 | 미착수 | LLM 구조화 + 원문 부분 문자열 검증. 원문에 없는 값은 버림 |
-| RES-04 | 스캔 PDF는 "직접 입력" 안내, OCR은 P2 | P0 | resumes | `app/resumes/pdf.py` | T-RES-04 | 미착수 | 추출 글자 수 임계값으로 판정. OCR 흉내 금지 |
+| RES-04 | 스캔 PDF는 "직접 입력" 안내, OCR은 P2 | P0 | resumes | `app/resumes/router.py`, `app/resumes/ocr.py`, `app/resumes/ocr_extract.py`, `app/jobs/handlers.py` | T-RES-04, `tests/test_resume_ocr.py` | 구현 | 페이지별 글자 50자 미만이면 OCR(Tesseract, worker). 평균 신뢰도 0.5 미만·엔진 없음 → NO_TEXT 직접 입력 안내. 0.7 미만 줄이 들어간 항목은 확인 표시. PNG/JPG 사진도 허용. 원래 "OCR 흉내 금지"였으나 실제 OCR을 구현했고 화면정의서가 OCR을 요구하며 사용자가 팀원 로직 반영을 요청(2026-10-30). 실제 휴대폰 사진 미검증 |
 | RES-05 | 추출 결과 확인·수정 | P0 | resumes / `PUT /api/candidate/resume` | `pages/candidate/ResumeEditor` | T-RES-05, AC-06 | 미착수 | |
 | RES-06 | 직접 작성 최소 필수: 성명 + (학력 1건 또는 경력 1건) | P0 | resumes | `app/resumes/schemas.py` | T-RES-06 | 미착수 | |
-| RES-07 | 마이페이지 등록본 관리, 지원 시점 스냅샷 고정, 등록본 자동 덮어쓰기 금지 | P0 | resumes, applications | `app/applications` | T-RES-07 | 미착수 | 지원 건에 JSON 스냅샷 + 원본 PDF 사본 참조 |
+| RES-07 | 마이페이지 등록본 관리, 지원 시점 스냅샷 고정, 등록본 자동 덮어쓰기 금지 | P0 | resumes, applications | `app/applications`, `app/resumes`, frontend `screens/candidate/MyResume.tsx` | T-RES-07, `tests/test_mypage.py`, `MyPage.test.tsx` | 진행 중 | 지원 건에 JSON 스냅샷 + 원본 PDF 사본 참조. 마이페이지 이력서(SC-A10)는 와이어프레임 양식(이름·희망 직무·최종 학력·경력·보유 기술·프로젝트·자기소개서·파일)으로 저장하고, 첨부 파일(PDF·DOCX·PNG·JPG)은 서버가 읽어 양식을 채운다. 희망 직무·경력 연차·자기소개서는 AI 입력에 넣지 않는다 |
 | RES-08 | 담당자가 지원자 상세에서 원본 PDF와 표준 항목 이력서를 봄 | P0 (표준 항목 보기는 P1) | recruiter / `GET /api/recruiter/applications/{id}/resume-file` | `app/recruiter` | T-RES-08 | 미착수 | |
 | RES-09 | 가입 직후 이력서 등록 팝업 | P2 | — | — | — | 미착수 | |
 
@@ -54,7 +55,7 @@
 
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
-| QST-01 | 질문은행(직무·유형별), 덜 쓴 질문부터, 부족하면 AI 생성 후 은행에 추가, 유사 질문 중복 저장 금지 | P0 | questions | `app/questions/bank.py` | T-QST-01 | 미착수 | 유사도는 로컬 임베딩 (ADR-0005) |
+| QST-01 | 질문은행(직무·유형별), 덜 쓴 질문부터, 부족하면 AI 생성 후 은행에 추가, 유사 질문 중복 저장 금지 | P0 | questions | `app/questions/bank.py` | T-QST-01 | 미착수 | 유사도는 로컬 임베딩 (ADR-0005). 생성 시 RAG 예시 3개(`app/questions/rag.py`, `tests/test_question_rag.py`) |
 | QST-02 | 면접 시작 전 본질문 10개 구성 (6.1) | P0 | questions / 준비 단계 작업 | `app/questions/compose.py` | T-QST-02 | 미착수 | 인성2·이력서2·기업2·직무4, 순서 고정 |
 | QST-03 | 이력서 질문은 이력서에 실제 적힌 경험·프로젝트만 근거, 근거 없으면 버리고 은행 질문으로 | P0 | questions | `app/questions/resume_q.py` | T-QST-03, AC-07 | 미착수 | 근거 문장을 스냅샷 원문과 코드로 대조 |
 | QST-04 | 공고별 커스텀 질문(1개), 비우면 자동 채움 | P1 | postings / 평가 설정 API | `app/postings` | T-QST-04 | 미착수 | ADM-05(P0)가 커스텀 질문 설정을 포함 → 우선순위 불일치 OQ-02 |
@@ -67,7 +68,7 @@
 
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
-| INT-01 | 환경 점검: 마이크(권한·장치·레벨), 카메라(권한·장치·영상), 모두 통과해야 시작, 이전 단계 복귀 가능 | P0 | interview / 프런트 | `pages/candidate/Precheck` | T-INT-01, AC-08 | 구현 | 서버에도 점검 통과 기록이 있어야 start 허용 |
+| INT-01 | 환경 점검: 마이크(권한·장치·레벨), 카메라(권한·장치·영상), 모두 통과해야 시작, 이전 단계 복귀 가능 | P0 | interview / 프런트 | `pages/candidate/Precheck` | T-INT-01, AC-08 | 구현 | 서버에도 점검 통과 기록이 있어야 start 허용 2026-10-30 화면 SC-A04 `screens/candidate/apply/Check.tsx`(카메라·마이크 레벨·스피커 테스트음, 장치 선택) 구현, vitest·스크린샷 확인(E2E 미실행). |
 | INT-02 | 스피커 테스트 음성 재생 | P1 | 프런트 | `pages/candidate/Precheck` | T-INT-02 | 미착수 | |
 | INT-03 | 시작 전 안내(방식·문항 수·제한시간·코딩 여부·음량) | P0 | 프런트 | `pages/candidate/Guide` | T-INT-03 | 미착수 | |
 | INT-04 | 질문 텍스트(자막)+TTS 동시 제시, 아바타 없음, TTS 실패 시 텍스트만 | P0 | interview, voice | `app/voice/tts.py`, `pages/candidate/Interview` | T-INT-04, AC-09 | 미착수 | |
@@ -82,8 +83,8 @@
 | INT-13 | 동시 응시 상한, 초과 시 지정 문구로 시작 거부, 마이페이지에서 나중에 시작 | P0 | interview / `POST .../interview/start` | `app/interview/slots.py` | T-INT-13, AC-14 | 미착수 | 문구: "이미 많은 면접자들이 면접 중입니다. 추후 다시 요청해주세요." |
 | INT-14 | 시작 전 AI 서버(LLM·STT·TTS) 상태 확인, 불가 시 시작 차단 | P0 | `GET /api/system/ai-health` | `app/ai/health.py` | T-INT-14 | 미착수 | TTS 실패는 INT-04로 텍스트 진행 가능 → TTS 장애 시 차단 여부 OQ-08 |
 | INT-15 | 실시간 자막, 종료 후 확정 텍스트로 교체 | P0 | interview / WebRTC 데이터채널 | `app/voice/stt_stream.py` | T-INT-15, AC-10 | 미착수 | 목표: 말 끊긴 뒤 2초 내 (8.2) |
-| INT-16 | 화면 이탈 경고, 횟수·시간 기록, 리포트 표시, 종료 안 함 | P2 | interview / `POST .../proctor-events` | `app/interview` | T-INT-16 | 미착수 | 비용이 작아 P0 작업 중 함께 구현 검토 |
-| INT-17 | 점검 단계에서 서버와 WebRTC 실제 연결 + 짧은 발화 인식 확인, 실패 시 시작 차단 | P0 | interview / `POST .../precheck/webrtc` | `app/voice/`, `pages/candidate/Precheck` | T-INT-17, AC-08 | 구현 | |
+| INT-16 | 화면 이탈 경고, 횟수·시간 기록, 리포트 표시, 종료 안 함 | P2 | interview / `POST .../proctor-events` | `app/interview` | T-INT-16 | 구현 | 2026-10-30: 탭 이탈(LEAVE/RETURN)과 SC-A06 시선 이탈(브라우저 얼굴 감지, 1.5초 이탈 시 경고 1회, `GAZE_AWAY` 기록, 3회 이상 의심 표시) 구현. 종료하지 않음. 실제 카메라로 얼굴 판정 정확도는 미측정(가짜 카메라로 '얼굴 없음→이탈' 동작만 확인) |
+| INT-17 | 점검 단계에서 서버와 WebRTC 실제 연결 + 짧은 발화 인식 확인, 실패 시 시작 차단 | P0 | interview / `POST .../precheck/webrtc` | `app/voice/`, `pages/candidate/Precheck` | T-INT-17, AC-08 | 구현 (시작 조건에서 제외) | **2026-10-30 화면정의서 SC-A04 우선(사용자 결정 "화면정의서 기준 대로")**: 점검 화면은 카메라·마이크·스피커만 확인한다. 서버 WebRTC 발화 확인은 선택 기능으로 남고 시작을 막지 않는다. 음성 연결은 면접 세션이 연결될 때 확인한다. PRD 원문과 다름 |
 | INT-18 | WebRTC 자동 재연결, 실패 시 텍스트 입력 답변, 리포트에 표시 | P1 | interview | `app/interview`, 프런트 | T-INT-18 | 미착수 | |
 
 ### 5.6 코딩테스트 (COD)
@@ -118,8 +119,8 @@
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
 | RPT-01 | 완료 화면에서 제출 완료·평가 진행 상태 안내 후 마이페이지로, 이탈해도 서버에서 평가 계속 | P0 | applications | `pages/candidate/Done`, worker | T-RPT-01 | 미착수 | |
-| RPT-02 | 담당자 리포트: 총점, 항목별 점수, 총평, 강점·개선점 1~3순위, 질문별 평가(면접 순서, 항목 점수·인용·코멘트), 코딩 결과 | P0 | recruiter / `GET /api/recruiter/applications/{id}/report` | `app/reports` | T-RPT-02 | 미착수 | |
-| RPT-03 | 지원자 피드백은 별도 데이터, 6.6 범위·시점에만 노출 | P0 | candidate / `GET /api/candidate/applications/{id}/result` | `app/reports/public.py` | T-RPT-03, AC-19 | 미착수 | 별도 테이블 + 별도 응답 스키마 |
+| RPT-02 | 담당자 리포트: 총점, 항목별 점수, 총평, 강점·개선점 1~3순위, 질문별 평가(면접 순서, 항목 점수·인용·코멘트), 코딩 결과 | P0 | recruiter / `GET /api/recruiter/applications/{id}/report`(응시자 상세용), `…/report-view`(SC-R10, 지원자용과 같은 화면 + AI 추천) | `app/recruiter/router.py`, `app/applications/report.py` `build_report`, `ApplicationDetail.tsx`, `Report.tsx` | `test_recruiter.py`, `test_candidate_report.py`, `Report.test.tsx` | 검증 완료 | AI 추천은 담당자에게만 보인다 |
+| RPT-03 | 지원자 피드백은 별도 데이터, 6.6 범위·시점에만 노출. **변경(화면정의서 SC-A08):** 결과 리포트는 담당자 결정과 무관하게 평가가 끝나면 바로 본다. 합격·불합격과 피드백만 결정 뒤에 나온다 | P0 | candidate / `GET /api/candidate/applications/{id}/result`, `…/report` | `app/applications/report.py`, `Report.tsx`, `Result.tsx` | `test_candidate_report.py`, `Report.test.tsx` | 검증 완료 | 별도 테이블 + 별도 응답 스키마(결과), 리포트는 점수·인용을 보인다 |
 | RPT-04 | 지원자 피드백 화면 "이 피드백은 AI가 만든 참고 자료입니다" 고정 표시 | P1 | 프런트 | `pages/candidate/Result` | T-RPT-04 | 미착수 | |
 | RPT-05 | 사이트 안 알림 | P2 | — | — | — | 미착수 | |
 
@@ -127,14 +128,14 @@
 
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
-| ADM-01 | 담당자 첫 화면 공고 관리 + 요약 카드(진행 중 공고, 검토 대기 지원자) | P0 | recruiter / `GET /api/recruiter/dashboard` | `pages/recruiter/Home` | T-ADM-01 | 미착수 | |
-| ADM-02 | 지원자 목록: 공고·결정 상태 필터, 총점·진행률·평가 상태·최종 결정. 평가 전에는 총점 대신 상태 | P0 | recruiter / `GET /api/recruiter/applications` | `app/recruiter` | T-ADM-02 | 미착수 | |
-| ADM-03 | 지원자 상세: 이력서·리포트·코딩 결과·질문별 답변·근거, 고정 문구 | P0 | recruiter / `GET /api/recruiter/applications/{id}` | `pages/recruiter/ApplicationDetail` | T-ADM-03 | 미착수 | 문구: "AI 결과는 참고 자료이며 최종 결정은 담당자가 합니다" |
-| ADM-04 | 최종 결정 저장·변경, 누가·언제 이력, 지원자 마이페이지 표시 | P0 | recruiter / `POST .../decision` | `app/recruiter/decisions.py` | T-ADM-04, AC-20 | 미착수 | 평가 완료 전 변경 불가 (7.3) |
+| ADM-01 | 담당자 첫 화면 공고 관리 + 요약 카드(진행 중 공고, 검토 대기 지원자) | P0 | recruiter / `GET /api/recruiter/dashboard` | `pages/recruiter/Home` | T-ADM-01 | 구현 | SC-R13 대시보드: `tests/test_recruiter.py`, `guards.test.tsx` |
+| ADM-02 | 지원자 목록: 공고·결정 상태 필터, 총점·진행률·평가 상태·최종 결정. 평가 전에는 총점 대신 상태 | P0 | recruiter / `GET /api/recruiter/applications` | `app/recruiter` | T-ADM-02 | 구현 | SC-R08 응시자 목록 (AI 예상 합격 참고값 포함) |
+| ADM-03 | 지원자 상세: 이력서·리포트·코딩 결과·질문별 답변·근거, 고정 문구 | P0 | recruiter / `GET /api/recruiter/applications/{id}` | `pages/recruiter/ApplicationDetail` | T-ADM-03 | 구현 | 문구: "AI 결과는 참고 자료이며 최종 결정은 담당자가 합니다" |
+| ADM-04 | 최종 결정 저장·변경, 누가·언제 이력, 지원자 마이페이지 표시 | P0 | recruiter / `POST .../decision` | `app/recruiter/decisions.py` | T-ADM-04, AC-20 | 구현 | 평가 완료 전 변경 불가 (7.3). 결정값은 합격·보류·불합격(화면정의서 SC-R09). 보류는 담당자 내부 상태라 지원자에게는 계속 ‘검토 중’이고 결과·메일이 나가지 않는다(마이그레이션 0014, `test_hold_is_internal…`) |
 | ADM-05 | 공고별 커스텀 질문·가중치(합 100) 설정, 초기화 버튼 | P0 | recruiter / `PUT .../postings/{id}/evaluation-settings` | `app/postings` | T-ADM-05, AC-21 | 미착수 | DB CHECK + API 422 |
 | ADM-06 | '평가 보류' 재평가 실행 | P0 | recruiter / `POST .../re-evaluate` | `app/evaluation` | T-ADM-06 | 미착수 | |
 | ADM-07 | 지원자별 담당자 메모, 같은 회사만 | P1 | recruiter / `.../notes` | `app/recruiter/notes.py` | T-ADM-07 | 미착수 | |
-| ADM-08 | 통계: 월별 응시자 수, 직무별 평균 점수, 공고·직무별 합격률 | P1 | recruiter / `GET /api/recruiter/stats` | `app/recruiter/stats.py` | T-ADM-08 | 미착수 | |
+| ADM-08 | 통계: 월별 응시자 수, 직무별 평균 점수, 공고·직무별 합격률 | P1 | recruiter / `GET /api/recruiter/stats` | `app/recruiter/stats.py` | T-ADM-08 | 구현 | 대시보드(SC-R13)의 공고별 합격률·직무별 평균·월별 응시자 |
 | ADM-09 | 지원자 목록 리포트 요약 팝업 | P2 | — | — | — | 미착수 | |
 | ADM-10 | 공고 이력(작성·마감·삭제) | P2 | — | — | — | 미착수 | 감사 로그(SEC-08)로 일부 대체 가능 |
 | ADM-11 | 비교 모드·하이라이트 플레이어·캘린더·메일 | P2 | — | — | — | 미착수 | |
@@ -186,7 +187,7 @@
 | AC-05 | 필수 동의 안 하면 진행 불가, 동의 기록에 문구 버전·일시 | SEC-02 | API 통합 + UI E2E | 미착수 |
 | AC-06 | PDF 아님·10MB 초과 거부와 이유, 텍스트 PDF는 표준 항목 채움·수정 가능 | RES-02, 03, 05 | API 통합 + UI E2E | 미착수 |
 | AC-07 | 이력서 질문 2개가 이력서에 실제 적힌 경험·프로젝트 언급 | QST-03 | 단위(근거 검증) + 실모델 통합 | 미착수 |
-| AC-08 | 마이크·카메라·WebRTC 중 하나라도 실패하면 시작 불가 | INT-01, INT-17 | API 통합 + UI E2E(가짜 장치) | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (WebRTC 점검 발화·미디어 자가 보고·AI 상태)); UI E2E 정상 경로 통과(2026-10-28, frontend/e2e/candidate-flow.spec.ts, 가짜 장치·가짜 AI — 점검 통과 전 [면접 시작] 비활성 확인) |
+| AC-08 | 마이크·카메라·WebRTC 중 하나라도 실패하면 시작 불가 | INT-01, INT-17 | API 통합 + UI E2E(가짜 장치) | **2026-10-30 변경: 화면정의서 SC-A04에 따라 시작 조건은 카메라·마이크·스피커 점검(서버 기록)만. WebRTC는 세션 연결 시 확인(INT-17 비고). tests/test_interview.py 수정, 통과(2026-10-30).** 이전 기록: 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (WebRTC 점검 발화·미디어 자가 보고·AI 상태)); UI E2E 정상 경로 통과(2026-10-28, frontend/e2e/candidate-flow.spec.ts, 가짜 장치·가짜 AI — 점검 통과 전 [면접 시작] 비활성 확인) |
 | AC-09 | 질문 음성+자막, 음성 끝나기 전 소리는 답변에 안 들어감 | INT-04, INT-05 | 서버 단위(프레임 게이트) + WebRTC 통합 | 서버 자동 시험 통과(2026-10-28, tests/test_voice.py (게이트 이전 발화 STT 미전달)), UI 미구현 |
 | AC-10 | 실시간 자막, [답변 완료]로 확정, 침묵만으로 종료 안 됨 | INT-05, INT-15 | WebRTC 통합(합성 음성) | 서버 자동 시험 통과(2026-10-28, tests/test_voice.py, test_interview.py (자막·[답변 완료]·침묵으로 종료 안 됨)), UI 미구현 |
 | AC-11 | 60/45초 만료 시 확정, 10초 경고, 무발화 '답변 없음' | INT-06 | 서버 단위(가짜 시계) + UI | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (가짜 시계: 만료 확정·10초 경고·무발화)), UI 미구현 |
@@ -219,3 +220,21 @@
 | X-12 | 확정 | 결정 상태 합격·불합격만, 검토 전이 보류 역할 | 그대로 따름 |
 | X-11 | **미결정** | LLM·STT·TTS·임베딩 모델 선정, 6GB 실측 | TRD에서 후보 비교·실측 후 ADR로 기술적 임시 결정 |
 | X-13 | **미결정** | 동의 문구·보관 기간 법률 검토 | 임의 확정하지 않음. 초안 문구와 설정값만 둠 |
+
+## 11. 화면정의서(pptx 78쪽)에서 생긴 요구 — 2026-11-02 기준
+
+화면정의서가 PRD·CLAUDE.md보다 우선한다(2026-10-30 결정). 아래는 화면 ID로 묶은 구현 현황이다.
+
+| 화면 | 내용 | 구현 | 테스트 | 상태 | 비고 |
+|---|---|---|---|---|---|
+| SC-R01·O01·O02 | 기업회원 가입·인증, 운영자 기업 인증·공고 숨김·기업 정지 | `app/auth/company_signup.py`, `app/operator`, `screens/operator/*` | `test_company_signup.py`, `test_operator.py` | 검증 완료 | |
+| SC-R03·R04·R06 | 공고 관리·작성·미리보기 | `app/postings`, `Postings.tsx`, `PostingForm.tsx`, `PostingPreview.tsx` | `test_postings_apply.py` | 검증 완료 | 미리보기는 작은 창이 아니라 쪽이고, 작성 중 저장하지 않은 내용은 미리볼 수 없다(저장된 초안만) |
+| SC-R05 | 템플릿 불러오기 | `app/recruiter/templates.py`, `TemplateModal.tsx` | `test_templates_inquiries.py` | 검증 완료 | HWP 미지원 |
+| SC-R07 | 면접 질문 관리 | `EvaluationSettings.tsx`, `app/postings` | `EvaluationSettings.test.tsx` | 진행 중 | 평가 항목 추가(상·중·하 기준)와 세부 항목은 없음(평가 구조 2~4단계) |
+| SC-R08·R09·R10 | 응시자 목록·상세·담당자 리포트, 메모 | `app/recruiter/router.py`, `ApplicationDetail.tsx`, `Report.tsx` | `test_recruiter.py`, `test_candidate_report.py` | 검증 완료 | |
+| SC-R11·R14·R12 | 일정 관리, 메일 보내기, 알림 창 | `app/recruiter/schedule.py`, `notifications.py`, `MailModal.tsx`, `NotificationBell.tsx` | `test_schedule.py`, `test_mail.py`, `test_notifications.py` | 검증 완료 | |
+| SC-R13 | 대시보드 | `app/recruiter/router.py`, `Home.tsx` | `test_recruiter.py` | 검증 완료 | |
+| SC-R15 | 문의 쪽지 | `app/recruiter/inquiries.py`, `Inquiries.tsx`, `InquiryModal.tsx` | `test_templates_inquiries.py`, `Inquiries.test.tsx` | 검증 완료 | 정의서에 지원자 쪽 화면이 없어 ‘지원 현황’의 ‘기업에 문의’ 창을 두었다. 운영자가 직접 쓰는 화면은 없고 기업 인증 반려 사유만 쪽지로 간다 |
+| SC-A08 | 지원자 결과 리포트(슬라이드 30~34) | `app/applications/report.py`, `Report.tsx` | `test_candidate_report.py`, `Report.test.tsx` | 진행 중 | 영역 이름·순서는 정의서와 같다. 세부 항목, 규칙 지표 점수, 발음·높낮이, STAR, 표정·긴장도 그래프는 아직 없음 |
+| (제거) 화이트보드 | 2026-11-02 결정으로 기능 전체 제거 | — | — | 보류 | 저장된 데이터·열은 남김 |
+| (미착수) | 평가 구조 2~6단계: 세부 항목, 규칙 지표 반영, 기업이 추가한 평가 항목, 음성 분석, STAR | — | — | 미착수 | 사용자가 ‘정의서 구조로 전환’을 선택함. 1단계(영역 이름·순서·가중치)만 끝남 |

@@ -166,12 +166,15 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 |---|---|---|---|
 | `GET /api/consent/current` (구현) | → `{version, is_draft, body_md, items: [{code, label, required}]}`. 가장 최근 문서 | 503 `CONSENT_UNAVAILABLE` | — |
 | `POST /api/candidate/postings/{pid}/consents` (구현) | `{version, answers: {code: bool}}`(모든 항목 코드가 있어야 함) → 201 `{consent_id, all_required_agreed, version, agreed_at}`. 거부도 기록한다(SEC-02). 진행 가능 여부는 `all_required_agreed`로 판단하고, false면 화면이 공고 상세로 돌아간다 | 404, 409 `POSTING_CLOSED`, 409 `CONSENT_VERSION_STALE`(`current`), 422 `VALIDATION` | CONSENT_RECORD |
-| `POST /api/candidate/resume-files` (구현) | multipart `file` → 201 `ResumeFileOut`. 크기·확장자·매직바이트·파싱을 동기로 확인. 텍스트가 30자 이상이면 `extract_resume` 작업 등록 + `PENDING`, 아니면 `NO_TEXT`(RES-04 직접 입력 안내). 저장 이름은 서버가 만든 UUID | 413 `FILE_TOO_LARGE`, 415 `NOT_PDF`, 422 `PDF_ENCRYPTED`·`PDF_TOO_MANY_PAGES`·`PDF_UNREADABLE` | — |
+| `POST /api/candidate/resume-files` (구현) | multipart `file` → 201 `ResumeFileOut`. 크기·확장자·매직바이트·파싱을 동기로 확인. 텍스트가 30자 이상이면 `extract_resume` 작업 등록 + `PENDING`, 아니면 `NO_TEXT`(RES-04 직접 입력 안내). 저장 이름은 서버가 만든 UUID | 413 `FILE_TOO_LARGE`, 415 `UNSUPPORTED_FILE`(PDF·DOCX·PNG·JPG 외), 422 `PDF_ENCRYPTED`·`PDF_TOO_MANY_PAGES`·`PDF_UNREADABLE`·`DOCX_UNREADABLE` | — |
 | `GET /api/candidate/resume-files/{file_id}` (구현) | → `ResumeFileOut`(추출 상태 폴링, 2초 간격). `fields`는 원문 부분 문자열로 검증된 값만(RES-03) | 404(소유자 아님 포함) | — |
+| `GET /api/candidate/profile` · `PUT …/profile` (구현) | SC-A11. `{name, email(읽기 전용), birth_date, gender M\|F, phone}`. 이메일은 바꿀 수 없음(본문에 오면 422). 저장하면 세션 이름도 바뀜 | 422 형식 오류 | — |
+| `POST /api/candidate/profile/password-link` (구현) | SC-A11 '비밀번호 변경'. 계정 이메일로 재설정 메일(SC-A12와 같은 토큰 흐름) → 202 `{email}` | — | — |
+| `GET /api/candidate/schedules` (구현) | SC-A15. 본인 지원 건의 면접 일정 `[{id, application_id, company_name, title, starts_at, place, status}]`(일시 순) | — | — |
 | `GET /api/candidate/resume` (구현) | → `{resume: null \| {content: ResumeContent, source: PDF\|MANUAL, file_id, updated_at}}` | — | — |
 | `PUT /api/candidate/resume` (구현) | `{content: ResumeContent, file_id?}` → `{ok: true}`(등록본 갱신, RES-07) | 422 `RESUME_MIN_FIELDS`·`VALIDATION`, 404(파일) | — |
 | `POST /api/candidate/postings/{pid}/applications` (구현) | `{consent_id, resume: ResumeContent, resume_file_id?, update_registered: false}` → 201 `{application_id}`. 같은 트랜잭션에서 `resume_snapshot`·`resume_snapshot_text`(성명·연락처 제외 평문, QST-03 근거) 고정. 등록본은 `update_registered`가 true일 때만 갱신 | 403 `ROLE_FORBIDDEN`(담당자), 404, 409 `POSTING_CLOSED`, 409 `CONSENT_REQUIRED`, 409 `ALREADY_APPLIED`, 422 `RESUME_MIN_FIELDS`·`VALIDATION` | — |
-| `GET /api/candidate/applications` (구현) | → `[CandidateApplicationOut]`(지원일 역순) | — | — |
+| `GET /api/candidate/applications` (구현) | → `[CandidateApplicationOut]`(지원일 역순). SC-A09용 `main_count`(질문 세트 문항 수), `share_result`, `progress_label`(기업 검토 중·2차 면접 일정 확정·면접 중단·연습 모드·합격·불합격, 응시 전/중은 '면접 전'·'면접 진행 중'), `progress_kind`(good/bad/hold/none) 포함 | — | — |
 | `GET /api/candidate/applications/{aid}` (구현) | → `CandidateApplicationOut` | 404 | — |
 | `GET /api/candidate/applications/{aid}/result` (구현) | → `CandidateResultOut`(5절) | 404 | — |
 | `DELETE /api/candidate/me` | `{password}` → 202, 전 세션·쿠키 삭제, TRD 03 8절의 탈퇴 처리 | 403 `REAUTH_FAILED`, 409 `ACTIVE_ATTEMPT` | ACCOUNT_WITHDRAW |
@@ -196,7 +199,7 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | `POST /api/recruiter/postings/{pid}/close` (구현) | → `PostingDetailOut`(OPEN→CLOSED, MANUAL). 같은 트랜잭션에서 READY·PREPARING·INTERRUPTED 지원 건을 EXPIRED로 바꾼다(코딩 중 끊긴 건은 초안 AUTO_EXPIRED 제출, 응답이 있으면 평가 등록, `lifecycle.expire_unfinished`) | 409 `INVALID_STATE` | POSTING_CLOSE |
 | `DELETE /api/recruiter/postings/{pid}` (구현) | → 204(`deleted_at`) | 409 `HAS_APPLICATIONS` | POSTING_DELETE |
 | `GET /api/recruiter/postings/{pid}/evaluation-settings` (구현) | → `EvalSettingsOut` | 404 | — |
-| `PUT /api/recruiter/postings/{pid}/evaluation-settings` (구현) | `{weights: {expertise, logic, specificity, delivery, coding?}, custom_question?}` → `EvalSettingsOut`(새 버전 행 + `current_settings_id`, 공고 행 `FOR UPDATE`). 빈 커스텀 질문은 NULL(자동 채움, QST-04) | 422 `WEIGHTS_CODING_MISMATCH`, 422 `WEIGHT_SUM_NOT_100`(`total`), 422 `CUSTOM_QUESTION_TOO_SHORT`, 409 `SETTINGS_LOCKED` | SETTINGS_CHANGE(`version`) |
+| `PUT /api/recruiter/postings/{pid}/evaluation-settings` (구현) | `{weights: {expertise, logic, attitude, delivery, coding?}, custom_question?}` → `EvalSettingsOut`(새 버전 행 + `current_settings_id`, 공고 행 `FOR UPDATE`). 빈 커스텀 질문은 NULL(자동 채움, QST-04) | 422 `WEIGHTS_CODING_MISMATCH`, 422 `WEIGHT_SUM_NOT_100`(`total`), 422 `CUSTOM_QUESTION_TOO_SHORT`, 409 `SETTINGS_LOCKED` | SETTINGS_CHANGE(`version`) |
 | `POST /api/recruiter/postings/{pid}/evaluation-settings/reset` (구현) | → `EvalSettingsOut`(기본 가중치, 커스텀 질문 없음. ADM-05 [초기화]) | 409 `SETTINGS_LOCKED` | SETTINGS_CHANGE(`reset`) |
 | `GET /api/recruiter/coding-problems` (구현) | → `[{id, title, statement_md, language, public_examples: [{input, output}]}]`(활성 문제, OQ-14) | — | — |
 
@@ -305,6 +308,91 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | runner | `POST /v1/run` | app([실행]), worker(`grade_coding`) | `X-Runner-Token`. `{job_id, mode: run\|grade, language, code, cases[{case_id, stdin}], profile}` → 케이스별 결과. **기대 출력은 보내지 않는다.** 테스트 1건 = 컨테이너 1개, 비교는 worker(C8) | TRD 07 |
 
 운영자는 웹 API가 없다(OQ-19). `python -m app.cli`(`create-company`, `create-recruiter`, `seed-demo`, `requeue-evaluation` 등)로 처리하고 감사(`actor_role=OPERATOR_CLI`)를 남긴다.
+
+### 5.5 기업회원 가입 (SC-R01)
+| 엔드포인트 | 권한 | 설명 |
+|---|---|---|
+| `POST /api/auth/company-signup/code` | 없음, IP 제한 | `{email}` → 6자리 인증번호 메일. `{free_mail, expires_in_sec}` |
+| `POST /api/auth/company-signup` | 없음 | `{company_name, biz_no(000-00-00000), name, email, code, password, password_confirm}` → 회사·담당자 생성 후 세션. 개인 메일(gmail.com 등 8개)이면 PENDING. 오류: `SIGNUP_CODE_INVALID`(400), `EMAIL_UNAVAILABLE`(409) |
+| `GET /api/recruiter/company` | 담당자 | 자기 회사 인증 상태 |
+| `POST /api/recruiter/company/evidence` | 담당자, PENDING·REJECTED | 재직증명서·사업자등록증(PDF/JPG/PNG, 10MB). 반려된 기업이 올리면 PENDING으로 돌아가 재신청이 된다. 공고 게시는 `COMPANY_NOT_VERIFIED`(403)로 차단 |
+
+### 5.6 운영자 · 기업 인증 (SC-O01)
+운영자(`role=OPERATOR`)는 기업회원 탭으로 로그인한다. 운영자는 회사가 없고 지원자·응시 데이터에 접근하지 못한다. 모든 엔드포인트가 서버에서 `OPERATOR`를 검사한다(아니면 403 `ROLE_FORBIDDEN`).
+
+| 엔드포인트 | 설명 |
+|---|---|
+| `GET /api/operator/companies` | `{counts{pending,auto,approved,rejected}, items[]}`. 검토 필요가 맨 위, 반려가 맨 아래. 항목: 회사·담당자·이메일·사업자등록번호·확인 방법(`DOMAIN_MAIL`/`DOCUMENT`)·증빙 이름·신청일·상태·반려 사유 |
+| `GET /api/operator/companies/{id}/evidence` | 증빙 파일 보기(감사 기록, `Content-Security-Policy: sandbox`, `nosniff`) |
+| `POST /api/operator/companies/{id}/approve` | PENDING → APPROVED(`verification_method=OPERATOR`). 아니면 409 `INVALID_STATE` |
+| `POST /api/operator/companies/{id}/reject` | `{reason 1~500자}` PENDING → REJECTED. 사유는 기업 화면 안내에 보인다(쪽지 기능 전까지) |
+
+### 5.6a 담당자 결정 보류
+`POST /api/recruiter/applications/{id}/decision`의 `decision`은 `PASS`·`HOLD`·`FAIL`. `HOLD`는 담당자 내부 상태다. 지원자 응답은 HOLD를 `UNDECIDED`(‘검토 중’)로 바꿔 내보내고 결과·피드백·메일을 내지 않는다. 보류로 바꿔도 보관 기간 기준(`first_decided_at`)은 시작되지 않는다. 목록 필터 `decision`에도 `HOLD`가 있다.
+
+### 5.6b 운영자 · 공고 관리 (SC-O02)
+| 엔드포인트 | 설명 |
+|---|---|
+| `GET /api/operator/postings` | 작성 중이 아닌 모든 공고: 회사·직무·상태·숨김·기업 정지 여부 |
+| `POST /api/operator/postings/{id}/hide` · `/show` | 숨기면 메인·목록에서 빠지고 새 지원이 막힌다(이미 지원한 사람은 그대로). 정지된 기업의 공고는 정지를 풀어야 다시 보인다(409 `COMPANY_SUSPENDED`) |
+| `POST /api/operator/companies/{id}/suspend` · `/unsuspend` | 정지하면 그 회사의 공고가 모두 숨겨지고 새 공고를 게시할 수 없다(403 `COMPANY_SUSPENDED`). 해제하면 정지로 숨겨진 공고만 돌아오고, 운영자가 따로 숨긴 공고는 숨김으로 남는다 |
+
+신고 건수(화면정의서 SC-O02)는 신고를 받는 기능이 없어 표시하지 않는다.
+
+### 5.6c 면접 질문 관리 (SC-R07)
+`PUT /api/recruiter/postings/{id}/evaluation-settings`는 `weights`, `custom_question`, `interview{question_plan, think_sec, answer_sec, followup_max}`에 더해 `question_areas`(1~5개, 생략하면 그대로)를 받는다. 응답에도 `question_areas`가 있고 공고 상세의 ‘면접 질문 분야’가 이 값을 쓴다. `POST …/evaluation-settings/reset`은 질문 분야·질문 목록·면접 설정만 처음으로 되돌리고 가중치는 그대로 둔다(화면정의서가 PRD ADM-05의 ‘가중치 초기화’보다 우선). 직접 추가하는 평가 항목은 지원하지 않는다(루브릭 4개 고정).
+
+### 5.6d 일정 관리와 메일 보내기 (SC-R11, SC-R14)
+모두 담당자 세션의 회사 범위로만 읽고 쓴다(다른 회사의 일정·지원 건은 404).
+
+| 엔드포인트 | 설명 |
+|---|---|
+| `GET /api/recruiter/schedule?month=YYYY-MM` | 그 달(한국 시간) 항목: 회사가 직접 넣은 일정(면접·결과 발표·내부 일정) + 게시 중 공고 마감일(자동, 수정 불가) + 메일로 보낸 면접 일정(자동, 지원자 응답 `status`) |
+| `GET /api/recruiter/schedule/upcoming?limit=4` | 오늘부터 90일 안의 다가오는 일정(SC-R13) |
+| `POST` · `PUT` · `DELETE /api/recruiter/schedule[/{id}]` | `{starts_at, kind, content 1~200자, place?}`. 공고 마감(`deadline:…`)은 409 `AUTO_ENTRY`. 지원자가 수락한 일정의 시간을 바꾸면 변경 메일이 나가고 응답 링크가 새로 만들어진다(옛 링크는 404) |
+| `POST /api/recruiter/applications/{id}/mail` | `{kind: INTERVIEW\|RESULT\|FREE, subject(회사명 제외), body, starts_at?, place?}`. 제목 앞에 `[회사명]`을 서버가 붙인다. `INTERVIEW`는 날짜가 필수(422)이고, 이 지원자의 응답 전·조율 요청 일정을 새 일정으로 바꾼다. 메일은 작업 큐로 나가며 작업에는 메일 id만 들어간다. 감사 로그에는 종류만 남고 본문은 남지 않는다 |
+| `GET` · `POST /api/schedule-response` | 로그인 없음. 메일의 링크 토큰(32바이트 난수, DB에는 SHA-256만)으로 일정을 보고 `{answer: ACCEPT\|RESCHEDULE}`로 답한다. 지난 일정은 409 `SCHEDULE_PAST` |
+
+결과 안내 메일은 담당자가 직접 쓰는 글이다. 자동으로 나가는 접수·결과 등록 메일(SEC-04)과 달리 담당자가 본문에 무엇을 쓰는지는 담당자 책임이다.
+
+### 5.6e 알림 창 (SC-R12)
+| 엔드포인트 | 설명 |
+|---|---|
+| `GET /api/recruiter/notifications` | `{unread, items[30]}` 최신순. 읽을 때 ‘내일 마감되는 게시 공고’ 알림을 (공고, 마감일)당 한 번 만든다. 종류: `DEADLINE`(공고 마감 하루 전), `APPLY`(면접 완료 또는 중간에 멈춤), `SCHEDULE`(2차 면접 일정 수락·조율 요청) |
+| `POST /api/recruiter/notifications/read` | 모든 알림을 읽음으로(창을 닫을 때) |
+| `POST /api/recruiter/notifications/{id}/extend` · `/close` | 마감 알림의 ‘7일 연장’(마감일 + 7일, 그날 23:59 한국 시간) · ‘지금 마감’. 이미 마감됐으면 409 `POSTING_CLOSED`. 처리하면 알림에 결과 문구(`done_text`)가 남는다 |
+
+알림은 회사 단위로 공유되고 읽음 상태도 회사 것이다. 알림 문장에는 이름과 공고 제목만 있고 점수·결과는 없다. 연습 모드 응시는 알림이 가지 않는다. 한 지원 건의 ‘완료’·‘멈춤’ 알림은 각각 한 번만 생긴다.
+
+### 5.6f 지원자 결과 리포트 (SC-A08, 화면정의서 슬라이드 30~34)
+평가가 끝나면(`eval_status=DONE`) 담당자의 결정과 관계없이 지원자 본인이 바로 본다. 합격·불합격과 피드백(`GET …/result`)은 이와 별개로 담당자가 결정한 뒤에만 나온다(X-04는 결과에만 적용). 화면정의서가 PRD·CLAUDE.md보다 우선(2026-10-30 결정)이라 지원자에게 총점·가중치·점수 근거 인용이 보인다.
+
+| 엔드포인트 | 설명 |
+|---|---|
+| `GET /api/candidate/applications/{id}/report` | 본인 지원 건만(다른 사람 404, 담당자 403). 평가 전이면 409 `REPORT_NOT_READY`(화면이 3초마다 다시 묻는다). 본문: 머리(공고·회사·이름·날짜·질문 수·꼬리질문 수·평균 답변 시간), 총점(소수 첫째 자리)·등급(90↑ 매우 우수, 80↑ 우수, 70↑ 양호, 60↑ 보통, 그 밑 노력 필요)·항목별 점수와 가중치, 총평, 강점·개선점 1~3순위와 관련 질문 번호(`point_refs`), 질문 칩, 영역별 평가, 답변 습관(부정적 표현·답변 시간), 시선 이탈 횟수, 질문별 평가(답변 원문, 가점·감점 구절 위치, 점수 근거, 잘한 점·보완할 점, 코드 제출본, 꼬리질문과 AI가 물은 이유) |
+| `POST …/media/delete` | ‘영상·음성 지금 삭제’: 답변 음성 파일을 지금 지운다(점수·텍스트는 남음). 면접이 끝난 뒤만, 감사 로그 `MEDIA_DELETE`. 카메라 영상은 처음부터 저장하지 않는다 |
+
+담당자용 정보(AI 예상 합격, 메모, 모델·프롬프트 버전, 근거 부족 집계)는 이 응답에 없다. 점수는 모델이 아니라 서버 코드가 계산한 저장값이다. 가점·감점 구절은 점수 4~5점(가점)·1~2점(감점)을 받은 항목의 인용이고, 인용은 답변 원문의 연속 구절임이 검증된 것만이다. 부정적 표현은 정해 둔 표현 목록과 답변 원문을 맞춰 본 규칙 기반 결과이며 점수에는 반영하지 않는다.
+
+**화면정의서와 다른 점:** 평가 영역은 정의서의 4개(논리성, 전달력, 표현 및 태도, 전문성)와 이름·순서가 같다(마이그레이션 0019). 그러나 영역 안의 세부 항목(일관성·답변의 구체성·설명의 마무리, 인재상 연계 등)과 규칙 지표(부정적 단어·답변 시간·말 속도)의 점수 반영, 발음·음성 높낮이, STAR 구조, 기업이 추가한 항목은 아직 없다. 표정·긴장도 그래프는 ‘준비 중’이고 시선 이탈 횟수만 보인다. ‘리포트까지 모두 삭제’는 정의서처럼 안내만 한다.
+
+### 5.6g 담당자용 리포트, 템플릿 불러오기, 문의 쪽지 (SC-R10, SC-R05, SC-R15)
+
+모두 로그인한 담당자의 회사로 범위가 정해진다(다른 회사의 것은 404). 연습 모드 응시는 회사에 보이지 않는다.
+
+| 엔드포인트 | 설명 |
+|---|---|
+| `GET /api/recruiter/applications/{id}/report-view` | SC-R10. 지원자용 리포트(5.6f)와 같은 본문에 `ai_reference`(PASS·HOLD·FAIL, 총점으로 코드가 계산)만 더한다. 지원자용 응답에는 `ai_reference`가 없다 |
+| `GET·POST /api/recruiter/posting-templates`, `DELETE …/{id}` | SC-R05 ‘저장한 템플릿’. 회사당 50개까지(409 `TEMPLATE_LIMIT`). 마감일은 저장하지 않는다 |
+| `POST /api/recruiter/postings/import-file` | SC-R05 ‘외부 파일’. DOCX·PDF(10MB 이하)를 읽어 제목·주요 업무·자격 요건·우대 사항으로 나눠 돌려준다. HWP는 415 `HWP_UNSUPPORTED`(DOCX·PDF로 저장 안내). 파일은 저장하지 않는다 |
+| `GET /api/recruiter/inquiries`, `…/unread-count`, `GET …/{id}`(열면 읽음), `POST …/{id}/messages` | SC-R15. 쪽지 목록(보낸 사람·종류·제목·읽지 않음), 대화, 답장 |
+| `GET·POST /api/candidate/applications/{id}/inquiry` | 지원자가 자기 지원 건으로 기업에 문의(지원 건당 대화 1개). 연습 모드 응시는 409 `PRACTICE_MODE`. 정의서에 지원자 쪽 화면이 없어 ‘지원 현황’의 ‘기업에 문의’ 창으로 두었다 |
+| (운영자) 기업 인증 반려 | 반려하면 반려 사유가 운영자 종류의 쪽지로 회사에 간다 |
+
+**공고 삭제(JOB-04 변경):** `DELETE /api/recruiter/postings/{id}`는 이제 지원자가 있어도 삭제된다(화면정의서 SC-R04: ‘응시자 ○명의 결과는 응시자 목록에 남습니다’). 게시 중인 공고는 먼저 마감하고(끝나지 않은 면접은 7.4처럼 만료) 삭제 표시(`deleted_at`)를 한다. 응시자 데이터는 지우지 않는다.
+
+### 5.7 담당자 대시보드 (SC-R13)
+`GET /api/recruiter/dashboard` = `{open_postings, awaiting_review, applicants_this_month, applicants_last_month, views_total, completion_rate, postings[{id,title,job_family,status,views,applicants,avg_score}]}`. 작성 중 공고는 `postings`에서 빠진다. 응시자 목록·리포트에는 코드로 계산한 `ai_reference`(PASS ≥75 / HOLD 65~74 / FAIL, 평가 완료 시만)가 들어가며 담당자만 본다.
 
 ## 6. 지원자 응답 스키마 (SEC-04, RPT-03, AC-19)
 

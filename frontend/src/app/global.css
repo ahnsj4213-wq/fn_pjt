@@ -1,26 +1,27 @@
 :root {
-  --color-bg: #f7f8fa;
-  --color-surface: #ffffff;
-  --color-text: #1b1f24;
-  --color-muted: #5b6470;
-  --color-border: #c9ced6;
-  --color-primary: #1f5fbf;
-  --color-primary-text: #ffffff;
-  --color-danger: #b42318;
-  --color-danger-bg: #fdecea;
-  --color-info-bg: #eaf2fd;
-  --color-success: #1e6b3a;
-  --color-success-bg: #e8f5ec;
-  --color-focus: #0b57d0;
-  --radius: 6px;
+  /* Old token names, now taken from the wireframe palette (wireframe.css) so every screen shares one look. */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-text: var(--ink);
+  --color-muted: var(--muted);
+  --color-border: var(--line);
+  --color-primary: var(--accent);
+  --color-primary-text: var(--accent-ink);
+  --color-danger: var(--bad-ink);
+  --color-danger-bg: var(--bad-soft);
+  --color-info-bg: var(--accent-soft);
+  --color-success: var(--accent);
+  --color-success-bg: var(--accent-soft);
+  --color-focus: var(--accent);
+  --radius: 8px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-6: 24px;
   --space-8: 32px;
-  /* System fonts only: no web-font download (AC-22). */
-  --font-sans: 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR', system-ui, sans-serif;
+  /* Self-hosted Gothic A1 / IBM Plex Sans KR (@fontsource, OFL-1.1): no web-font download (AC-22). */
+  --font-sans: var(--font-body);
   --font-mono: Consolas, 'D2Coding', ui-monospace, monospace;
 }
 
@@ -34,6 +35,6 @@ body {
   word-break: keep-all;
   overflow-wrap: anywhere;
 }
-:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 a { color: var(--color-primary); }
 code, pre, .cm-editor { font-family: var(--font-mono); }

@@ -1,10 +1,14 @@
 # Backend images (deploy/docker-compose.yml). One Dockerfile, three targets:
-#   app     - api (uvicorn) and the one-shot migration
-#   worker  - Celery worker and beat (scheduler); adds the docker CLI and the runner package so the worker starts the
+#   app     - api: runs the migration, then uvicorn (deploy/docker-compose.yml command)
+#   worker  - Celery workers and beat (scheduler) in one container; adds the docker CLI and the runner package so the worker starts the
 #             code sandbox containers itself (build context `runner` = ../runner, a compose additional context)
-#   ai      - stt / tts speech servers (faster-whisper with CUDA 12 / cuDNN 9 from pip wheels; Supertonic)
+#   ai      - STT / TTS speech servers (faster-whisper with CUDA 12 / cuDNN 9 from pip wheels; Supertonic) plus the
+#             CPU llama.cpp servers for evaluation and embeddings, copied from the official llama.cpp image (ADR-0015)
 # Build context: backend/.
 # Behind a TLS-inspecting proxy, pass its CA as the `build_ca` secret (deploy/.env BUILD_CA_FILE); unset = nothing.
+ARG LLAMACPP_CPU_TAG=server
+FROM ghcr.io/ggml-org/llama.cpp:${LLAMACPP_CPU_TAG} AS llamacpp
+
 FROM python:3.12-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/srv/backend
@@ -30,6 +34,9 @@ FROM docker:29-cli AS dockercli
 
 FROM app AS worker
 USER root
+# Resume OCR (RES-04): Tesseract with Korean + English data; the extraction job runs it in a separate interpreter.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=runner runner /srv/runner/runner
 COPY --from=runner sandbox /srv/runner/sandbox
@@ -39,15 +46,18 @@ ENV PYTHONPATH=/srv/backend:/srv/runner
 CMD ["python", "-m", "app.worker_main"]
 
 FROM base AS ai
+# llama-server needs OpenMP; the rest of its libraries ship next to it in /app of the llama.cpp image.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+COPY --from=llamacpp /app /opt/llama
 RUN python -c "import tomllib; print('\n'.join(x.split(';')[0] for x in tomllib.load(open('pyproject.toml','rb'))['project']['optional-dependencies']['ai'] if 'nvidia' not in x))" \
       > /tmp/req-ai.txt
 RUN --mount=type=secret,id=build_ca \
     if [ -s /run/secrets/build_ca ]; then cat /etc/ssl/certs/ca-certificates.crt /run/secrets/build_ca > /tmp/ca.pem; export PIP_CERT=/tmp/ca.pem; fi; \
     pip install -r /tmp/req-ai.txt "nvidia-cublas-cu12==12.*" "nvidia-cudnn-cu12==9.*"
 # ctranslate2 finds cuBLAS/cuDNN through the loader path; the GPU driver itself comes from the NVIDIA runtime.
-ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib:/opt/llama
 COPY . .
 # Models come from the read-only /models mount (scripts/prepare_models.py); no downloads at run time.
 ENV HF_HOME=/models/hf SUPERTONIC_CACHE_DIR=/models/supertonic3
-EXPOSE 8201 8202
-CMD ["python", "-m", "app.aisvc.speech_server", "stt"]
+EXPOSE 8201 8202 8082 8083
+CMD ["bash", "scripts/ai_entrypoint.sh"]

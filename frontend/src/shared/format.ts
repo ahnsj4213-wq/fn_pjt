@@ -12,6 +12,19 @@ export function formatDate(iso: string | null | undefined): string {
   return new Intl.DateTimeFormat('ko-KR', { timeZone: KST, year: 'numeric', month: 'numeric', day: 'numeric' }).format(new Date(iso));
 }
 
+/** "10.05" (KST), the short date of the wireframe tables and lists. */
+export function formatMonthDay(iso: string | null | undefined): string {
+  if (!iso) return '-';
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: KST, month: '2-digit', day: '2-digit' }).formatToParts(new Date(iso));
+  return `${p.find((x) => x.type === 'month')?.value}.${p.find((x) => x.type === 'day')?.value}`;
+}
+
+/** "10:30" (KST, 24h). */
+export function formatTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  return new Intl.DateTimeFormat('en-GB', { timeZone: KST, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso));
+}
+
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '-';
   return new Intl.DateTimeFormat('ko-KR', {

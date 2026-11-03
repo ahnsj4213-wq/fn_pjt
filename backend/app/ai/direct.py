@@ -33,8 +33,8 @@ class DirectAIClient:
                  embedder: LlamaCppBackend | None = None, stt: HttpAIClient | None = None,
                  tts: HttpAIClient | None = None) -> None:
         s = get_settings()
-        self.rt = rt or LlamaCppBackend(s.llm_rt_url, name=s.llm_model)
-        self.eval = eval_ or LlamaCppBackend(s.llm_eval_url, name=s.llm_model)
+        self.rt = rt or LlamaCppBackend(s.llm_rt_url, name=s.llm_model, slot=s.llm_rt_slot)
+        self.eval = eval_ or LlamaCppBackend(s.llm_eval_url, name=s.llm_model, slot=s.llm_eval_slot)
         self.embedder = embedder or LlamaCppBackend(s.embed_url, name=s.embed_model)
         self.stt_client = stt or HttpAIClient(base_url=s.stt_url)
         self.tts_client = tts or HttpAIClient(base_url=s.tts_url)

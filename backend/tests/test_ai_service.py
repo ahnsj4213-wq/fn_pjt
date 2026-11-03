@@ -342,7 +342,7 @@ async def test_fake_client_runs_real_validators():
               "experience": [{"company": "가나다 커머스", "role": "백엔드 개발자", "description": "결제 API 설계와 운영을 담당"}]}
     rq = await fake.llm("resume_question", {"resume": resume, "job_brief": "백엔드", "n": 2}, lane="INTERACTIVE")
     assert rq.status == "OK" and len(rq.output["questions"]) == 2
-    qg = await fake.llm("question_generate", {"kind": "JOB", "job_family": "BACKEND", "n": 2,
+    qg = await fake.llm("question_generate", {"kind": "JOB", "job_family": "DEV", "n": 2,
                                               "posting": {"title": "백엔드 개발자", "duties": "주문 API 개발. 결제 시스템 운영",
                                                           "requirements": "Python 3년 이상"}}, lane="INTERACTIVE")
     assert qg.status == "OK" and len(qg.output["questions"]) == 2
@@ -415,7 +415,7 @@ async def test_evaluate_empty_quote_gets_one_regeneration():
         calls["n"] += 1
         quote = "" if calls["n"] == 1 else good
         item = {"quote": good, "comment": "근거가 있다.", "score": 4}
-        return {"expertise": item, "logic": {**item, "quote": quote}, "specificity": item,
+        return {"expertise": item, "logic": {**item, "quote": quote}, "attitude": item,
                 "delivery": {**item, "quote": ""}}
 
     fake.responses["evaluate_answer"] = reply
