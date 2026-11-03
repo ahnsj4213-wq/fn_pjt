@@ -85,6 +85,9 @@
 | aiortc | 1.15.0 | BSD-3 | |
 | av (PyAV) | 17.1.0 | BSD-3 | LGPL FFmpeg 동봉 → 동적 링크 유지, 재배포 시 고지 |
 | numpy / soundfile | 2.5.4 / 0.14.0 | BSD-3 | |
+| langgraph | 1.2.19 | MIT | 면접 진행 그래프(ADR-0016). 로컬 실행, 추적 전송 끔 |
+| langgraph-checkpoint-postgres | 3.2.0 | MIT | 그래프 체크포인트를 우리 PostgreSQL에 저장 |
+| psycopg[binary,pool] | 3.3.7 | LGPL-3.0 | 위 체크포인터 드라이버(라이브러리로 동적 사용). 앱의 DB 접근은 asyncpg |
 | [ai] faster-whisper / ctranslate2 | 1.2.1 / 4.8.4 | MIT | ai 프로세스 전용 |
 | [ai] onnxruntime | 1.31.0 | MIT | |
 | [ai] supertonic | 1.3.1 | MIT(코드) | 모델 가중치는 4.4 |

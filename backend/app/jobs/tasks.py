@@ -93,6 +93,10 @@ async def attempt_sweeper() -> None:
     for app_id in stale:
         async with session_scope() as db:
             await turns.interrupt(db, app_id)
+    from app.interview.checkpoint import purge_finished
+
+    async with session_scope() as db:
+        await purge_finished(db)  # graph checkpoints of attempts that are over
 
 
 @periodic("retention_purge")

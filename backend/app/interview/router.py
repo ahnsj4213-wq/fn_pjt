@@ -19,6 +19,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import AppError, conflict
 from app.core.timeutil import utcnow
+from app.interview import graph as igraph
 from app.interview import infra, slots, turns
 from app.jobs.queue import enqueue
 from app.core.storage import get_storage
@@ -283,11 +284,12 @@ async def text_next(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), d
         raise invalid_state(app)
     live = (await db.execute(select(InterviewTurn).where(InterviewTurn.application_id == app.id,
                                                          InterviewTurn.state == "ANSWERING"))).scalar_one_or_none()
+    await db.commit()  # the graph's nodes use their own sessions: the application lock must be released first
     if live is None:
-        view = await turns.present_next(db, app.id, input_mode="TEXT")
-        if view is None:
-            await turns.finish_interview(db, app.id)
-    await db.commit()
+        async with igraph.app_lock(app.id):
+            await igraph.begin(app.id, "TEXT", igraph.TextIO())  # present -> ask -> wait_answer (or finish when all answered)
+        db.expunge_all()  # the graph wrote through other sessions: read the rows again
+        app = await db.get(Application, app.id)
     return await interview_state(db, app)
 
 
@@ -376,11 +378,15 @@ async def text_answer(aid: UUID, turn_id: UUID, body: TextAnswerIn, ctx: Candida
     if turn.input_mode != "TEXT" or turn.state != "ANSWERING":
         raise conflict("TURN_CLOSED", "이미 마감된 질문입니다.")
     late = turn.deadline_at and utcnow() > turn.deadline_at + timedelta(seconds=get_settings().answer_grace_seconds)
-    answer = await turns.finalize(db, turn.id, end_reason="TIMEOUT" if late else "BUTTON",
-                                  transcript="" if late else body.text)
-    await db.commit()
-    if answer is not None:
-        await turns.decide_followup(app.id, answer.id)
+    view = await turns.view_of(db, turn.id)
+    await db.commit()  # the graph's nodes use their own sessions: the application lock must be released first
+    io = igraph.TextIO("" if late else body.text)
+    async with igraph.app_lock(app.id):
+        await db.refresh(turn)
+        if turn.state != "ANSWERING":  # a second request for the same turn waited for the first one
+            return {"turn_id": turn.id, "state": "CLOSED"}
+        await igraph.ensure_waiting(app.id, view, "TEXT", io)
+        await igraph.resume(app.id, "TIMEOUT" if late else "BUTTON", io)  # transcribe -> decide_followup (-> handed back)
     return {"turn_id": turn.id, "state": "CLOSED"}
 
 

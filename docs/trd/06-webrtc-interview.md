@@ -44,6 +44,8 @@
 
 ## 5. 서버 턴 상태 기계
 
+> **2026-11-03 (ADR-0016):** 아래 S1~S10의 순서는 LangGraph 그래프(`app/interview/graph.py`)가 진행한다. 노드는 `present`(S1) → `ask`(S1~S2b: 질문 이벤트, TTS, 생각 시간) → `wait_answer`(`interrupt`, S3~S6: 답변 창) → `transcribe`(S7: STT 마무리와 답변 확정) → `decide_followup`(S10) → `present`/`finish`다. 음성 세션과 텍스트 모드가 같은 그래프를 `TurnIO`(`ask`/`capture`/`finalized`)로 구동한다. 끊긴 뒤 재접속하면 `present`부터 다시 시작해 같은 문항을 새 제시로 낸다(T9~T12). 체크포인트는 PostgreSQL에 있고 답변 텍스트는 담지 않는다.
+
 `interview_turns.state` = PRESENTING → ANSWERING → FINALIZING → CLOSED, 끊김 시 ABANDONED. `interviews.current_phase`는 같은 값 + DECIDING(꼬리질문 판단 중)·DONE으로 진행기를 비춘다. 진행 중 턴은 지원 건당 하나다(`ux_turn_live`).
 
 | # | 현재 | 이벤트 | 조건 | 동작 | 다음 |

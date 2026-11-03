@@ -96,6 +96,15 @@ async def present_next(db: AsyncSession, app_id: UUID, input_mode: str = "VOICE"
     return view
 
 
+async def view_of(db: AsyncSession, turn_id: UUID) -> TurnView:
+    """The TurnView of an existing turn (what `present_next` returned when it was made)."""
+    turn = await db.get(InterviewTurn, turn_id)
+    q = await db.get(InterviewQuestion, turn.question_id)
+    qset = await db.get(QuestionSet, q.question_set_id)
+    return TurnView(turn.id, q.id, q.seq, q.role == "FOLLOWUP", q.text, q.answer_limit_sec, turn.presentation_no,
+                    turn.input_mode, q.slot_type, q.answer_mode, q.think_sec if turn.input_mode == "VOICE" else 0, qset.main_count)
+
+
 async def open_think(db: AsyncSession, turn_id: UUID, think_sec: float):
     """Question audio finished: the think time runs (mic still closed). Returns its end, or None if the turn moved on."""
     turn = await db.get(InterviewTurn, turn_id, with_for_update=True)

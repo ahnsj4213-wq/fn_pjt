@@ -29,7 +29,7 @@ from app.main import create_app  # noqa: E402
 
 BACKEND = Path(__file__).resolve().parents[1]
 ORIGIN = "http://localhost:5173"
-KEEP = {"state_transitions", "periodic_tasks", "alembic_version", "consent_documents", "question_bank", "coding_problems", "coding_testcases"}
+KEEP = {"state_transitions", "periodic_tasks", "alembic_version", "consent_documents", "question_bank", "coding_problems", "coding_testcases", "checkpoint_migrations"}
 
 
 async def _recreate_db() -> None:

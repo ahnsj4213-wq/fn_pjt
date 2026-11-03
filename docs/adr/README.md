@@ -36,3 +36,4 @@
 | 0013 | Redis 작업 분배·실시간 알림(SSE). jobs 테이블은 영속 기록·outbox로 유지 | 사용자 결정 | ADR-0006 분배 부분 대체 |
 | 0014 | 컨테이너 구성도: frontend(Next.js)·api·mailer·worker(Celery)·scheduler·llm-rt·llm-eval·stt·tts·embed·postgres(pgvector)·redis·minio, 샌드박스는 worker가 실행 | 사용자 결정 | ADR-0001 서비스 분리, ADR-0010 앞단 대체 |
 | 0015 | 컨테이너 통합 12→8: frontend·api(+migrate)·worker(+beat)·postgres·redis·llm-gpu·ai(STT·TTS·평가 LLM·임베딩)·mailer | 사용자 결정 | ADR-0014 배치 부분 대체 |
+| 0016 | 면접 진행과 질문 만들기를 LangGraph 그래프로(진행: present→ask→wait_answer(interrupt)→transcribe→decide_followup→present/finish, 만들기: plan→분야별 채우기→verify→write)present→ask→wait_answer(interrupt)→transcribe→decide_followup→present/finish), PostgreSQL 체크포인트, 전송은 TurnIO로 주입 | 사용자 결정 | ADR-0009 턴 엔진 위의 흐름 제어 |

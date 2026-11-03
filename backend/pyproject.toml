@@ -31,6 +31,9 @@ dependencies = [
   "minio==7.2.20",               # Apache-2.0 (S3/MinIO file storage client)
   "pgvector==0.5.1",             # MIT (question-bank embeddings, migration 0004)
   "celery[redis]==5.6.3",        # BSD-3 (worker + beat in the container stack, ADR-0014)
+  "langgraph==1.2.19",           # MIT; interview progress graph (ADR-0016). Runs locally, no remote call
+  "langgraph-checkpoint-postgres==3.2.0",  # MIT; the graph's checkpoints live in our PostgreSQL
+  "psycopg[binary,pool]==3.3.7", # LGPL-3.0 (dynamic use as a library); the checkpointer's driver, the app itself stays on asyncpg
 ]
 
 [project.optional-dependencies]

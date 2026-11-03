@@ -24,6 +24,9 @@ async def lifespan(app: FastAPI):
     from app.voice import registry
 
     await registry.close_all()  # live WebRTC sessions end with the process
+    from app.interview.checkpoint import close_checkpointer
+
+    await close_checkpointer()
     from app.core.redis import close_redis
 
     await close_redis()

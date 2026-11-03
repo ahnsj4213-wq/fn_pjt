@@ -7,7 +7,7 @@ without consuming an attempt (OQ-23); any other exception consumes it.
 import logging
 from uuid import UUID
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,7 +44,7 @@ from app.models import (
     RecruiterReport,
     ResumeFile,
 )
-from app.questions import compose as composer
+from app.questions import graph as compose_graph
 from app.questions import rag
 from app.resumes import ocr
 from app.resumes.schemas import from_ai_resume
@@ -82,17 +82,14 @@ async def compose_questions(ctx: JobCtx) -> None:
         if stale or (live is not None and live.settings_id == settings_id):
             await fenced_complete(db, ctx)  # already composed, or the attempt moved on: nothing to do
             return
-        if live is not None:
-            live.status = "SUPERSEDED"  # weights/custom question changed before the interview (start() re-enqueues)
-            await db.flush()
-        settings = await db.get(PostingEvalSettings, settings_id)
-        plan, picked = await composer.compose(db, app, settings, get_ai_client(), get_settings().embed_model)
-        qset = await composer.write_set(db, app, settings, plan, picked)
+    # The composition graph (questions/graph.py) makes and writes the set; a retry continues at the node that stopped.
+    qset_id = await compose_graph.run(app_id, settings_id)
+    async with session_scope() as db:
+        app = await db.get(Application, app_id)
         await _prepare_coding_variant(db, app)
-        await enqueue(db, "tts_pregen", {"question_set_id": str(qset.id)}, application_id=app_id,
-                      dedupe_key=f"tts:{qset.id}")
+        count = await db.scalar(select(func.count()).select_from(InterviewQuestion).where(InterviewQuestion.question_set_id == qset_id))
         await fenced_complete(db, ctx)
-    log_event(log, "questions_composed", application_id=str(app_id), count=len(picked))
+    log_event(log, "questions_composed", application_id=str(app_id), count=count)
 
 
 # ── index_question_examples (RAG corpus, ai-architecture 6.1) ──────────────────

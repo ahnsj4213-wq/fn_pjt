@@ -41,8 +41,10 @@ from app.core.db import session_scope
 from app.core.logging import log_event
 from app.core.storage import get_storage
 from app.core.timeutil import utcnow
+from app.interview import graph as igraph
 from app.interview import slots, turns
-from app.models import Application, InterviewAnswer, QuestionTtsAsset
+from app.interview.graph import Capture
+from app.models import Application, QuestionTtsAsset
 from app.voice import dc_protocol as dcp
 from app.voice import netcfg
 from app.voice.tts_track import TtsTrack
@@ -87,6 +89,10 @@ class Gate:
         return self.opened_at <= now <= self.close_at
 
 
+class SessionClosed(Exception):
+    """The session ended while the graph was still running; the checkpoint keeps where it stopped."""
+
+
 class VoiceSession:
     def __init__(self, application_id: UUID, purpose: str, on_closed) -> None:
         self.app_id, self.purpose = application_id, purpose
@@ -97,6 +103,7 @@ class VoiceSession:
         self.dc = None
         self.seq = 0
         self.gate: Gate | None = None
+        self._worker: asyncio.Task | None = None
         self.dc_open = asyncio.Event()
         self.client_ready = asyncio.Event()
         self.finish = asyncio.Event()
@@ -266,33 +273,45 @@ class VoiceSession:
         except TimeoutError:
             pass  # the client cannot delay the first question indefinitely (TRD 06 §8)
         self._spawn(self._renew_slot())
-        while not self.closed:
-            if not await self._one_turn():
-                return
+        await self._drive()
 
-    async def _one_turn(self) -> bool:
-        s = get_settings()
-        async with session_scope() as db:
-            try:
-                view = await turns.present_next(db, self.app_id)
-            except turns.TextModeRequired:
-                view = "TEXT"
-            status = None
-            if view is None:
-                status = await turns.finish_interview(db, self.app_id)
-        if view == "TEXT":
+    # ── the interview is the LangGraph graph (interview/graph.py); this session is its transport ──
+    async def _drive(self) -> None:
+        """`ask` (below) shows each question from inside the graph, the graph stops at its interrupt while the answer
+        window runs here, and `resume` carries on with transcribe -> decide_followup -> the next question."""
+        try:
+            out = await igraph.begin(self.app_id, "VOICE", self)
+            while not self.closed:
+                if not out.waiting:
+                    await self._ended(out.result)
+                    return
+                reason = await self._answer_window(out.view)
+                out = await igraph.resume(self.app_id, reason, self)
+        except SessionClosed:
+            return
+        finally:
+            if self.finalizing:  # a failure between capture and finalized must not leave the session "finalizing"
+                self.finalizing = False
+                self._finalize_done.set()
+
+    async def _ended(self, result: str | None) -> None:
+        if result == "TEXT_MODE_REQUIRED":
             self.send("error", code="TEXT_MODE_REQUIRED")
             await self.close("TEXT_MODE_REQUIRED")
-            return False
-        if view is None:
+        elif result in ("CODING", "SUBMITTED"):
             # Closed before the event leaves: the client hangs up on `interview_completed`, and that hang-up must not
             # count as a disconnect (it would interrupt the coding phase that has just begun).
             self.closed = True
-            self.send("interview_completed", next="CODING" if status == "CODING" else "SUBMITTED")
+            self.send("interview_completed", next="CODING" if result == "CODING" else "SUBMITTED")
             await asyncio.sleep(0.2)  # let the event leave before the connection closes
             await self.close("COMPLETED")
-            return False
+        else:  # ENDED: the attempt was closed elsewhere (expiry, cancellation)
+            await self.close("ATTEMPT_ENDED")
 
+    async def ask(self, view: turns.TurnView) -> None:
+        """Graph node `ask`: show the question (event + audio on the downlink track) and run the think time."""
+        if self.closed:
+            raise SessionClosed
         audio = await self._question_audio(view)
         self.send("question", view.turn_id, main_no=view.main_no, main_count=view.main_count,
                   is_followup=view.is_followup, area=view.area, text=view.text, audio="track" if audio else "none",
@@ -305,6 +324,9 @@ class VoiceSession:
         if view.think_sec > 0:
             await self._think(view, audio)
 
+    async def _answer_window(self, view: turns.TurnView) -> str:
+        """Open the mic and run the answer window while the graph waits at its interrupt; returns how it ended."""
+        s = get_settings()
         async with session_scope() as db:
             opened_at, deadline_at = await turns.open_answer(db, view.turn_id)
         grace = timedelta(seconds=s.answer_grace_seconds)
@@ -312,7 +334,7 @@ class VoiceSession:
         self.finish_reason = self.finish_at = None
         gate = Gate(view.turn_id, opened_at, deadline_at + grace)
         self.gate = gate
-        worker = self._spawn(self._stt_worker(gate, "answer"))
+        self._worker = self._spawn(self._stt_worker(gate, "answer"))
         warn_at = deadline_at - timedelta(seconds=WARN_BEFORE_SEC)
         self.send("answer_opened", view.turn_id, opened_at=dcp.iso(opened_at), deadline_at=dcp.iso(deadline_at),
                   warn_at=dcp.iso(warn_at), limit_sec=view.limit_sec)
@@ -325,29 +347,45 @@ class VoiceSession:
                 warn = await self._interject(view, gate, grace)
         reason = await self._wait_finish(gate)
         warn.cancel()
+        return reason
+
+    async def capture(self, turn_id: UUID, reason: str) -> Capture:
+        """Graph node `transcribe`, first half: close the gate, finish the speech-to-text of the last segments, keep the audio."""
+        gate, worker = self.gate, self._worker
         self.finalizing = True
         self._finalize_done.clear()
+        await self._mark_finalizing(turn_id, reason)
+        if reason == "BUTTON":
+            await asyncio.sleep(BUTTON_DRAIN_SEC)  # words already in flight still count
+        if gate is None or gate.turn_id != turn_id or worker is None:
+            return Capture()
+        gate.close_at = min(gate.close_at, utcnow())
+        last = gate.vad.flush()
+        if last is not None:
+            gate.queue.put_nowait(last)
+        gate.queue.put_nowait(None)
+        await worker
+        audio_key, audio_ms = await self._store_audio(gate)
+        return Capture(transcript=" ".join(gate.captions), stt_failed=gate.attempted > 0 and gate.failed == gate.attempted,
+                       audio_key=audio_key, audio_ms=audio_ms, stt_model=gate.stt_model)
+
+    async def finalized(self, turn_id: UUID, answer, reason: str, cap: Capture) -> None:
+        """Graph node `transcribe`, second half: the answer is confirmed (or was already); tell the client."""
+        gate = self.gate
         try:
-            await self._mark_finalizing(view.turn_id, reason)
-            if reason == "BUTTON":
-                await asyncio.sleep(BUTTON_DRAIN_SEC)  # words already in flight still count
-            gate.close_at = min(gate.close_at, utcnow())
-            last = gate.vad.flush()
-            if last is not None:
-                gate.queue.put_nowait(last)
-            gate.queue.put_nowait(None)
-            await worker
-            answer = await self._finalize(gate, reason)
+            if gate is not None:
+                gate.finalized = True
+            if answer is not None:
+                self.send("answer_finalized", turn_id, reason=reason.lower(), text=answer.transcript or "",
+                          no_answer=answer.is_no_answer)
+            log_event(log, "answer_finalized", application_id=str(self.app_id), reason=reason,
+                      count=len(gate.captions) if gate is not None else 0, status="no_answer" if not cap.transcript else "ok")
+            self.gate = None
+            if answer is not None:
+                self.send("processing", turn_id)
         finally:
             self.finalizing = False
             self._finalize_done.set()
-        self.gate = None
-        if answer is None:
-            return not self.closed
-        self.send("processing", view.turn_id)
-        if not view.is_followup:
-            await turns.decide_followup(self.app_id, answer.id)
-        return not self.closed
 
     async def _play(self, audio: bytes | None) -> None:
         if audio:
@@ -442,22 +480,6 @@ class VoiceSession:
         if out.pcm48k:
             await storage.put(key, out.pcm48k, "application/octet-stream")
         return out.pcm48k or None
-
-    async def _finalize(self, gate: Gate, reason: str) -> InterviewAnswer | None:
-        transcript = " ".join(gate.captions)
-        stt_failed = gate.attempted > 0 and gate.failed == gate.attempted
-        audio_key, audio_ms = await self._store_audio(gate)
-        async with session_scope() as db:
-            answer = await turns.finalize(db, gate.turn_id, end_reason=reason, transcript=transcript,
-                                          stt_failed=stt_failed, audio_key=audio_key, audio_ms=audio_ms,
-                                          stt_model=gate.stt_model)
-        gate.finalized = True
-        if answer is not None:
-            self.send("answer_finalized", gate.turn_id, reason=reason.lower(), text=answer.transcript or "",
-                      no_answer=answer.is_no_answer)
-        log_event(log, "answer_finalized", application_id=str(self.app_id), reason=reason,
-                  count=len(gate.captions), status="no_answer" if not transcript else "ok")
-        return answer
 
     async def _mark_finalizing(self, turn_id: UUID, reason: str) -> None:
         async with session_scope() as db:
