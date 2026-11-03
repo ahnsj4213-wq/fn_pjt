@@ -33,6 +33,7 @@ from app.models import (
     JobPosting,
     PostingEvalSettings,
 )
+from app.coding.variants import problem_of
 from app.questions.compose import job_brief
 
 CRITERION_NAME = {i["criterion"]: i["name"] for i in rubric.ITEMS}
@@ -132,7 +133,7 @@ async def load_report_inputs(db: AsyncSession, app: Application, manifest_hash: 
     coding, sub = await _coding(db, app, posting)
     inp = ReportInputs(manifest_hash, posting, settings.weights(), list(qs), answers, cached, coding, sub)
     if sub is not None and sub.code.strip():
-        inp.problem = await db.get(CodingProblem, posting.coding_problem_id)
+        inp.problem = await problem_of(db, app.id, posting)
         inp.public_tests = list((await db.execute(select(CodingTestcase).where(
             CodingTestcase.problem_id == inp.problem.id, CodingTestcase.visibility == "PUBLIC")
             .order_by(CodingTestcase.ordinal))).scalars().all())

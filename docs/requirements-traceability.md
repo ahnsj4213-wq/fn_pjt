@@ -96,7 +96,7 @@
 | COD-03 | [실행]은 격리 환경, 정상/비정상 작동과 출력·오류 표시, 반복 가능, 실행만으로 완료 안 됨 | P0 | coding / `POST .../coding/run` | `runner/`, `app/coding` | T-COD-03, AC-15 | 미착수 | 공개 예시 입력으로만 실행 |
 | COD-04 | [최종 제출] 확인 후 스냅샷 저장, 공개·비공개 테스트로 자동 채점 | P0 | coding / `POST .../coding/submit` | `app/coding/grading.py` | T-COD-04 | 미착수 | |
 | COD-05 | 제한시간 종료 시 마지막 저장 코드 자동 제출 | P0 | coding | `app/coding`, worker | T-COD-05, AC-15 | 미착수 | 서버 시간 기준. 브라우저가 닫혀도 서버가 제출 |
-| COD-06 | 네트워크 차단·CPU·메모리·시간·동시 실행 제한, 비공개 테스트 비노출 | P0 | runner | `runner/` | T-COD-06, AC-15 | 미착수 | 샌드박스 검증 전에는 실행 기능 비활성 (ADR-0007) |
+| COD-06 | 네트워크 차단·CPU·메모리·시간·동시 실행 제한, 비공개 테스트 비노출 | P0 | runner | `runner/`, `app/coding/templates.py`, `variants.py` | T-COD-06, AC-15, tests/test_coding_variants.py | 미착수 | 샌드박스 검증 전에는 실행 기능 비활성 (ADR-0007). 2026-11-03: 비공개 테스트를 저장소·시드에서 빼고 응시 건마다 생성(`coding_problems` 변형본, 마이그레이션 0022). 문제는 담당자가 고르지 않는다 |
 | COD-07 | LLM 코드 가독성·복잡도·개선점 담당자용 서술, 점수 미반영 | P1 | evaluation | `app/evaluation/code_review.py` | T-COD-07 | 미착수 | 비공개 테스트는 프롬프트에 넣지 않음 |
 | COD-08 | 응시 중 LLM 채팅 패널·AI 활용 평가 | P2 | — | — | — | 미착수 | |
 | COD-09 | 제출 코드 채팅형 꼬리질문 | P2 | — | — | — | 미착수 | |

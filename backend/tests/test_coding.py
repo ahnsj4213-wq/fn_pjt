@@ -20,7 +20,7 @@ def sandbox_up(monkeypatch):
 
 
 async def to_coding(client, make_client, voice_ai) -> tuple[str, object]:
-    (pid,), = await q("SELECT id FROM coding_problems LIMIT 1")
+    (pid,), = await q("SELECT id FROM coding_problems WHERE template_key = 'prefix_sum' AND variant_of IS NULL")
     # A non-coding family keeps the separate coding test (in 개발·데이터·AI the problem is a live-coding question).
     _, app_id, cand = await setup_app(client, make_client, coding_enabled=True, coding_problem_id=str(pid),
                                       coding_time_limit_min=30, job_family="MGMT")
@@ -78,8 +78,10 @@ async def test_ac15_run_shows_normal_or_abnormal_only_and_submit_is_graded(clien
     assert dep  # the evaluation waits for grading (TRD 03 A7)
 
     await drain()
-    assert await q("SELECT passed, total, score FROM coding_submissions WHERE application_id=:a", a=app_id) == \
-        [(5, 5, 100)]
+    (cases,), = await q("SELECT count(*) FROM coding_testcases t JOIN coding_attempts a ON a.problem_id = t.problem_id "
+                        "WHERE a.application_id=:a", a=app_id)  # the application's own variant: 2 public + generated hidden
+    assert cases >= 5
+    assert await q("SELECT passed, total FROM coding_submissions WHERE application_id=:a", a=app_id) == [(cases, cases)]
     assert await q("SELECT eval_status FROM applications WHERE id=:a", a=app_id) == [("DONE",)]
     rec = (await client.get(f"/api/recruiter/applications/{app_id}/coding-result")).json()
     assert {t["visibility"] for t in rec["tests"]} == {"PUBLIC", "HIDDEN"}  # hidden tests are for the recruiter only

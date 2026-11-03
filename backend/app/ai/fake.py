@@ -133,6 +133,10 @@ class FakeAIClient:
                 "complexity": {"time": "unknown", "comment": "입력 크기에 따른 반복 구조를 확인해야 한다."},
                 "improvements": ["예외 입력에 대한 처리를 추가하면 좋다."]}
 
+    @staticmethod
+    def _reply_problem_rewrite(inp: dict) -> dict:
+        return {"statement": inp["statement"]}  # the fake keeps the wording (it has to pass the preserve check)
+
     # ── speech / embeddings ──
     async def stt(self, pcm16k: bytes, *, purpose: str = "answer") -> STTResult:
         if "stt" in self.down:

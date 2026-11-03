@@ -58,6 +58,9 @@ async def clean_tables(database):
         # (company-scoped AI questions reference it) and wipe the seed questions for every later test.
         names = [n for n in rows if n not in KEEP and n != "companies"]
         await db.execute(text(f"TRUNCATE {', '.join(names)} RESTART IDENTITY CASCADE"))
+        # Per-application variants are test data too (templates stay): they are tied to applications that no longer exist.
+        await db.execute(text("DELETE FROM coding_testcases WHERE problem_id IN (SELECT id FROM coding_problems WHERE variant_of IS NOT NULL)"))
+        await db.execute(text("DELETE FROM coding_problems WHERE variant_of IS NOT NULL"))
         # Seeds stay; rows created by tests in kept tables do not.
         await db.execute(text("DELETE FROM question_bank WHERE source <> 'SEED'"))
         await db.execute(text("DELETE FROM companies"))

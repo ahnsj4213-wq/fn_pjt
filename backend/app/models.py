@@ -108,6 +108,10 @@ class CodingProblem(Base):
     memory_mb: Mapped[int] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     difficulty: Mapped[str | None] = mapped_column(Text)
+    template_key: Mapped[str | None] = mapped_column(Text)
+    variant_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("coding_problems.id"))
+    variant_for: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    variant_seed: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class CodingTestcase(Base):

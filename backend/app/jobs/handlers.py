@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai import rubric
 from app.ai.client import get_ai_client
 from app.coding import grading
+from app.coding.variants import ensure_variant, get_variant, problem_of
 from app.coding.runner import RunnerUnavailable
 from app.core.config import get_settings
 from app.core.db import session_scope, sessionmaker
@@ -52,6 +53,23 @@ log = logging.getLogger("app.worker")
 
 
 
+async def _prepare_coding_variant(db: AsyncSession, app: Application) -> None:
+    """Make this application's coding problem now, with the statement reworded by the model. Best effort: a failure here
+    only means the variant is made unreworded when the interview ends (turns.finish_interview)."""
+    posting = await db.get(JobPosting, app.posting_id)
+    if not posting.coding_enabled or not posting.coding_problem_id or await get_variant(db, app.id) is not None:
+        return
+    base = await db.get(CodingProblem, posting.coding_problem_id)
+    statement = None
+    try:
+        r = await get_ai_client().llm("problem_rewrite", {"statement": base.statement_md}, lane="BATCH")
+        if r.status == "OK":
+            statement = r.output.get("statement")
+    except Exception:  # noqa: BLE001 - never block question composition on a cosmetic rewrite
+        log.warning("problem_rewrite_failed", exc_info=True)
+    await ensure_variant(db, app.id, base, statement)
+
+
 # ── compose_questions (ADR-0005) ───────────────────────────────────────────────
 @handler("compose_questions")
 async def compose_questions(ctx: JobCtx) -> None:
@@ -70,6 +88,7 @@ async def compose_questions(ctx: JobCtx) -> None:
         settings = await db.get(PostingEvalSettings, settings_id)
         plan, picked = await composer.compose(db, app, settings, get_ai_client(), get_settings().embed_model)
         qset = await composer.write_set(db, app, settings, plan, picked)
+        await _prepare_coding_variant(db, app)
         await enqueue(db, "tts_pregen", {"question_set_id": str(qset.id)}, application_id=app_id,
                       dedupe_key=f"tts:{qset.id}")
         await fenced_complete(db, ctx)
@@ -323,7 +342,7 @@ async def grade_coding(ctx: JobCtx) -> None:
             return
         app = await db.get(Application, sub.application_id)
         posting = await db.get(JobPosting, app.posting_id)
-        problem = await db.get(CodingProblem, posting.coding_problem_id)
+        problem = await problem_of(db, app.id, posting)  # the application's variant, not the template
         cases = [{"id": t.id, "input": t.input, "expected_output": t.expected_output}
                  for t in (await db.execute(select(CodingTestcase).where(CodingTestcase.problem_id == problem.id)
                                             .order_by(CodingTestcase.ordinal))).scalars()]

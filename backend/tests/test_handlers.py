@@ -327,7 +327,7 @@ async def test_ai_outage_defers_without_consuming_attempts(client, make_client, 
 
 # ── coding grading + evaluation with coding ────────────────────────────────────
 async def coding_app(client, make_client) -> tuple[str, httpx.AsyncClient]:
-    (pid,), = await q("SELECT id FROM coding_problems LIMIT 1")
+    (pid,), = await q("SELECT id FROM coding_problems WHERE template_key = 'prefix_sum' AND variant_of IS NULL")
     _, app_id, cand = await setup_app(client, make_client, coding_enabled=True, coding_problem_id=str(pid),
                                       coding_time_limit_min=30)
     return app_id, cand
@@ -343,23 +343,29 @@ async def submit_code(app_id: str, code: str) -> None:
                       dedupe_key=f"grade:{app_id}")
 
 
-@pytest.mark.parametrize(("code", "passed", "score", "outcomes"), [
-    (SUM_SOLUTION, 5, "100.00", {"PASS"}),
-    ("print(0)", 1, "20.00", {"PASS", "WRONG_ANSWER"}),
-    ("def broken(:\n", 0, "0.00", {"RUNTIME_ERROR"}),
-    ("   \n", 0, "0.00", {"NOT_RUN"}),
+@pytest.mark.parametrize(("code", "outcomes"), [
+    (SUM_SOLUTION, {"PASS"}),
+    ("print(0)", {"PASS", "WRONG_ANSWER"}),
+    ("def broken(:\n", {"RUNTIME_ERROR"}),
+    ("   \n", {"NOT_RUN"}),
 ])
-async def test_grade_coding_compares_outside_runner(client, make_client, fake_runner, code, passed, score, outcomes):
+async def test_grade_coding_compares_outside_runner(client, make_client, fake_runner, code, outcomes):
     app_id, _ = await coding_app(client, make_client)
     await submit_code(app_id, code)
     await drain()
     (status, p, total, sc, compile_ok), = await q(
         "SELECT grading_status, passed, total, score, compile_ok FROM coding_submissions WHERE application_id=:a", a=app_id)
-    assert (status, p, total, str(sc)) == ("DONE", passed, 5, score)
+    # The application's own variant: 2 public examples + the hidden cases generated for it.
+    expected = [o for (o,) in await q("SELECT t.expected_output FROM coding_testcases t JOIN coding_problems v ON v.id = t.problem_id "
+                                      "WHERE v.variant_for=:a ORDER BY t.ordinal", a=app_id)]
+    passed = {SUM_SOLUTION: len(expected), "print(0)": sum(e == "0\n" for e in expected)}.get(code, 0)
+    assert total == len(expected) >= 5 and 0 < passed or code not in (SUM_SOLUTION, "print(0)")
+    assert (status, p, total) == ("DONE", passed, len(expected))
+    assert str(sc) == f"{round(100 * passed / len(expected), 2):.2f}"
     assert compile_ok is (code == SUM_SOLUTION or code == "print(0)")
     assert {o for (o,) in await q("SELECT outcome FROM coding_test_results")} == outcomes
     if code.strip():
-        assert len(fake_runner["requests"]) == 1 and len(fake_runner["requests"][0]["cases"]) == 5
+        assert len(fake_runner["requests"]) == 1 and len(fake_runner["requests"][0]["cases"]) == len(expected)
     else:
         assert fake_runner["requests"] == []  # empty code is not executed (6.5)
 

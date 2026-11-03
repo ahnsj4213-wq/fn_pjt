@@ -21,8 +21,9 @@ from app.core.timeutil import utcnow
 from app.interview import slots
 from app.jobs.queue import enqueue
 from app.notify import inbox
+from app.coding.variants import ensure_variant
 from app.models import (
-    Application, CodingAttempt, FollowupDecision, Interview, InterviewAnswer, InterviewQuestion, InterviewTurn, JobPosting,
+    Application, CodingAttempt, CodingProblem, FollowupDecision, Interview, InterviewAnswer, InterviewQuestion, InterviewTurn, JobPosting,
     QuestionSet, User,
 )
 
@@ -279,7 +280,9 @@ async def finish_interview(db: AsyncSession, app_id: UUID) -> str:
         InterviewQuestion.application_id == app_id, InterviewQuestion.answer_mode == "CODE"))
     if posting.coding_enabled and not live_coding:  # a live-coding question replaces the separate test (SC-A06)
         app.attempt_status = "CODING"
-        db.add(CodingAttempt(application_id=app.id, company_id=app.company_id, problem_id=posting.coding_problem_id,
+        base = await db.get(CodingProblem, posting.coding_problem_id)
+        variant = await ensure_variant(db, app.id, base)  # this application's own copy (hidden cases generated for it)
+        db.add(CodingAttempt(application_id=app.id, company_id=app.company_id, problem_id=variant.id,
                              language="python", started_at=now,
                              deadline_at=now + timedelta(minutes=posting.coding_time_limit_min)))
         await db.execute(update(Interview).where(Interview.application_id == app_id).values(last_heartbeat_at=now))

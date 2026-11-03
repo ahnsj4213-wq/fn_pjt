@@ -267,7 +267,7 @@ async def test_disconnect_while_answering_interrupts_without_saving(client, make
 async def test_hanging_up_on_completion_does_not_interrupt_coding(client, make_client, voice_ai):
     """The browser closes the connection as soon as `interview_completed` arrives; that is not a disconnect.
     A 경영지원 posting: no live-coding question in the interview, so the separate coding phase follows."""
-    (pid,), = await q("SELECT id FROM coding_problems LIMIT 1")
+    (pid,), = await q("SELECT id FROM coding_problems WHERE template_key = 'prefix_sum' AND variant_of IS NULL")
     _, app_id, cand = await setup_app(client, make_client, job_family="MGMT", coding_enabled=True,
                                      coding_problem_id=str(pid), coding_time_limit_min=30)
     qs = await prepare_and_compose(cand, app_id)
