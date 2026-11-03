@@ -34,7 +34,22 @@ const REPORT: MyReport = {
   areas: [{ key: 'EXPERTISE', label: '전문성', desc: '직무 지식', score: 80, items: [{ label: 'Q1', score: 80, comment: '구체적입니다' }] }],
   attitude: { negative: ['부족하지만'], times: [{ label: 'Q1', sec: 52, limit: 60 }], limit_sec: 60 },
   proctor: { leave_count: 1, away_ms: 4000 }, media: { audio_deleted: false, audio_auto_delete_days: 30 }, share_result: true,
-  notice: 'AI 분석 결과는 연습을 돕기 위한 참고 자료입니다.',
+  notice: 'AI 분석 결과는 연습을 돕기 위한 참고 자료입니다.', detail: {},
+};
+const DETAIL: MyReport['detail'] = {
+  sub: {
+    expertise: [{ key: 'a', name: '개념 정확성', score: 80 }, { key: 'b', name: '실무 적용', score: 60 }, { key: 'c', name: '설명의 깊이', score: 40 }],
+    logic: [{ key: 'a', name: '주장 명확성', score: 80 }, { key: 'b', name: '근거 제시', score: 60 }, { key: 'c', name: '논리적 흐름', score: 60 }],
+    star: { score: 62, items: [{ key: 'situation', name: '상황', rate: 100 }, { key: 'task', name: '과제', rate: 0 }, { key: 'action', name: '행동', rate: 50 }, { key: 'result', name: '결과', rate: 100 }] },
+  },
+  rules: {
+    negative: { count: 2, score: 60, per_question: [{ seq: 1, count: 2, phrases: ['아마'] }] },
+    answer_time: { score: 100, per_question: [{ seq: 1, sec: 52, limit: 60, score: 100 }] },
+    speed: { avg_cpm: 310, ideal: [240, 420], score: 100, per_question: [{ seq: 1, cpm: 310, score: 100 }] },
+    clarity: { score: 88 }, pitch: { score: 72, avg_std_semitones: 2.4 },
+  },
+  custom: [{ id: 'ab12cd34', name: '책임감', description: '끝까지 하는가', weight: 10, grade: '중', score: 60, evidence_status: 'OK', quote: '끝까지 마무리했습니다', quote_no: 1, comment: '언급함' }],
+  blend: { scoring: 'score-v2', rule_weight: 0.3, rule_scores: { attitude: 80, delivery: 90 } },
 };
 const routes = [{ path: '/me/applications/:aid/report', element: <Report /> }];
 const open = () => renderRoutes(routes, { path: '/me/applications/a1/report', session: candidateSession });
@@ -59,6 +74,36 @@ describe('결과 리포트 (SC-A08)', () => {
     expect(screen.getByText('답변이 없었습니다.')).toBeTruthy();
     expect(screen.getByText('AI 분석 결과는 연습을 돕기 위한 참고 자료입니다.')).toBeTruthy();
     expect(screen.queryByText(/합격|불합격/)).toBeNull(); // the decision is another screen
+  });
+
+  it('shows the sub-items, STAR, the measured values and a company item with its grade and quote', async () => {
+    const withDetail: MyReport = {
+      ...REPORT, detail: DETAIL,
+      criteria: [...REPORT.criteria, { key: 'custom:ab12cd34', label: '책임감', desc: '끝까지 하는가', score: 60, weight: 10, custom: true }],
+      areas: [
+        { key: 'LOGIC', label: '논리성', desc: '이유와 사례', score: 70, items: [{ label: 'Q1', score: 70, comment: null }] },
+        { key: 'EXPERTISE', label: '전문성', desc: '직무 지식', score: 80, items: [{ label: 'Q1', score: 80, comment: null }] },
+        { key: 'ATTITUDE', label: '표현 및 태도', desc: '적극성', score: 75, items: [{ label: 'Q1', score: 75, comment: null }] },
+        { key: 'DELIVERY', label: '전달력', desc: '핵심', score: 85, items: [{ label: 'Q1', score: 85, comment: null }] },
+        { key: 'custom:ab12cd34', label: '책임감', desc: '끝까지 하는가', score: 60, custom: true, items: [{ label: '면접 전체', score: 60, comment: '언급함' }] },
+      ],
+    };
+    server.use(http.get('*/api/candidate/applications/a1/report', () => HttpResponse.json(withDetail)));
+    open();
+    await screen.findByRole('heading', { name: '백엔드 개발자 (신입)' });
+    const logic = within(screen.getByLabelText('논리성 세부 항목'));
+    expect(logic.getByText('근거 제시')).toBeTruthy();
+    expect(logic.getByText('상황 100%')).toBeTruthy();
+    expect(logic.getByText('과제 0%')).toBeTruthy();
+    expect(within(screen.getByLabelText('전문성 세부 항목')).getByText('설명의 깊이')).toBeTruthy();
+    expect(screen.getByText('2회 감지')).toBeTruthy();
+    expect(screen.getByText(/평균 분당 310자/)).toBeTruthy();
+    expect(screen.getByText('발음의 뚜렷함')).toBeTruthy();
+    expect(screen.getByText(/높낮이 변화 2.4 반음/)).toBeTruthy();
+    expect(screen.getAllByText(/이 영역 점수의 30%에 반영/).length).toBe(2);
+    expect(screen.getByText('×10%')).toBeTruthy();
+    expect(screen.getByText(/기업이 정한 평가 항목 · 끝까지 하는가/)).toBeTruthy();
+    expect(screen.getByText(/'끝까지 마무리했습니다'/)).toBeTruthy();
   });
 
   it('opens the question a link points to', async () => {

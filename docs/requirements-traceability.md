@@ -119,7 +119,7 @@
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
 | RPT-01 | 완료 화면에서 제출 완료·평가 진행 상태 안내 후 마이페이지로, 이탈해도 서버에서 평가 계속 | P0 | applications | `pages/candidate/Done`, worker | T-RPT-01 | 미착수 | |
-| RPT-02 | 담당자 리포트: 총점, 항목별 점수, 총평, 강점·개선점 1~3순위, 질문별 평가(면접 순서, 항목 점수·인용·코멘트), 코딩 결과 | P0 | recruiter / `GET /api/recruiter/applications/{id}/report`(응시자 상세용), `…/report-view`(SC-R10, 지원자용과 같은 화면 + AI 추천) | `app/recruiter/router.py`, `app/applications/report.py` `build_report`, `ApplicationDetail.tsx`, `Report.tsx` | `test_recruiter.py`, `test_candidate_report.py`, `Report.test.tsx` | 검증 완료 | AI 추천은 담당자에게만 보인다 |
+| RPT-02 | 담당자 리포트(2026-11-03: 세부 항목·STAR·코드가 잰 값·기업 추가 항목 포함, `rubric-v3`/`score-v2`/`details-v1`): 총점, 항목별 점수, 총평, 강점·개선점 1~3순위, 질문별 평가(면접 순서, 항목 점수·인용·코멘트), 코딩 결과 | P0 | recruiter / `GET /api/recruiter/applications/{id}/report`(응시자 상세용), `…/report-view`(SC-R10, 지원자용과 같은 화면 + AI 추천) | `app/recruiter/router.py`, `app/applications/report.py` `build_report`, `ApplicationDetail.tsx`, `Report.tsx` | `test_recruiter.py`, `test_candidate_report.py`, `Report.test.tsx` | 검증 완료 | AI 추천은 담당자에게만 보인다 |
 | RPT-03 | 지원자 피드백은 별도 데이터, 6.6 범위·시점에만 노출. **변경(화면정의서 SC-A08):** 결과 리포트는 담당자 결정과 무관하게 평가가 끝나면 바로 본다. 합격·불합격과 피드백만 결정 뒤에 나온다 | P0 | candidate / `GET /api/candidate/applications/{id}/result`, `…/report` | `app/applications/report.py`, `Report.tsx`, `Result.tsx` | `test_candidate_report.py`, `Report.test.tsx` | 검증 완료 | 별도 테이블 + 별도 응답 스키마(결과), 리포트는 점수·인용을 보인다 |
 | RPT-04 | 지원자 피드백 화면 "이 피드백은 AI가 만든 참고 자료입니다" 고정 표시 | P1 | 프런트 | `pages/candidate/Result` | T-RPT-04 | 미착수 | |
 | RPT-05 | 사이트 안 알림 | P2 | — | — | — | 미착수 | |
@@ -132,7 +132,7 @@
 | ADM-02 | 지원자 목록: 공고·결정 상태 필터, 총점·진행률·평가 상태·최종 결정. 평가 전에는 총점 대신 상태 | P0 | recruiter / `GET /api/recruiter/applications` | `app/recruiter` | T-ADM-02 | 구현 | SC-R08 응시자 목록 (AI 예상 합격 참고값 포함) |
 | ADM-03 | 지원자 상세: 이력서·리포트·코딩 결과·질문별 답변·근거, 고정 문구 | P0 | recruiter / `GET /api/recruiter/applications/{id}` | `pages/recruiter/ApplicationDetail` | T-ADM-03 | 구현 | 문구: "AI 결과는 참고 자료이며 최종 결정은 담당자가 합니다" |
 | ADM-04 | 최종 결정 저장·변경, 누가·언제 이력, 지원자 마이페이지 표시 | P0 | recruiter / `POST .../decision` | `app/recruiter/decisions.py` | T-ADM-04, AC-20 | 구현 | 평가 완료 전 변경 불가 (7.3). 결정값은 합격·보류·불합격(화면정의서 SC-R09). 보류는 담당자 내부 상태라 지원자에게는 계속 ‘검토 중’이고 결과·메일이 나가지 않는다(마이그레이션 0014, `test_hold_is_internal…`) |
-| ADM-05 | 공고별 커스텀 질문·가중치(합 100) 설정, 초기화 버튼 | P0 | recruiter / `PUT .../postings/{id}/evaluation-settings` | `app/postings` | T-ADM-05, AC-21 | 미착수 | DB CHECK + API 422 |
+| ADM-05 | 공고별 커스텀 질문·가중치(합 100) 설정, 초기화 버튼. **변경(화면정의서 SC-R07, 2026-11-03):** 가중치는 0~60%의 5% 단위, 기업이 직접 평가 항목을 최대 5개 추가(이름·설명·상중하 기준·가중치)하고 합 100을 같이 지킨다 | P0 | recruiter / `PUT .../postings/{id}/evaluation-settings` | `app/postings`, `EvaluationSettings.tsx`, 마이그레이션 0024 | `test_postings_apply.py`(custom_items), `test_handlers.py`(company_items), `EvaluationSettings.test.tsx`, T-ADM-05, AC-21 | 검증 완료 | DB CHECK(`w_custom` 포함) + API 422. PRD의 루브릭 4개 고정과 달라 화면정의서를 따름 |
 | ADM-06 | '평가 보류' 재평가 실행 | P0 | recruiter / `POST .../re-evaluate` | `app/evaluation` | T-ADM-06 | 미착수 | |
 | ADM-07 | 지원자별 담당자 메모, 같은 회사만 | P1 | recruiter / `.../notes` | `app/recruiter/notes.py` | T-ADM-07 | 미착수 | |
 | ADM-08 | 통계: 월별 응시자 수, 직무별 평균 점수, 공고·직무별 합격률 | P1 | recruiter / `GET /api/recruiter/stats` | `app/recruiter/stats.py` | T-ADM-08 | 구현 | 대시보드(SC-R13)의 공고별 합격률·직무별 평균·월별 응시자 |

@@ -23,6 +23,7 @@ from app.auth.scope import get_for_owner
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import conflict
+from app.evaluation.details import negative_expressions
 from app.models import (
     AnswerEvaluation, Application, Company, FollowupDecision, InterviewAnswer, InterviewQuestion, JobPosting, ProctorEvent,
     RecruiterReport, User,
@@ -38,7 +39,6 @@ CRITERIA = [("LOGIC", "logic", "논리성", "이유와 사례로 이어 말하�
 SLOT_LABEL = {"PERSONALITY": "인성", "MOTIVATION": "지원 동기", "JOB_SKILL": "직무", "PROJECT": "경험",
               "COLLABORATION": "협업", "RESUME": "이력서", "COMPANY": "기업", "JOB": "직무", "CUSTOM": "공고 질문"}
 # Hedging phrases that lower the confidence of an answer (rule-based, not a model judgement).
-NEGATIVE_PHRASES = ["부족하지만", "잘 모르겠지만", "확실하지는 않지만", "확실하진 않지만", "아마도", "못 지킨", "죄송하지만", "별로 없지만"]
 NOTICE = "AI 분석 결과는 연습을 돕기 위한 참고 자료입니다."
 
 
@@ -134,6 +134,7 @@ class ReportOut(BaseModel):
     media: dict  # {audio_deleted, audio_auto_delete_days}
     share_result: bool
     notice: str
+    detail: dict  # sub-items, STAR and code-measured values (evaluation/details.py); {} for older reports
 
 
 def crit_key(e: AnswerEvaluation) -> str:
@@ -156,7 +157,7 @@ def _seconds(a: InterviewAnswer) -> int | None:
 
 
 def _find_negative(text: str | None) -> list[str]:
-    return [p for p in NEGATIVE_PHRASES if text and p in text]
+    return sorted(set(negative_expressions(text or "")))  # the same list the score counts (evaluation/details.py)
 
 
 def _answer_out(aid: uuid.UUID, a: InterviewAnswer, items: list[AnswerEvaluation]) -> AnswerOut:
@@ -251,6 +252,10 @@ async def build_report(db: AsyncSession, app: Application) -> ReportOut:
                    "DELIVERY": rep.score_delivery}
     criteria = [{"key": k, "label": lab, "desc": desc, "score": round(float(crit_scores[k])), "weight": weights[w]}
                 for k, w, lab, desc in CRITERIA]
+    # The company's own items (SC-R07) sit after the fixed areas, with the same card shape.
+    for c in (rep.detail or {}).get("custom", []):
+        criteria.append({"key": f"custom:{c['id']}", "label": c["name"], "desc": c["description"], "score": c["score"],
+                         "weight": weights.get(f"custom:{c['id']}", c["weight"]), "custom": True})
     refs = rep.point_refs or {}
 
     def points(texts: list, key: str) -> list[PointOut]:
@@ -267,11 +272,14 @@ async def build_report(db: AsyncSession, app: Application) -> ReportOut:
         summary=rep.summary, strengths=points(rep.strengths, "strengths"), improvements=points(rep.improvements, "improvements"),
         chips=chips, questions=questions,
         areas=[{"key": k, "label": lab, "desc": desc, "score": next(c["score"] for c in criteria if c["key"] == k), "items": area_items[k]}
-               for k, _w, lab, desc in CRITERIA],
+               for k, _w, lab, desc in CRITERIA] + [
+            {"key": c["key"], "label": c["label"], "desc": c["desc"], "score": c["score"], "custom": True,
+             "items": [{"label": "면접 전체", "score": c["score"], "comment": next((d["comment"] for d in rep.detail["custom"] if f"custom:{d['id']}" == c["key"]), None)}]}
+            for c in criteria if c.get("custom")],
         attitude={"negative": sorted(set(negative_all)), "times": times, "limit_sec": times[0]["limit"] if times else None},
         proctor={"leave_count": leave[0], "away_ms": int(leave[1])},
         media={"audio_deleted": app.audio_purged_at is not None, "audio_auto_delete_days": get_settings().retention_audio_days},
-        share_result=app.share_result, notice=NOTICE)
+        share_result=app.share_result, notice=NOTICE, detail=rep.detail or {})
 
 
 def evidence_of(unit: AnswerOut, key: str) -> list[Evidence]:

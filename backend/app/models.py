@@ -172,6 +172,8 @@ class PostingEvalSettings(Base):
     w_delivery: Mapped[int] = mapped_column(SmallInteger)
     w_coding: Mapped[int | None] = mapped_column(SmallInteger)
     custom_question: Mapped[str | None] = mapped_column(Text)
+    custom_items: Mapped[list] = mapped_column(JSONB, default=list)  # [{id, name, description, high, mid, low, weight}]
+    w_custom: Mapped[int] = mapped_column(SmallInteger, default=0)  # sum of the custom items' weights
     question_plan: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))  # None is SQL NULL, not JSON null (CHECK)
     think_sec: Mapped[int] = mapped_column(SmallInteger, default=10)
     answer_sec: Mapped[int] = mapped_column(SmallInteger, default=60)
@@ -185,6 +187,14 @@ class PostingEvalSettings(Base):
              "delivery": self.w_delivery}
         if self.w_coding is not None:
             w["coding"] = self.w_coding
+        return w
+
+    def all_weights(self) -> dict[str, int]:
+        """The fixed areas plus the company's own items, keyed `custom:<id>`; this is what the score is computed with."""
+        w = self.weights()
+        for it in self.custom_items or []:
+            if it["weight"] > 0:  # a 0% item is not evaluated and not part of the score
+                w[f"custom:{it['id']}"] = it["weight"]
         return w
 
 
@@ -569,6 +579,7 @@ class AnswerEvaluation(Base):
     quote_end: Mapped[int | None] = mapped_column(Integer)
     comment: Mapped[str | None] = mapped_column(Text)
     llm_attempts: Mapped[int] = mapped_column(SmallInteger, default=0)
+    detail: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))  # sub-item scores / STAR the model gave for this criterion
 
 
 class AnswerPreEvaluation(Base):
@@ -601,6 +612,7 @@ class RecruiterReport(Base):
     improvements: Mapped[list] = mapped_column(JSONB)
     code_review: Mapped[dict | None] = mapped_column(JSONB)
     point_refs: Mapped[dict | None] = mapped_column(JSONB)  # SC-A08: question numbers behind each point
+    detail: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))  # sub-items, STAR, code-measured values and how they were blended
     proctor_summary: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
 

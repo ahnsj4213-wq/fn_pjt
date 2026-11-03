@@ -111,13 +111,14 @@ async def get_settings(posting_id: UUID, ctx: RecruiterCtx = Depends(require_rec
 async def put_settings(posting_id: UUID, body: EvalSettingsIn, ctx: RecruiterCtx = Depends(require_recruiter),
                        db: AsyncSession = Depends(get_db)) -> EvalSettingsOut:
     p = await _posting(db, ctx, posting_id, lock=True)
-    weights = service.validate_weights(body.weights.model_dump(), p.coding_enabled)
+    prev = await service.current_settings(db, p)
+    items = service.clean_custom_items(body.custom_items, prev.custom_items)
+    weights = service.validate_weights(body.weights.model_dump(), p.coding_enabled, sum(x["weight"] for x in items))
     if body.custom_question is not None and body.custom_question and len(body.custom_question) < 5:
         from app.core.errors import AppError
         raise AppError(422, "CUSTOM_QUESTION_TOO_SHORT", "커스텀 질문은 5자 이상이어야 합니다.")
-    prev = await service.current_settings(db, p)
     s = await service.add_settings(db, p, weights, body.custom_question, ctx.user_id,
-                                   service.interview_values(body.interview, prev))
+                                   service.interview_values(body.interview, prev), custom_items=items)
     if body.question_areas is not None:
         p.question_areas = list(dict.fromkeys(body.question_areas))
     p.updated_at = utcnow()
@@ -133,7 +134,7 @@ async def reset_settings(posting_id: UUID, ctx: RecruiterCtx = Depends(require_r
     p = await _posting(db, ctx, posting_id, lock=True)
     prev = await service.current_settings(db, p)  # SC-R07: reset leaves the weights as they are
     s = await service.add_settings(db, p, prev.weights(), None, ctx.user_id,
-                                   service.interview_values(InterviewSettings(), None))
+                                   service.interview_values(InterviewSettings(), None), custom_items=list(prev.custom_items or []))
     p.question_areas = None  # back to all five
     await audit(db, action="SETTINGS_CHANGE", target_type="posting", target_id=p.id, actor_id=ctx.user_id,
                 actor_role="RECRUITER", company_id=ctx.company_id, version=s.version, reset=True)

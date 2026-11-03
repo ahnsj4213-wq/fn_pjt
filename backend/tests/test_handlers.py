@@ -271,8 +271,20 @@ async def test_evaluation_reuses_pre_evaluations_and_writes_report(client, make_
 
     rep = (await client.get(f"/api/recruiter/applications/{app_id}/report")).json()
     # Fake judge: every answered unit scores 3 -> 4 answers x 3 + 1 silent answer x 1 -> (13 / 5) x 20 = 52.00.
-    assert [c["score"] for c in rep["criteria"]] == ["52.00"] * 4 and rep["total_score"] == "52.00"
+    # Text answers carry one measured value, the negative-expression score (no such phrase -> 100), blended 70/30 into
+    # 표현 및 태도: 52 x 0.7 + 100 x 0.3 = 66.40.
+    assert [c["score"] for c in rep["criteria"]] == ["52.00", "52.00", "66.40", "52.00"]
+    w = {c["key"].lower(): c["weight"] for c in rep["criteria"]}
+    assert rep["total_score"] == f"{(52 * (w['expertise'] + w['logic'] + w['delivery']) + 66.4 * w['attitude']) / 100:.2f}"
     assert rep["no_answer_count"] == 1 and rep["insufficient_count"] == 0 and rep["answered_main_count"] == 4
+    # Details: the fake judge gives logic 4/3/3, expertise 3/3/3 and STAR 1/0/1/1 on every judged answer.
+    (det,), = await q("SELECT detail FROM recruiter_reports WHERE application_id=:a", a=app_id)
+    assert [x["score"] for x in det["sub"]["logic"]] == [80, 60, 60] and [x["score"] for x in det["sub"]["expertise"]] == [60, 60, 60]
+    assert {x["key"]: x["rate"] for x in det["sub"]["star"]["items"]} == {"situation": 100, "task": 0, "action": 100, "result": 100}
+    assert det["blend"]["scoring"] == "score-v2" and det["blend"]["rule_scores"] == {"attitude": 100.0}
+    assert det["rules"]["negative"]["count"] == 0 and "speed" not in det["rules"]  # text answers: no speech measurements
+    rows = await q("SELECT criterion, detail FROM answer_evaluations WHERE detail IS NOT NULL")
+    assert {c for c, _ in rows} == {"EXPERTISE", "LOGIC"}
     assert rep["strengths"] and rep["improvements"] and rep["summary"]
     answered = [a for x in rep["questions"] for a in x["answers"] if not a["no_answer"]]
     for a in answered:  # AC-16: every OK score has a quote that is a span of the stored eval_text
@@ -385,10 +397,38 @@ async def test_grading_defers_on_sandbox_error_and_evaluation_waits(client, make
     await q("UPDATE jobs SET run_after=now() WHERE state='QUEUED' RETURNING id")
     await drain()
     rep = await q("SELECT score_coding, total_score FROM recruiter_reports WHERE application_id=:a", a=app_id)
-    # weights 30/20/20/10 + coding 20: 52 x 0.8 + 100 x 0.2 = 61.60
-    assert [(str(a), str(b)) for a, b in rep] == [("100.00", "61.60")]
+    # default coding weights 30/20/15/15 + coding 20: 52 x 0.65 + 66.4 x 0.15 + 100 x 0.2 = 63.76
+    (sc, total), = rep
+    (areas,) = await q("SELECT score_expertise, score_logic, score_attitude, score_delivery FROM recruiter_reports WHERE application_id=:a", a=app_id)
+    assert str(sc) == "100.00" and [str(x) for x in areas] == ["52.00", "52.00", "66.40", "52.00"]
+    assert float(total) == round(float(areas[0]) * .3 + float(areas[1]) * .2 + float(areas[2]) * .15 + float(areas[3]) * .15 + 100 * .2, 2)
     assert await q("SELECT coding_all_passed FROM candidate_feedback WHERE application_id=:a", a=app_id) == [(True,)]
     # T8 never sees hidden tests (COD-06, SC-79): the hidden inputs are absent from every code_review prompt.
     hidden = [i for (i,) in await q("SELECT input FROM coding_testcases WHERE visibility='HIDDEN'")]
     prompts = [m["content"] for c in fake_ai.calls if c.task == "code_review" for msgs in c.messages for m in msgs]
     assert prompts and not any(h.strip() in p for h in hidden for p in prompts)
+
+
+async def test_company_items_are_graded_and_weighted_into_the_total(client, make_client, fake_ai):
+    """SC-R07: the company's own item is graded once over the interview, scored by code (중 = 60) and weighted."""
+    item = {"name": "책임감", "description": "맡은 일을 끝까지 하는가", "high": "끝까지 책임진 사례가 있다", "mid": "책임을 언급한다",
+            "low": "책임에 대한 언급이 없다", "weight": 20}
+    off = {**item, "name": "리더십", "weight": 0}  # 0% = not evaluated
+    _, app_id, cand = await setup_app(client, make_client, settings={
+        "weights": {"expertise": 25, "logic": 25, "attitude": 20, "delivery": 10}, "custom_items": [item, off]})
+    qs = await prepare_and_compose(cand, app_id)
+    await answer_all(app_id, qs)
+    await submit_and_register(app_id)
+    await drain()
+    assert await q("SELECT eval_status FROM applications WHERE id=:a", a=app_id) == [("DONE",)]
+    calls = [c for c in fake_ai.calls if c.task == "custom_criteria"]
+    assert len(calls) == 1 and [i["name"] for i in calls[0].input["items"]] == ["책임감"]  # the 0% item is left out
+    (det, total), = await q("SELECT detail, total_score FROM recruiter_reports WHERE application_id=:a", a=app_id)
+    (c,) = det["custom"]
+    assert c["name"] == "책임감" and c["grade"] == "중" and c["score"] == 60 and c["weight"] == 20 and c["quote"]
+    # 52 x (25+25+10)% + 66.4 x 20% (표현 및 태도, blended with the negative-expression score) + 60 x 20% = 56.48
+    assert str(total) == "56.48"
+    view = (await client.get(f"/api/recruiter/applications/{app_id}/report-view")).json()
+    own = [x for x in view["criteria"] if x.get("custom")]
+    assert [(x["label"], x["score"], x["weight"]) for x in own] == [("책임감", 60, 20)]
+    assert any(a["label"] == "책임감" for a in view["areas"]) and len(view["criteria"]) == 5

@@ -1,4 +1,5 @@
 """Posting lifecycle (JOB-01~07, 7.4) and versioned evaluation settings (ADM-05, JOB-06, 6.4)."""
+import secrets
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -31,15 +32,39 @@ def default_weights(coding: bool) -> dict[str, int]:
     return dict(DEFAULT_WEIGHTS_CODING if coding else DEFAULT_WEIGHTS_NO_CODING)
 
 
-def validate_weights(weights: dict[str, int | None], coding_enabled: bool) -> dict[str, int]:
+def validate_weights(weights: dict[str, int | None], coding_enabled: bool, custom_total: int = 0) -> dict[str, int]:
     w = {k: v for k, v in weights.items() if v is not None}
     if ("coding" in w) != coding_enabled:
         raise AppError(422, "WEIGHTS_CODING_MISMATCH",
                        "코딩테스트를 켠 공고에서만 코딩테스트 가중치를 설정할 수 있습니다." if not coding_enabled
                        else "코딩테스트를 켠 공고는 코딩테스트 가중치가 필요합니다.")
-    if sum(w.values()) != WEIGHT_TOTAL:
-        raise AppError(422, "WEIGHT_SUM_NOT_100", "가중치의 합이 100이어야 저장됩니다.", total=sum(w.values()))
+    if sum(w.values()) + custom_total != WEIGHT_TOTAL:
+        raise AppError(422, "WEIGHT_SUM_NOT_100", "가중치의 합이 100이어야 저장됩니다.", total=sum(w.values()) + custom_total)
+    if any(v > 60 or v % 5 for v in w.values()):  # SC-R07: 0~60% in steps of 5
+        raise AppError(422, "WEIGHT_STEP", "가중치는 0~60%를 5% 단위로 정할 수 있습니다.")
     return w
+
+
+def clean_custom_items(items: list | None, keep: list | None = None) -> list[dict]:
+    """The stored form of the company's own items: ids given to new ones, names unique, weights as validated numbers."""
+    if items is None:
+        return [dict(x) for x in keep or []]
+    out, names = [], set()
+    for it in items:
+        d = it if isinstance(it, dict) else it.model_dump()
+        if d["name"] in names:
+            raise AppError(422, "CUSTOM_ITEM_DUPLICATE", "같은 이름의 평가 항목이 있습니다.", name=d["name"])
+        names.add(d["name"])
+        d["id"] = d.get("id") or secrets.token_hex(4)
+        out.append(d)
+    if any(x["weight"] % 5 for x in out):
+        raise AppError(422, "WEIGHT_STEP", "가중치는 0~60%를 5% 단위로 정할 수 있습니다.")
+    return out
+
+
+def zero_weights(items: list[dict] | None) -> list[dict]:
+    """Items stay when the base weights are reset to their defaults, but with weight 0 (not evaluated) so the sum is 100."""
+    return [{**x, "weight": 0} for x in items or []]
 
 
 async def _next_version(db: AsyncSession, posting_id: UUID) -> int:
@@ -63,7 +88,7 @@ def interview_values(iv: InterviewSettings | None, prev: PostingEvalSettings | N
 
 
 async def add_settings(db: AsyncSession, posting: JobPosting, weights: dict[str, int], custom_question: str | None,
-                       actor: UUID, interview: dict | None = None) -> PostingEvalSettings:
+                       actor: UUID, interview: dict | None = None, custom_items: list[dict] | None = None) -> PostingEvalSettings:
     if posting.settings_locked_at is not None:
         raise conflict(*SETTINGS_LOCKED)
     if interview is None and posting.current_settings_id:
@@ -72,6 +97,7 @@ async def add_settings(db: AsyncSession, posting: JobPosting, weights: dict[str,
                             w_expertise=weights["expertise"], w_logic=weights["logic"],
                             w_attitude=weights["attitude"], w_delivery=weights["delivery"],
                             w_coding=weights.get("coding"), custom_question=custom_question or None,
+                            custom_items=custom_items or [], w_custom=sum(x["weight"] for x in custom_items or []),
                             rubric_version=RUBRIC_VERSION, created_by=actor, **(interview or {}))
     db.add(s)
     await db.flush()
@@ -86,7 +112,8 @@ async def current_settings(db: AsyncSession, posting: JobPosting) -> PostingEval
 def settings_out(s: PostingEvalSettings, posting: JobPosting) -> EvalSettingsOut:
     iv = InterviewSettings(question_plan=s.question_plan, think_sec=s.think_sec, answer_sec=s.answer_sec,
                            followup_max=s.followup_max)
-    return EvalSettingsOut(version=s.version, weights=s.weights(), custom_question=s.custom_question, interview=iv,
+    return EvalSettingsOut(version=s.version, weights=s.weights(), custom_items=list(s.custom_items or []),
+                           custom_question=s.custom_question, interview=iv,
                            question_areas=list(posting.question_areas or DEFAULT_QUESTION_AREAS),
                            rubric_version=s.rubric_version, locked=posting.settings_locked_at is not None,
                            coding_enabled=posting.coding_enabled)
@@ -158,7 +185,8 @@ async def ensure_problem(db: AsyncSession, p: JobPosting) -> None:
     """A coding posting without a problem gets a random active one (fixed for the posting, so applicants are compared fairly)."""
     if not p.coding_enabled or p.coding_problem_id:
         return
-    p.coding_problem_id = await db.scalar(select(CodingProblem.id).where(CodingProblem.is_active).order_by(func.random()).limit(1))
+    with db.no_autoflush:  # the posting row is half edited (coding on, no problem yet): do not flush it before the id is set
+        p.coding_problem_id = await db.scalar(select(CodingProblem.id).where(CodingProblem.is_active).order_by(func.random()).limit(1))
 
 
 async def create_posting(db: AsyncSession, company_id: UUID, actor: UUID, body: PostingIn) -> PostingDetailOut:
@@ -184,7 +212,8 @@ async def update_posting(db: AsyncSession, p: JobPosting, actor: UUID, body: Pos
     await ensure_problem(db, p)
     if coding_changed:
         prev = await current_settings(db, p)
-        await add_settings(db, p, default_weights(p.coding_enabled), prev.custom_question, actor)
+        await add_settings(db, p, default_weights(p.coding_enabled), prev.custom_question, actor,
+                           custom_items=zero_weights(prev.custom_items))
     p.row_version += 1
     p.updated_at = utcnow()
     try:

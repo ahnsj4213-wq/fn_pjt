@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { deleteMyMedia, fetchMyReport, fetchRecruiterReportView, type MyReport, type RecruiterReportView, type ReportAnswer, type ReportPoint } from '@/api/candidate/report';
+import { deleteMyMedia, fetchMyReport, fetchRecruiterReportView, type MyReport, type RecruiterReportView, type ReportAnswer, type ReportDetail, type ReportPoint } from '@/api/candidate/report';
 import { ApiError } from '@/shared/http/client';
 import { formatDate } from '@/shared/format';
 import { describeError } from '@/shared/http/errors';
@@ -12,6 +12,54 @@ const AI_LABEL = { PASS: '합격 추천', HOLD: '보류', FAIL: '불합격 추�
 const AI_KIND = { PASS: 'good', HOLD: 'hold', FAIL: 'bad' } as const;
 
 const Bar = ({ v, low }: { v: number; low?: boolean }) => <span className={`sbar${low ? ' low' : ''}`}><i style={{ width: `${v}%` }} /></span>;
+
+const Row = ({ label, v, note }: { label: string; v: number | null; note?: string }) => (
+  <div className="item"><div className="ih"><span>{label}</span>{v == null ? <span className="hint">측정 없음</span> : <><Bar v={v} low={v < 65} /><b>{v}</b></>}</div>
+    {note && <p>{note}</p>}</div>
+);
+
+/** What goes under the items of an area card: the sub-items of 논리성·전문성 (with the STAR check), the measured values of
+ *  표현 및 태도 and 전달력, or the grade and quote of a company's own item. */
+function AreaDetail({ k, d }: { k: string; d: ReportDetail }) {
+  const rules = d.rules ?? {};
+  if (k.startsWith('custom:')) {
+    const c = d.custom?.find((x) => `custom:${x.id}` === k);
+    if (!c) return null;
+    return (
+      <div className="extra"><span className="hint">기업이 정한 평가 항목 · {c.description || '설명 없음'}</span>
+        <p style={{ margin: '4px 0' }}><span className={`pill ${c.grade === '상' ? 'good' : c.grade === '중' ? 'hold' : 'bad'}`}>{c.grade}</span>
+          {c.evidence_status === 'OK' && c.quote ? <> Q{c.quote_no} · '{c.quote}'</> : <span className="hint"> 근거를 찾지 못해 낮게 평가했습니다</span>}</p></div>
+    );
+  }
+  if ((k === 'LOGIC' || k === 'EXPERTISE') && d.sub) {
+    const subs = k === 'LOGIC' ? d.sub.logic : d.sub.expertise;
+    return (
+      <div className="extra" aria-label={`${k === 'LOGIC' ? '논리성' : '전문성'} 세부 항목`}><span className="hint">세부 항목</span>
+        {subs.map((s) => <Row key={s.key} label={s.name} v={s.score} />)}
+        {k === 'LOGIC' && d.sub.star.score != null && (
+          <><span className="hint">STAR 구조 · 답변에 들어 있던 비율</span>
+            <div className="negs">{d.sub.star.items.map((i) => (
+              <span key={i.key} className={`pill ${(i.rate ?? 0) >= 60 ? 'good' : (i.rate ?? 0) >= 30 ? 'hold' : 'bad'}`}>{i.name} {i.rate ?? 0}%</span>))}</div></>
+        )}</div>
+    );
+  }
+  if (k === 'ATTITUDE' && (rules.negative || rules.answer_time)) {
+    return (
+      <div className="extra"><span className="hint">서버가 직접 잰 값 · 이 영역 점수의 {Math.round((d.blend?.rule_weight ?? 0.3) * 100)}%에 반영</span>
+        {rules.negative && <Row label="부정적 표현" v={rules.negative.score} note={`${rules.negative.count}회 감지`} />}
+        {rules.answer_time && <Row label="답변 시간 활용" v={rules.answer_time.score} />}</div>
+    );
+  }
+  if (k === 'DELIVERY' && (rules.speed || rules.clarity || rules.pitch)) {
+    return (
+      <div className="extra"><span className="hint">서버가 직접 잰 값 · 이 영역 점수의 {Math.round((d.blend?.rule_weight ?? 0.3) * 100)}%에 반영</span>
+        {rules.speed && <Row label="말의 속도" v={rules.speed.score} note={`평균 분당 ${rules.speed.avg_cpm}자 (알맞은 범위 ${rules.speed.ideal[0]}~${rules.speed.ideal[1]}자)`} />}
+        {rules.clarity && <Row label="발음의 뚜렷함" v={rules.clarity.score} />}
+        {rules.pitch && <Row label="음성 높낮이" v={rules.pitch.score} note={`높낮이 변화 ${rules.pitch.avg_std_semitones} 반음`} />}</div>
+    );
+  }
+  return null;
+}
 
 /** The answer text with its verified quotes marked: 가점 (green) and 감점 (red) phrases, and hedging phrases. */
 function Marked({ a }: { a: ReportAnswer }) {
@@ -209,10 +257,11 @@ export function Report({ mode = 'candidate' }: { mode?: 'candidate' | 'recruiter
               <div className="item" key={it.label}><div className="ih"><span>{it.label}</span><Bar v={it.score} low={it.score < 65} /><b>{it.score}</b></div>
                 {it.comment && <p>{it.comment}</p>}</div>
             ))}
+            <AreaDetail k={a.key} d={r.detail ?? {}} />
           </div>
         ))}
         <div className="card area">
-          <h2>답변 습관 <span className="ascore" style={{ fontSize: 12, fontWeight: 500 }}>점수에는 반영되지 않습니다</span></h2>
+          <h2>답변 습관 <span className="ascore" style={{ fontSize: 12, fontWeight: 500 }}>표현 및 태도 점수에 함께 반영됩니다</span></h2>
           <p className="adesc">감지된 부정적인 표현 · 질문별 답변시간</p>
           <div className="extra"><span className="hint">감지된 부정적 표현</span>
             <div className="negs">{r.attitude.negative.length ? r.attitude.negative.map((w) => <mark className="neg" key={w}>{w}</mark>) : <span className="hint">없었습니다</span>}</div>

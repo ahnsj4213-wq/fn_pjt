@@ -113,7 +113,11 @@ class FakeAIClient:
     def _reply_evaluate_answer(inp: dict) -> dict:
         quote = inp["answer"].strip()[:40]
         item = {"quote": quote, "comment": "답변에서 판단 근거가 되는 내용이 확인된다.", "score": 3}
-        return {k: dict(item) for k in ("expertise", "logic", "attitude", "delivery")}
+        out = {k: dict(item) for k in ("expertise", "logic", "attitude", "delivery")}
+        out["expertise_sub"] = {"a": 3, "b": 3, "c": 3}
+        out["logic_sub"] = {"a": 4, "b": 3, "c": 3}
+        out["star"] = {"situation": 1, "task": 0, "action": 1, "result": 1}
+        return out
 
     @staticmethod
     def _reply_report_summary(inp: dict) -> dict:
@@ -132,6 +136,11 @@ class FakeAIClient:
         return {"readability": "함수와 변수 이름이 역할을 잘 드러낸다.",
                 "complexity": {"time": "unknown", "comment": "입력 크기에 따른 반복 구조를 확인해야 한다."},
                 "improvements": ["예외 입력에 대한 처리를 추가하면 좋다."]}
+
+    @staticmethod
+    def _reply_custom_criteria(inp: dict) -> dict:
+        text = inp["answers"][0]["text"].strip()[:30]
+        return {"results": [{"id": it["id"], "quote": text, "comment": "기준에 맞는 내용이 확인된다.", "grade": "중"} for it in inp["items"]]}
 
     @staticmethod
     def _reply_problem_rewrite(inp: dict) -> dict:

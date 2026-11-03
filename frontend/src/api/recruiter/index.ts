@@ -21,6 +21,9 @@ export interface Weights {
   coding?: number | null;
 }
 
+/** A company's own evaluation item (SC-R07): name, one-line description, the 상/중/하 criterion and a weight like the fixed areas. */
+export interface CustomItem { id?: string; name: string; description: string; high: string; mid: string; low: string; weight: number }
+
 export type QuestionArea = 'PERSONALITY' | 'MOTIVATION' | 'JOB_SKILL' | 'PROJECT' | 'COLLABORATION';
 export interface PlanSlot { area: QuestionArea; text: string | null }
 export interface InterviewSettings {
@@ -33,6 +36,7 @@ export interface InterviewSettings {
 export interface EvalSettings {
   version: number;
   weights: Weights;
+  custom_items?: CustomItem[];
   custom_question: string | null;
   interview: InterviewSettings;
   question_areas: QuestionArea[];
@@ -130,7 +134,7 @@ export const closePosting = (id: string) => apiFetch<PostingDetail>(`/api/recrui
 export const deletePosting = (id: string) => apiFetch<void>(`/api/recruiter/postings/${enc(id)}`, { method: 'DELETE' });
 export const fetchPostingPreview = (id: string) => apiFetch<PostingPublic>(`/api/recruiter/postings/${enc(id)}/preview`);
 export const fetchEvalSettings = (id: string) => apiFetch<EvalSettings>(`/api/recruiter/postings/${enc(id)}/evaluation-settings`);
-export const saveEvalSettings = (id: string, body: { weights: Weights; custom_question?: string | null; interview?: InterviewSettings; question_areas?: QuestionArea[] }) =>
+export const saveEvalSettings = (id: string, body: { weights: Weights; custom_items?: CustomItem[]; custom_question?: string | null; interview?: InterviewSettings; question_areas?: QuestionArea[] }) =>
   apiFetch<EvalSettings>(`/api/recruiter/postings/${enc(id)}/evaluation-settings`, { method: 'PUT', body });
 export const resetEvalSettings = (id: string) =>
   apiFetch<EvalSettings>(`/api/recruiter/postings/${enc(id)}/evaluation-settings/reset`, { method: 'POST' });

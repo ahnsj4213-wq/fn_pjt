@@ -199,7 +199,7 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | `POST /api/recruiter/postings/{pid}/close` (구현) | → `PostingDetailOut`(OPEN→CLOSED, MANUAL). 같은 트랜잭션에서 READY·PREPARING·INTERRUPTED 지원 건을 EXPIRED로 바꾼다(코딩 중 끊긴 건은 초안 AUTO_EXPIRED 제출, 응답이 있으면 평가 등록, `lifecycle.expire_unfinished`) | 409 `INVALID_STATE` | POSTING_CLOSE |
 | `DELETE /api/recruiter/postings/{pid}` (구현) | → 204(`deleted_at`) | 409 `HAS_APPLICATIONS` | POSTING_DELETE |
 | `GET /api/recruiter/postings/{pid}/evaluation-settings` (구현) | → `EvalSettingsOut` | 404 | — |
-| `PUT /api/recruiter/postings/{pid}/evaluation-settings` (구현) | `{weights: {expertise, logic, attitude, delivery, coding?}, custom_question?}` → `EvalSettingsOut`(새 버전 행 + `current_settings_id`, 공고 행 `FOR UPDATE`). 빈 커스텀 질문은 NULL(자동 채움, QST-04) | 422 `WEIGHTS_CODING_MISMATCH`, 422 `WEIGHT_SUM_NOT_100`(`total`), 422 `CUSTOM_QUESTION_TOO_SHORT`, 409 `SETTINGS_LOCKED` | SETTINGS_CHANGE(`version`) |
+| `PUT /api/recruiter/postings/{pid}/evaluation-settings` (구현) | `{weights: {expertise, logic, attitude, delivery, coding?}, custom_question?}` → `EvalSettingsOut`(새 버전 행 + `current_settings_id`, 공고 행 `FOR UPDATE`). 빈 커스텀 질문은 NULL(자동 채움, QST-04) | 422 `WEIGHTS_CODING_MISMATCH`, 422 `WEIGHT_SUM_NOT_100`(`total`), 422 `WEIGHT_STEP`, 422 `CUSTOM_ITEM_DUPLICATE`, 422 `CUSTOM_QUESTION_TOO_SHORT`, 409 `SETTINGS_LOCKED` | SETTINGS_CHANGE(`version`) |
 | `POST /api/recruiter/postings/{pid}/evaluation-settings/reset` (구현) | → `EvalSettingsOut`(기본 가중치, 커스텀 질문 없음. ADM-05 [초기화]) | 409 `SETTINGS_LOCKED` | SETTINGS_CHANGE(`reset`) |
 | `GET /api/recruiter/coding-problems` (구현) | → `[{id, title, statement_md, language, public_examples: [{input, output}]}]`(활성 문제, OQ-14) | — | — |
 
@@ -340,7 +340,7 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 신고 건수(화면정의서 SC-O02)는 신고를 받는 기능이 없어 표시하지 않는다.
 
 ### 5.6c 면접 질문 관리 (SC-R07)
-`PUT /api/recruiter/postings/{id}/evaluation-settings`는 `weights`, `custom_question`, `interview{question_plan, think_sec, answer_sec, followup_max}`에 더해 `question_areas`(1~5개, 생략하면 그대로)를 받는다. 응답에도 `question_areas`가 있고 공고 상세의 ‘면접 질문 분야’가 이 값을 쓴다. `POST …/evaluation-settings/reset`은 질문 분야·질문 목록·면접 설정만 처음으로 되돌리고 가중치는 그대로 둔다(화면정의서가 PRD ADM-05의 ‘가중치 초기화’보다 우선). 직접 추가하는 평가 항목은 지원하지 않는다(루브릭 4개 고정).
+`PUT /api/recruiter/postings/{id}/evaluation-settings`는 `weights`, `custom_question`, `interview{question_plan, think_sec, answer_sec, followup_max}`에 더해 `question_areas`(1~5개, 생략하면 그대로)를 받는다. 응답에도 `question_areas`가 있고 공고 상세의 ‘면접 질문 분야’가 이 값을 쓴다. `POST …/evaluation-settings/reset`은 질문 분야·질문 목록·면접 설정만 처음으로 되돌리고 가중치는 그대로 둔다(화면정의서가 PRD ADM-05의 ‘가중치 초기화’보다 우선). 기업이 직접 추가한 평가 항목(`custom_items`, 최대 5개: `{id?, name ≤20, description ≤60, high/mid/low ≤80, weight 0~60}`)도 같은 요청으로 저장한다. 생략하면 현재 항목이 그대로이고 `[]`이면 모두 지운다. 기본 4개(+코딩)와 항목 가중치를 모두 더해 100이어야 하며(`WEIGHT_SUM_NOT_100`), 모든 가중치는 0~60%의 5% 단위다(`WEIGHT_STEP`). 이름이 겹치면 422 `CUSTOM_ITEM_DUPLICATE`. 코딩테스트를 켜거나 꺼서 가중치가 기본값으로 돌아갈 때는 항목을 남기되 가중치를 0으로 둔다(평가하지 않음). 초기화는 가중치와 항목을 그대로 둔다. 응답의 `weights`는 기본 항목만이고 항목은 `custom_items`에 `id`와 함께 나온다.
 
 ### 5.6d 일정 관리와 메일 보내기 (SC-R11, SC-R14)
 모두 담당자 세션의 회사 범위로만 읽고 쓴다(다른 회사의 일정·지원 건은 404).
@@ -375,6 +375,10 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 담당자용 정보(AI 예상 합격, 메모, 모델·프롬프트 버전, 근거 부족 집계)는 이 응답에 없다. 점수는 모델이 아니라 서버 코드가 계산한 저장값이다. 가점·감점 구절은 점수 4~5점(가점)·1~2점(감점)을 받은 항목의 인용이고, 인용은 답변 원문의 연속 구절임이 검증된 것만이다. 부정적 표현은 정해 둔 표현 목록과 답변 원문을 맞춰 본 규칙 기반 결과이며 점수에는 반영하지 않는다.
 
 **화면정의서와 다른 점:** 평가 영역은 정의서의 4개(논리성, 전달력, 표현 및 태도, 전문성)와 이름·순서가 같다(마이그레이션 0019). 그러나 영역 안의 세부 항목(일관성·답변의 구체성·설명의 마무리, 인재상 연계 등)과 규칙 지표(부정적 단어·답변 시간·말 속도)의 점수 반영, 발음·음성 높낮이, STAR 구조, 기업이 추가한 항목은 아직 없다. 표정·긴장도 그래프는 ‘준비 중’이고 시선 이탈 횟수만 보인다. ‘리포트까지 모두 삭제’는 정의서처럼 안내만 한다.
+
+### 5.6h 리포트 세부 항목 (SC-A08, 2026-11-03)
+
+`GET …/applications/{aid}/report`와 담당자용 `…/report-view`의 `ReportOut`에 `detail`이 더해졌다(옛 리포트는 `{}`). `detail.sub`는 전문성·논리성의 세부 항목 점수(0~100)와 STAR 비율, `detail.rules`는 서버가 직접 잰 부정적 표현 횟수, 답변 시간 활용, 말의 속도, 발음의 뚜렷함, 음성 높낮이, `detail.custom`은 기업 추가 항목의 등급(상·중·하)·점수·인용·코멘트, `detail.blend`는 측정값을 영역 점수에 섞은 방식(`rule_weight` 0.3)이다. 기업 추가 항목은 `criteria`와 `areas`에 `custom: true`, `key: "custom:<id>"`로 나온다.
 
 ### 5.6g 담당자용 리포트, 템플릿 불러오기, 문의 쪽지 (SC-R10, SC-R05, SC-R15)
 

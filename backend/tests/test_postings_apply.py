@@ -260,3 +260,39 @@ async def test_coding_posting_gets_a_problem_without_the_company_choosing(client
         **posting_body(coding_enabled=True, coding_time_limit_min=45), "row_version": r.json()["row_version"]})
     assert again.status_code == 200 and again.json()["coding_problem_id"] == first
     assert (await client.post(f"/api/recruiter/postings/{p['id']}/publish")).status_code == 200
+
+
+ITEM = {"name": "책임감", "description": "끝까지 하는가", "high": "사례가 있다", "mid": "언급한다", "low": "없다", "weight": 10}
+
+
+async def test_custom_items_share_the_100_percent_and_follow_the_rules(client):
+    await recruiter(client)
+    p = await create_posting(client)
+    url = f"/api/recruiter/postings/{p['id']}/evaluation-settings"
+    base = {"expertise": 30, "logic": 25, "attitude": 20, "delivery": 15}
+    r = await client.put(url, json={"weights": base, "custom_items": [ITEM]})  # 90 + 10
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["weights"] == base and len(out["custom_items"]) == 1 and out["custom_items"][0]["id"]
+    kept = (await client.put(url, json={"weights": base})).json()  # items omitted: they stay
+    assert kept["custom_items"] == out["custom_items"]
+    assert (await client.get(url)).json()["custom_items"][0]["name"] == "책임감"
+    for body, code in (({"weights": {**base, "delivery": 10}, "custom_items": [ITEM]}, "WEIGHT_SUM_NOT_100"),
+                       ({"weights": {**base, "logic": 24, "delivery": 16}, "custom_items": [ITEM]}, "WEIGHT_STEP"),
+                       ({"weights": {"expertise": 65, "logic": 15, "attitude": 10, "delivery": 0}, "custom_items": [{**ITEM, "weight": 10}]}, "WEIGHT_STEP"),
+                       ({"weights": {**base, "delivery": 5}, "custom_items": [ITEM, {**ITEM, "weight": 10}]}, "CUSTOM_ITEM_DUPLICATE")):
+        r = await client.put(url, json=body)
+        assert r.status_code == 422 and r.json()["error"]["code"] == code, (body, r.text)
+    six = [{**ITEM, "name": f"항목{i}", "weight": 0} for i in range(6)]
+    assert (await client.put(url, json={"weights": {**base, "delivery": 25}, "custom_items": six})).status_code == 422  # at most 5
+    cleared = await client.put(url, json={"weights": {"expertise": 30, "logic": 30, "attitude": 20, "delivery": 20}, "custom_items": []})
+    assert cleared.status_code == 200 and cleared.json()["custom_items"] == []
+    # Reset keeps the weights and the items; turning the coding test on resets the base weights and sets the items to 0%.
+    await client.put(url, json={"weights": base, "custom_items": [ITEM]})
+    assert (await client.post(url + "/reset")).json()["custom_items"][0]["weight"] == 10
+    current = (await client.get(f"/api/recruiter/postings/{p['id']}")).json()
+    r = await client.put(f"/api/recruiter/postings/{p['id']}", json={
+        **posting_body(coding_enabled=True, coding_time_limit_min=30), "row_version": current["row_version"]})
+    assert r.status_code == 200 and r.json()["weights_reset"] is True
+    es = r.json()["evaluation_settings"]
+    assert es["custom_items"][0]["name"] == "책임감" and es["custom_items"][0]["weight"] == 0 and es["weights"]["coding"] == 20

@@ -10,7 +10,7 @@ JOB_FAMILIES = {"DEV": "개발", "DATA_AI": "데이터·AI", "DESIGN": "디자�
 QUESTION_AREAS = {"PERSONALITY": "인성", "MOTIVATION": "지원 동기", "JOB_SKILL": "직무 기술",
                   "PROJECT": "프로젝트 경험", "COLLABORATION": "협업"}
 DEFAULT_QUESTION_AREAS = list(QUESTION_AREAS)
-RUBRIC_VERSION = "rubric-v2"
+RUBRIC_VERSION = "rubric-v3"
 
 
 class PostingIn(BaseModel):
@@ -48,6 +48,18 @@ class Weights(BaseModel):
     coding: int | None = Field(None, ge=0, le=100)
 
 
+class CustomItemIn(BaseModel):
+    """A company's own evaluation item (SC-R07): a name, a one-line description and the 상/중/하 criterion; weight like the others."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    id: str | None = Field(None, pattern=r"^[a-z0-9]{4,12}$")  # omitted on a new item; the server gives one
+    name: str = Field(min_length=1, max_length=20)
+    description: str = Field("", max_length=60)
+    high: str = Field(min_length=1, max_length=80)
+    mid: str = Field(min_length=1, max_length=80)
+    low: str = Field(min_length=1, max_length=80)
+    weight: int = Field(ge=0, le=60)
+
+
 class PlanSlot(BaseModel):
     """One question of the interview (SC-R07): an area, and the question text or empty for AI/bank."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -67,6 +79,7 @@ class InterviewSettings(BaseModel):
 class EvalSettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     weights: Weights
+    custom_items: list[CustomItemIn] | None = Field(None, max_length=5)  # omitted: the current items stay
     custom_question: str | None = Field(None, max_length=500)
     interview: InterviewSettings | None = None  # omitted: the current interview settings stay
     # SC-R07 질문 분야 (shown on the posting page). Omitted: unchanged. At least one.
@@ -76,6 +89,7 @@ class EvalSettingsIn(BaseModel):
 class EvalSettingsOut(BaseModel):
     version: int
     weights: dict[str, int]
+    custom_items: list[dict] = []
     custom_question: str | None
     interview: InterviewSettings
     question_areas: list[str]

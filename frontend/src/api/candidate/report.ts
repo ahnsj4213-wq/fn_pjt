@@ -29,6 +29,22 @@ export interface ReportQuestion {
   limit_sec: number | null;
 }
 export interface ReportPoint { rank: number; text: string; refs: number[] }
+export interface SubItem { key: string; name: string; score: number | null }
+/** Sub-items, STAR and the values the server measures itself, stored with the report (backend evaluation/details.py). {} for older reports. */
+export interface ReportDetail {
+  version?: string;
+  sub?: { expertise: SubItem[]; logic: SubItem[]; star: { items: { key: string; name: string; rate: number | null }[]; score: number | null } };
+  rules?: {
+    negative?: { count: number; score: number; per_question: { seq: number; count: number; phrases: string[] }[] };
+    answer_time?: { score: number; per_question: { seq: number; sec: number; limit: number; score: number }[] };
+    speed?: { avg_cpm: number; ideal: [number, number]; score: number; per_question: { seq: number; cpm: number; score: number }[] };
+    clarity?: { score: number };
+    pitch?: { score: number; avg_std_semitones: number };
+  };
+  custom?: { id: string; name: string; description: string; weight: number; grade: '상' | '중' | '하'; score: number;
+    evidence_status: string; quote: string | null; quote_no: number | null; comment: string }[];
+  blend?: { scoring: string; rule_weight: number; rule_scores: Record<string, number> };
+}
 export interface MyReport {
   application_id: string;
   posting_id: string;
@@ -42,19 +58,20 @@ export interface MyReport {
   total: number;
   grade: string;
   grade_kind: 'good' | 'hold' | 'bad';
-  criteria: { key: string; label: string; desc: string; score: number; weight: number }[];
+  criteria: { key: string; label: string; desc: string; score: number; weight: number; custom?: boolean }[];
   coding: { score: number; weight: number | null } | null;
   summary: string;
   strengths: ReportPoint[];
   improvements: ReportPoint[];
   chips: { label: string; no: number; score: number | null; followup: boolean }[];
   questions: ReportQuestion[];
-  areas: { key: string; label: string; desc: string; score: number; items: { label: string; score: number; comment: string | null }[] }[];
+  areas: { key: string; label: string; desc: string; score: number; custom?: boolean; items: { label: string; score: number; comment: string | null }[] }[];
   attitude: { negative: string[]; times: { label: string; sec: number; limit: number | null }[]; limit_sec: number | null };
   proctor: { leave_count: number; away_ms: number };
   media: { audio_deleted: boolean; audio_auto_delete_days: number };
   share_result: boolean;
   notice: string;
+  detail: ReportDetail;
 }
 
 const base = (aid: string) => `/api/candidate/applications/${encodeURIComponent(aid)}`;

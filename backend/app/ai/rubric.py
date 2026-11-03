@@ -2,7 +2,7 @@
 import hashlib
 import json
 
-RUBRIC_VERSION = "rubric-v2"
+RUBRIC_VERSION = "rubric-v3"
 
 COMMON = ("평가 근거는 답변 텍스트뿐이다. 목소리·억양·말 속도·침묵·말버릇·STT 표기 오류·띄어쓰기·맞춤법은 판단에 쓰지 않는다. "
           "모든 문항에 같은 4항목을 적용한다. 각 점수에는 그 판단을 뒷받침하는 답변 원문 인용을 1개 붙인다.")
@@ -42,6 +42,15 @@ ITEMS = [
          2: "핵심을 찾기 어렵고 내용이 순서 없이 이어져 여러 번 읽어야 이해된다.",
          1: "텍스트에서 핵심과 구조를 파악할 수 없다."}},
 ]
+# Sub-items shown in the report (SC-A08). The model scores a·b·c as small integers; labels live here so the prompt, the
+# report and the tests agree. STAR (상황·과제·행동·결과) is a 0/1 check per element.
+SUB_ITEMS = {
+    "expertise": [("a", "개념 정확성", "직무 개념과 기술 설명이 정확한가"), ("b", "실무 적용", "개념을 실제 경험·업무에 적용해 말하는가"),
+                  ("c", "설명의 깊이", "원리나 이유까지 설명하는가")],
+    "logic": [("a", "주장 명확성", "결론이나 입장이 분명한가"), ("b", "근거 제시", "이유와 사례가 따라오는가"),
+              ("c", "논리적 흐름", "순서와 연결이 자연스러운가")],
+}
+STAR = [("situation", "상황"), ("task", "과제"), ("action", "행동"), ("result", "결과")]
 KEYS = [i["key"] for i in ITEMS]
 KEY_TO_CRITERION = {i["key"]: i["criterion"] for i in ITEMS}
 
@@ -51,9 +60,12 @@ def render() -> str:
     for it in ITEMS:
         lines.append(f"[{it['key']}] {it['name']} — {it['looks_at']}")
         lines += [f"  {s}점: {it['levels'][s]}" for s in (5, 4, 3, 2, 1)]
+    for key, subs in SUB_ITEMS.items():
+        lines.append(f"[{key}_sub] " + ", ".join(f"{k}={name}({desc})" for k, name, desc in subs))
+    lines.append("[star] " + ", ".join(f"{k}={name}" for k, name in STAR))
     return "\n".join(lines)
 
 
 def rubric_hash() -> str:
-    body = json.dumps({"version": RUBRIC_VERSION, "common": COMMON, "items": ITEMS}, ensure_ascii=False, sort_keys=True)
+    body = json.dumps({"version": RUBRIC_VERSION, "common": COMMON, "items": ITEMS, "sub": SUB_ITEMS, "star": STAR}, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(body.encode()).hexdigest()[:16]

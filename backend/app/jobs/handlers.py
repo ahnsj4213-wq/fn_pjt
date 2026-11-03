@@ -292,6 +292,9 @@ async def evaluate_application(ctx: JobCtx) -> None:
 
 async def _write_report(db: AsyncSession, app: Application, run_id: UUID, rep: pipeline.Report, health: dict) -> None:
     for answer_id, payload in rep.units.items():
+        det = payload.get("detail") or {}
+        per_crit = {"EXPERTISE": {"expertise_sub": det["expertise_sub"]} if det.get("expertise_sub") else None,
+                    "LOGIC": {k: det[k] for k in ("logic_sub", "star") if det.get(k)} or None}
         for crit, item in payload["items"].items():
             quote = item.get("quote")
             db.add(AnswerEvaluation(run_id=run_id, answer_id=answer_id, criterion=crit, score=item["score"],
@@ -299,7 +302,7 @@ async def _write_report(db: AsyncSession, app: Application, run_id: UUID, rep: p
                                     insufficient_reason=item.get("insufficient_reason"),
                                     quote=quote["text"] if quote else None, quote_start=quote["start"] if quote else None,
                                     quote_end=quote["end"] if quote else None, comment=item.get("comment") or None,
-                                    llm_attempts=payload.get("llm_calls", 0)))
+                                    llm_attempts=payload.get("llm_calls", 0), detail=per_crit.get(crit)))
     sc = rep.scores
     settings = await db.get(PostingEvalSettings, app.eval_settings_id)
     leaves = await db.scalar(select(ProctorEvent.id).where(ProctorEvent.application_id == app.id).limit(1))
@@ -309,10 +312,10 @@ async def _write_report(db: AsyncSession, app: Application, run_id: UUID, rep: p
         score_delivery=sc.criteria["delivery"], score_coding=sc.coding, total_score=sc.total,
         insufficient_count=sc.insufficient_count, no_answer_count=sc.no_answer_count,
         insufficient_by_criterion=sc.insufficient_by_criterion, answered_main_count=rep.answered_main,
-        question_scores=sc.question_scores, weights=settings.weights(), summary=rep.summary["overall"],
+        question_scores=sc.question_scores, weights=settings.all_weights(), summary=rep.summary["overall"],
         strengths=[x["text"] for x in rep.summary["strengths"]],
         improvements=[x["text"] for x in rep.summary["improvements"]],
-        code_review=rep.code_review, proctor_summary={"has_events": leaves is not None},
+        code_review=rep.code_review, proctor_summary={"has_events": leaves is not None}, detail=rep.detail,
         point_refs={"strengths": [x["question_refs"] for x in rep.summary["strengths"]],
                     "improvements": [x["question_refs"] for x in rep.summary["improvements"]]}))
     coding_all = None

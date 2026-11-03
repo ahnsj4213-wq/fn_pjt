@@ -394,7 +394,7 @@ FROM next WHERE j.id=next.id RETURNING j.*;
 | P-7 | `audit_logs`에 `prev_hash`, `row_hash`, `sealed_at` 추가 + 1분 주기 봉인 작업(P1) | E SC-68. 요청마다 체인을 계산하면 동시 INSERT에서 체인이 갈라진다(B 리뷰 R-15). 감사 보관 기간은 OQ-33 | 0003(P1) |
 | P-8 | 이력서 표준 항목 JSON 키를 이 문서 2.3의 `career`·`certificates`로 통일(C의 T1 출력 `experience`·`certifications`를 변환) | 같은 데이터에 키가 두 벌이면 스냅샷 검증·화면이 갈라진다(B 리뷰 R-20) | 05 문서·추출 코드 |
 
-## 13. 2026-11-02 화면정의서 반영 (마이그레이션 0018~0022)
+## 13. 2026-11-02 화면정의서 반영 (마이그레이션 0018~0024)
 
 | 마이그레이션 | 내용 |
 |---|---|
@@ -403,6 +403,8 @@ FROM next WHERE j.id=next.id RETURNING j.*;
 | 0020 | `posting_templates`(회사별 저장 템플릿), `inquiry_threads`·`inquiry_messages`(SC-R15 문의 쪽지. 대화는 한 회사에 속하고 상대는 지원자 또는 운영자) |
 | 0021 | `coding_problems.difficulty`(하/중/상) |
 | 0022 | 코딩 문제를 **틀(템플릿)과 응시 건별 변형본**으로 나눈다. `template_key`, `variant_of`(틀), `variant_for`(응시 건, 유일), `variant_seed`. 틀에는 설명과 공개 예시만 두고, 비공개 케이스는 응시 건마다 `app/coding/templates.py`의 생성기와 정답 풀이로 만들어 변형본에 넣는다(코드가 계산, LLM 아님). 이전 채점 결과가 가리키는 틀의 비공개 케이스 3개만 남겼다 |
+| 0023 | `answer_evaluations.detail`(논리성·전문성 행의 세부 점수, STAR), `recruiter_reports.detail`(세부 항목 평균, STAR 비율, 코드가 잰 값, 점수에 섞은 방식, 기업 추가 항목 결과). 옛 행은 NULL이고 화면은 있을 때만 보여 준다 |
+| 0024 | `posting_eval_settings.custom_items`(기업 추가 평가 항목 최대 5개: 이름, 한 줄 설명, 상·중·하 기준, 가중치. 설정 버전 행마다 보관)와 `w_custom`(그 가중치 합). 가중치 합 100 검사는 `w_custom`을 더해서 한다 |
 
 코딩 문제 흐름: 공고는 틀 하나를 가리킨다(담당자는 고르지 않고, 코딩을 켜면 서버가 하~중 틀 중 하나를 무작위로 정해 공고에 고정). 질문 구성 작업(`compose_questions`)이 변형본을 만들며 설명을 AI(T9 `problem_rewrite`)로 바꿔 쓴다. 바뀐 설명이 원본의 제목·숫자·`변수` 표기를 모두 담지 않으면 원본을 쓴다. 질문 구성 때 만들지 못해도 면접이 끝날 때 원본 설명으로 만든다. 채점·평가는 `coding_attempts.problem_id`가 가리키는 변형본을 쓴다.
 

@@ -42,7 +42,7 @@ async def test_report_is_not_ready_before_the_evaluation_and_open_after_it(clien
     r = await cand.get(f"/api/candidate/applications/{app_id}/report")
     assert r.status_code == 200, r.text
     rep = r.json()
-    assert rep["total"] == 52.0 and rep["grade"] == "노력 필요" and rep["grade_kind"] == "bad"
+    assert rep["total"] == 54.9 and rep["grade"] == "노력 필요" and rep["grade_kind"] == "bad"  # 표현 및 태도 = 52 x .7 + 100 x .3
     assert [(c["label"], c["score"], c["weight"]) for c in rep["criteria"]][0][1] == 52
     assert rep["main_count"] == 5 and rep["followup_count"] == 0 and rep["summary"]
     assert rep["strengths"][0]["rank"] == 1 and rep["improvements"]
@@ -101,7 +101,7 @@ async def test_applicant_can_delete_the_audio_now_and_the_scores_stay(client, ma
     assert (await cand.get(f"/api/candidate/applications/{app_id}/report")).json()["media"]["audio_deleted"] is False
     assert (await cand.post(f"/api/candidate/applications/{app_id}/media/delete")).status_code == 204
     rep = (await cand.get(f"/api/candidate/applications/{app_id}/report")).json()
-    assert rep["media"]["audio_deleted"] is True and rep["total"] == 52.0 and rep["questions"][0]["answer"]["text"]
+    assert rep["media"]["audio_deleted"] is True and rep["total"] == 54.9 and rep["questions"][0]["answer"]["text"]
     assert (await q("SELECT count(*) FROM interview_answers WHERE application_id=:a AND audio_key IS NOT NULL", a=app_id))[0][0] == 0
     assert (await q("SELECT count(*) FROM file_deletions WHERE reason='CANDIDATE_REQUEST'"))[0][0] >= 1
     other = make_client()

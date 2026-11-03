@@ -20,7 +20,9 @@ from app.ai import rubric
 from app.ai.client import AIClient
 from app.core.constants import CRITERIA, Criterion
 from app.core.db import session_scope
-from app.evaluation.scoring import QuestionScores, ScoreResult, UnitScores, compute, no_answer_unit
+from app.core.storage import get_storage
+from app.evaluation import details
+from app.evaluation.scoring import RULE_WEIGHT, SCORING_VERSION, QuestionScores, ScoreResult, UnitScores, compute, no_answer_unit
 from app.models import (
     AnswerPreEvaluation,
     Application,
@@ -88,6 +90,7 @@ class Report:
     coding: dict | None  # {"passed", "total"} when the posting has a coding test
     questions: list[tuple[InterviewQuestion, InterviewAnswer | None, InterviewQuestion | None, InterviewAnswer | None]] = \
         field(default_factory=list)
+    detail: dict = field(default_factory=dict)  # sub-items and code-measured values (details.py), stored with the report
 
 
 def _band(score: Decimal) -> str:
@@ -117,6 +120,7 @@ class ReportInputs:
     submission: CodingSubmission | None
     problem: CodingProblem | None = None  # only when there is code to review (T8)
     public_tests: list[CodingTestcase] = field(default_factory=list)
+    custom_items: list = field(default_factory=list)  # the company's own evaluation items of this posting's settings
 
 
 async def load_report_inputs(db: AsyncSession, app: Application, manifest_hash: str) -> ReportInputs:
@@ -131,7 +135,8 @@ async def load_report_inputs(db: AsyncSession, app: Application, manifest_hash: 
         AnswerPreEvaluation.answer_id.in_([a.id for a in answers.values()] or [None]),
         AnswerPreEvaluation.manifest_hash == manifest_hash))).scalars()}
     coding, sub = await _coding(db, app, posting)
-    inp = ReportInputs(manifest_hash, posting, settings.weights(), list(qs), answers, cached, coding, sub)
+    inp = ReportInputs(manifest_hash, posting, settings.all_weights(), list(qs), answers, cached, coding, sub,
+                       custom_items=list(settings.custom_items or []))
     if sub is not None and sub.code.strip():
         inp.problem = await problem_of(db, app.id, posting)
         inp.public_tests = list((await db.execute(select(CodingTestcase).where(
@@ -196,13 +201,43 @@ async def build_report(ai: AIClient, app: Application, inp: ReportInputs) -> Rep
     coding_value = None
     if "coding" in weights:
         coding_value = Decimal(coding["score"]) if coding and coding.get("reached") else Decimal("0.00")
-    scores = compute(question_scores, weights, coding_value)
+    det = await details.analyze(rows, units, get_storage())
+    custom_scores, det.detail["custom"] = await _custom_items(ai, rows, inp.custom_items)
+    scores = compute(question_scores, weights, coding_value, det.rule_scores, custom_scores)
+    det.detail["blend"] = {"scoring": SCORING_VERSION, "rule_weight": float(RULE_WEIGHT), "rule_scores": {k: float(v) for k, v in det.rule_scores.items()}}
 
     summary = await _summary(ai, rows, units, scores)
     feedback = await _feedback(ai, rows, units, scores)
     review = await _code_review(ai, posting, inp) if inp.problem is not None else None
     answered_main = sum(1 for m, a, _, _ in rows if a is not None and not a.is_no_answer)
-    return Report(inp.manifest_hash, units, scores, answered_main, summary, feedback, review, coding, rows)
+    return Report(inp.manifest_hash, units, scores, answered_main, summary, feedback, review, coding, rows, det.detail)
+
+
+async def _custom_items(ai: AIClient, rows, items: list[dict]) -> tuple[dict[str, Decimal], list[dict]]:
+    """Grades of the company's own items (0% items are not evaluated). Score = grade points x 20, by code."""
+    active = [it for it in items if it.get("weight", 0) > 0]
+    if not active:
+        return {}, []
+    answers = []
+    for m, a, _fq, fa in rows:
+        text = " ".join(x.eval_text for x in (a, fa) if x is not None and not x.is_no_answer and x.eval_text)
+        if text.strip():
+            answers.append({"no": m.seq, "question": m.text, "text": text})
+    if answers:
+        r = await ai.llm("custom_criteria", {"items": active, "answers": answers}, lane="BATCH")
+        if r.status != "OK":
+            raise EvaluationFailed(f"custom_criteria {r.status}")
+        graded = r.output["items"]
+    else:  # nothing was answered: every item is the lowest grade without evidence
+        graded = {it["id"]: {"grade": "하", "score": 1, "evidence_status": "NO_ANSWER", "quote": None, "comment": ""} for it in active}
+    scores, detail = {}, []
+    for it in active:
+        g = graded[it["id"]]
+        scores[f"custom:{it['id']}"] = Decimal(g["score"] * 20)
+        detail.append({"id": it["id"], "name": it["name"], "description": it.get("description") or "", "weight": it["weight"],
+                       "grade": g["grade"], "score": g["score"] * 20, "evidence_status": g["evidence_status"],
+                       "quote": (g["quote"] or {}).get("text"), "quote_no": (g["quote"] or {}).get("no"), "comment": g["comment"]})
+    return scores, detail
 
 
 def _comments(payload: dict | None) -> dict:

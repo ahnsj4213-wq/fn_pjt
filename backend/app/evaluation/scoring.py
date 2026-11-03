@@ -8,7 +8,8 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from app.core.constants import CRITERIA, Criterion
 
-SCORING_VERSION = "score-v1"
+SCORING_VERSION = "score-v2"
+RULE_WEIGHT = Decimal("0.3")  # share of an area score that comes from code-measured values (details.py) when there are any
 Q = Decimal("0.01")
 WEIGHT_KEYS = {Criterion.EXPERTISE: "expertise", Criterion.LOGIC: "logic", Criterion.ATTITUDE: "attitude",
                Criterion.DELIVERY: "delivery"}
@@ -51,6 +52,7 @@ class ScoreResult:
     insufficient_count: int
     no_answer_count: int
     insufficient_by_criterion: dict[str, int]
+    custom: dict[str, Decimal] = field(default_factory=dict)  # the company's own items, 100-point scale, keyed `custom:<id>`
 
 
 def no_answer_unit() -> UnitScores:
@@ -64,17 +66,25 @@ def coding_score(passed: int, total: int) -> Decimal:
     return q2(Decimal(passed) * 100 / Decimal(total))
 
 
-def compute(questions: list[QuestionScores], weights: dict[str, int], coding: Decimal | None) -> ScoreResult:
+def compute(questions: list[QuestionScores], weights: dict[str, int], coding: Decimal | None,
+            rule_scores: dict[str, Decimal] | None = None, custom_scores: dict[str, Decimal] | None = None) -> ScoreResult:
     if not questions:
         raise ValueError("no answered questions to score")
     if sum(weights.values()) != 100:
         raise ValueError("weights must sum to 100")
     if ("coding" in weights) != (coding is not None):
         raise ValueError("coding weight and coding score must both be present or absent")
+    custom_scores = custom_scores or {}
+    if {k for k in weights if k.startswith("custom:")} != set(custom_scores):
+        raise ValueError("every custom weight needs a custom score and the other way round")
     n = Decimal(len(questions))
     per_q = [q.per_criterion() for q in questions]
     criteria = {WEIGHT_KEYS[c]: q2(sum(p[c] for p in per_q) / n * 20) for c in CRITERIA}
+    for k, rule in (rule_scores or {}).items():  # measured values pull the area they belong to (RULE_WEIGHT)
+        if k in criteria:
+            criteria[k] = q2(criteria[k] * (1 - RULE_WEIGHT) + rule * RULE_WEIGHT)
     total = sum(criteria[k] * weights[k] for k in criteria) / 100
+    total += sum((v * weights[k] for k, v in custom_scores.items()), Decimal(0)) / 100
     if coding is not None:
         total += coding * weights["coding"] / 100
     insufficient_by = {WEIGHT_KEYS[c]: 0 for c in CRITERIA}
@@ -89,4 +99,4 @@ def compute(questions: list[QuestionScores], weights: dict[str, int], coding: De
     qs = [{"seq": q.seq, **{WEIGHT_KEYS[c]: str(p[c]) for c in CRITERIA}} for q, p in zip(questions, per_q)]
     return ScoreResult(criteria=criteria, coding=coding, total=q2(total), question_scores=qs,
                        insufficient_count=sum(insufficient_by.values()), no_answer_count=no_answer,
-                       insufficient_by_criterion=insufficient_by)
+                       insufficient_by_criterion=insufficient_by, custom={k: q2(v) for k, v in custom_scores.items()})
