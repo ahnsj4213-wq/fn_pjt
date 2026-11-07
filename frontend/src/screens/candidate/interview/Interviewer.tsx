@@ -4,7 +4,7 @@ export function Interviewer({ speaking }: { speaking: boolean }) {
     <svg className={`interviewer${speaking ? ' speaking' : ''}`} viewBox="0 0 240 232" role="img" aria-label="면접관 캐릭터">
       <path d="M48 232 Q50 160 120 154 Q190 160 192 232 Z" fill="#33475b" />
       <path d="M100 157 L120 196 L140 157 Z" fill="#f4f6f8" />
-      <path d="M116 164 L124 164 L128 194 L120 204 L112 194 Z" fill="#1d6b57" />
+      <path d="M116 164 L124 164 L128 194 L120 204 L112 194 Z" fill="#5B2BB8" />
       <rect x="108" y="128" width="24" height="32" rx="6" fill="#efc4a2" />
       <circle cx="72" cy="100" r="9" fill="#f3cdb0" /><circle cx="168" cy="100" r="9" fill="#f3cdb0" />
       <circle cx="120" cy="96" r="48" fill="#f6d5b9" />

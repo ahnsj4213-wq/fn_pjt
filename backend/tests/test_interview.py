@@ -151,8 +151,8 @@ async def test_ac12_followups_at_most_one_per_main_and_four_total(client, make_c
     followups = [m for m, fu, _ in seen if fu]
     assert followups == [1, 2]  # one per main, at most the posting's follow-up count (default 2, SC-R07)
     assert [m for m, fu, _ in seen if not fu] == list(range(1, 6))
-    # Main 3 is the live-coding question of a 개발 posting (3 min); the others use the posting's 60 s.
-    assert all(limit == (45 if fu else 180 if m == 3 else 60) for m, fu, limit in seen)
+    # Every question is spoken and uses the posting's 60 s.
+    assert all(limit == (45 if fu else 60) for _m, fu, limit in seen)
     st = (await cand.get(url(app_id, "/interview/state"))).json()
     assert st["attempt_status"] == "SUBMITTED" and st["answered_main"] == 5
     assert await q("SELECT DISTINCT input_mode FROM interview_answers WHERE application_id=:a", a=app_id) == [("TEXT",)]
@@ -248,3 +248,170 @@ async def _close_sessions():
     await registry.close_all()
     await asyncio.sleep(0)
 
+
+
+# ── a voice session that keeps failing must leave a usable text interview (INT-18) ─────────────
+async def test_text_mode_asks_a_question_that_used_up_its_voice_attempts(client, make_client, voice_ai):
+    app_id, cand = await started(client, make_client)
+    assert (await cand.post(url(app_id, "/interview/text-mode"))).status_code == 200
+    first = (await cand.post(url(app_id, "/interview/next"))).json()["turn"]
+    await q("UPDATE interview_turns SET state='ABANDONED', end_reason='DISCONNECT', closed_at=now() WHERE id=:t RETURNING 1",
+            t=first["turn_id"])
+    qid = (await q("SELECT question_id FROM interview_turns WHERE id=:t", t=first["turn_id"]))[0][0]
+    for no in (2, 3):
+        await q("INSERT INTO interview_turns (application_id, question_id, presentation_no, input_mode, state, end_reason, closed_at) "
+                "VALUES (:a, :q, :n, 'VOICE', 'ABANDONED', 'DISCONNECT', now()) RETURNING 1", a=app_id, q=qid, n=no)
+
+    st = (await cand.post(url(app_id, "/interview/next"))).json()
+    t = st["turn"]
+    assert t is not None and t["phase"] == "ANSWERING" and t["main_no"] == first["main_no"]
+    r = await cand.post(url(app_id, f"/interview/turns/{t['turn_id']}/text-answer"),
+                        json={"text": "결제 API의 지연을 캐시로 줄인 경험으로 답하겠습니다. 응답 시간을 절반으로 줄였습니다."})
+    assert r.status_code == 202, r.text
+    rows = await q("SELECT count(*), max(presentation_no) FROM interview_turns WHERE question_id=:q", q=qid)
+    assert rows == [(3, 3)]
+    following = (await cand.post(url(app_id, "/interview/next"))).json()["turn"]
+    assert following is not None and following["turn_id"] != t["turn_id"]
+
+
+async def test_failing_to_cache_the_interjection_keeps_the_voice_session(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.voice import session as vs
+
+    class Full:
+        async def get(self, key):
+            return None
+
+        async def put(self, *a):
+            raise PermissionError("tts/interject-v1.pcm")
+
+    class Ai:
+        async def tts(self, text):
+            return SimpleNamespace(pcm48k=b"audio")
+
+    monkeypatch.setattr(vs, "get_storage", lambda: Full())
+    monkeypatch.setattr(vs, "get_ai_client", lambda: Ai())
+    assert await vs.VoiceSession._interject_audio(SimpleNamespace(app_id="a")) == b"audio"
+
+
+async def test_stopping_a_test_posting_interview_starts_over_with_new_questions(client, make_client, voice_ai, monkeypatch):
+    from app.core.config import get_settings
+
+    app_id, cand = await started(client, make_client)
+    pid = (await q("SELECT posting_id FROM applications WHERE id=:a", a=app_id))[0][0]
+    old_set = (await q("SELECT question_set_id FROM interviews WHERE application_id=:a", a=app_id))[0][0]
+
+    # Every other posting keeps the one-attempt rule.
+    r = await cand.post(url(app_id, "/interview/retake"))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "RETAKE_NOT_ALLOWED"
+    assert (await cand.get(url(app_id, "/interview/state"))).json()["retake_allowed"] is False
+
+    monkeypatch.setattr(get_settings(), "retake_posting_ids", str(pid))
+    assert (await cand.get(url(app_id, "/interview/state"))).json()["retake_allowed"] is True
+    stranger = make_client()
+    await candidate(stranger)
+    assert (await stranger.post(url(app_id, "/interview/retake"))).status_code == 404
+
+    r = await cand.post(url(app_id, "/interview/retake"))
+    assert r.status_code == 200 and r.json()["attempt_status"] == "READY", r.text
+    row = (await q("SELECT attempt_status, answered_main_count, resume_snapshot IS NOT NULL FROM applications WHERE id=:a", a=app_id))[0]
+    assert tuple(row) == ("READY", 0, True)
+    assert (await q("SELECT count(*) FROM interview_questions WHERE application_id=:a", a=app_id))[0][0] == 0
+
+    # The next attempt runs the normal path and composes a new set.
+    r = await cand.post(url(app_id, "/interview/prepare"))
+    assert r.status_code == 200, r.text
+    await drain()
+    await mark_prechecked(app_id)
+    r = await cand.post(url(app_id, "/interview/start"))
+    assert r.status_code == 200 and r.json()["answered_main"] == 0, r.text
+    assert (await q("SELECT question_set_id FROM interviews WHERE application_id=:a", a=app_id))[0][0] != old_set
+    # A submitted-style state cannot be reset: READY has nothing to retake.
+    await cand.post(url(app_id, "/interview/retake"))
+    assert (await cand.post(url(app_id, "/interview/retake"))).status_code == 409
+
+
+async def test_live_coding_turn_is_not_listened_to_and_gets_no_followup(client, make_client, voice_ai):
+    from uuid import UUID
+
+    from app.interview import turns
+    from app.voice.session import Gate
+    from app.core.timeutil import utcnow
+
+    assert Gate(None, utcnow(), utcnow(), listening=False).listening is False
+    app_id, _ = await started(client, make_client)
+    row = (await q("SELECT id, question_set_id, company_id FROM interview_questions WHERE application_id=:a AND seq=1", a=app_id))[0]
+    code_q = (await q("INSERT INTO interview_questions (question_set_id, application_id, company_id, seq, role, slot_type, text, "
+                      "answer_mode, answer_limit_sec, think_sec, source) SELECT question_set_id, application_id, company_id, 6, role, "
+                      "slot_type, 'code', 'CODE', answer_limit_sec, think_sec, source FROM interview_questions WHERE id=:i RETURNING id",
+                      i=row[0]))[0][0]
+    turn = (await q("INSERT INTO interview_turns (question_id, application_id, input_mode, state, presentation_no) "
+                    "VALUES (:q, :a, 'TEXT', 'CLOSED', 1) RETURNING id", q=code_q, a=app_id))[0][0]
+    ans = (await q("INSERT INTO interview_answers (turn_id, question_id, application_id, company_id, input_mode, end_reason, "
+                   "is_no_answer, stt_failed, interjected, reask_count, eval_text, code_text, opened_at, confirmed_at) VALUES (:t, :q, :a, :c, 'TEXT', 'BUTTON', false, false, false, 0, 'x = 1  # 설명', 'x = 1  # 설명', "
+                   "now(), now()) RETURNING id", t=turn, q=code_q, a=app_id, c=row[2]))[0][0]
+    assert await turns.decide_followup(UUID(app_id), ans) is None
+    assert (await q("SELECT count(*) FROM interview_questions WHERE parent_id=:q", q=code_q))[0][0] == 0
+
+
+# ── live composition (ADR-0022) ────────────────────────────────────────────────
+async def test_live_composition_writes_one_question_first_and_each_next_from_the_answers(client, make_client, voice_ai, monkeypatch):
+    from app.core.config import get_settings
+    monkeypatch.setattr(get_settings(), "question_mode", "live")
+    seen_queries: list = []
+    real = voice_ai.embed
+
+    async def embed(texts):
+        seen_queries.extend(texts)
+        return await real(texts)
+    monkeypatch.setattr(voice_ai, "embed", embed)
+    app_id, cand = await started(client, make_client)
+    # Before the interview: the plan and the first question only.
+    assert await q("SELECT count(*) FROM interview_questions WHERE application_id=:a", a=app_id) == [(1,)]
+    (plan,) = (await q("SELECT plan FROM question_sets WHERE application_id=:a AND status='READY'", a=app_id))[0]
+    assert len(plan) == 5 and plan[0]["seq"] == 1
+    voice_ai.followup = "SKIP"
+    assert (await cand.post(url(app_id, "/interview/text-mode"))).status_code == 200
+    mains = []
+    for n in range(12):
+        st = (await cand.post(url(app_id, "/interview/next"))).json()
+        if st["attempt_status"] != "INTERVIEWING":
+            break
+        t = st["turn"]
+        mains.append(t["main_no"])
+        # the rows grow with the interview: never a question ahead of the one being asked
+        assert await q("SELECT max(seq) FROM interview_questions WHERE application_id=:a AND role='MAIN'", a=app_id) == [(t["main_no"],)]
+        answer = f"정산 배치를 파티션 단위로 나눠 병렬화한 경험이 {n}번째로 떠오릅니다. 처리 시간을 크게 줄였습니다."
+        r = await cand.post(url(app_id, f"/interview/turns/{t['turn_id']}/text-answer"), json={"text": answer})
+        assert r.status_code == 202, r.text
+    assert mains == [1, 2, 3, 4, 5]
+    st = (await cand.get(url(app_id, "/interview/state"))).json()
+    assert st["attempt_status"] == "SUBMITTED" and st["answered_main"] == 5
+    rows = await q("SELECT seq, slot_type FROM interview_questions WHERE application_id=:a AND role='MAIN' ORDER BY seq", a=app_id)
+    assert [s for s, _ in rows] == [1, 2, 3, 4, 5] and [a for _, a in rows] == [p["area"] for p in plan]  # the plan's areas, in order
+    assert any("정산 배치를 파티션 단위로" in x for x in seen_queries)  # the answers steered the document search
+
+
+async def test_live_composition_falls_back_to_the_bank_when_generation_fails(client, make_client, voice_ai, monkeypatch):
+    from app.core.config import get_settings
+    from app.questions import compose as C
+    monkeypatch.setattr(get_settings(), "question_mode", "live")
+    app_id, cand = await started(client, make_client)
+
+    async def broken(*a, **k):
+        raise RuntimeError("model gave up")
+    for name in ("_fill_resume", "_fill_generated_kind", "_fill_bank_only"):
+        monkeypatch.setattr(C, name, broken)
+    voice_ai.followup = "SKIP"
+    assert (await cand.post(url(app_id, "/interview/text-mode"))).status_code == 200
+    for _ in range(12):
+        st = (await cand.post(url(app_id, "/interview/next"))).json()
+        if st["attempt_status"] != "INTERVIEWING":
+            break
+        t = st["turn"]
+        await cand.post(url(app_id, f"/interview/turns/{t['turn_id']}/text-answer"), json={"text": "결제 API 응답 지연을 캐시로 줄였습니다. 원인은 조회 쿼리였습니다."})
+    st = (await cand.get(url(app_id, "/interview/state"))).json()
+    assert st["attempt_status"] == "SUBMITTED" and st["answered_main"] == 5
+    sources = await q("SELECT source FROM interview_questions WHERE application_id=:a AND role='MAIN' AND seq > 1", a=app_id)
+    assert {s for (s,) in sources} == {"BANK_FALLBACK"}

@@ -42,7 +42,7 @@ export function TopBar() {
       <div className="wrap">
         {/* The logo also forgets a '지원하기' pressed before logging in. */}
         <Link to="/" className="logo" onClick={() => setPendingApply(null)}>
-          <span className="logo-mark" aria-hidden="true">면</span>모의면접
+          Huge
         </Link>
         <span className="spacer" />
         {!user ? (

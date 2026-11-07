@@ -89,10 +89,11 @@ async def get_coding(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), 
     examples = await _public_examples(db, problem.id)
     run_available = await infra.sandbox_ready()
     await db.commit()
-    return {"problem": {"title": problem.title, "statement_md": problem.statement_md,
-                        "examples": [{"input": t.input, "output": t.expected_output} for t in examples]},
-            "language": attempt.language, "languages": [attempt.language], "deadline_at": attempt.deadline_at,
-            "server_now": utcnow(),
+    return {"problem": {"title": problem.title, "statement_md": problem.statement_md, "level": problem.level,
+                        "time_limit_ms": problem.time_limit_ms, "memory_mb": problem.memory_mb, "starter_code": problem.starter_code or "",
+                        "examples": [{"input": t.input, "output": t.expected_output, "note": t.note} for t in examples]},
+            "language": attempt.language, "languages": [attempt.language], "started_at": attempt.started_at,
+            "deadline_at": attempt.deadline_at, "server_now": utcnow(),
             "draft": {"code": attempt.draft_code, "revision": attempt.draft_revision, "saved_at": attempt.draft_saved_at},
             "run_available": run_available}
 

@@ -123,3 +123,17 @@ def test_shipped_corpus_is_clean():
     assert set(kinds) == {"JOB", "RESUME", "PERSONALITY", "COLLABORATION", "COMPANY"} and kinds["JOB"] > 1000
     assert all(0 < len(r["text"]) <= 150 for r in rows)
     assert len({(r["kind"], "".join(r["text"].split())) for r in rows}) == len(rows)
+
+
+def test_search_log_keeps_ids_and_scores_but_never_text():
+    import json
+    import logging
+
+    from app.core.logging import JsonFormatter
+
+    record = logging.LogRecord("app", logging.INFO, "", 0, "rag_search", None, None)
+    record.fields = {"event": "rag_search", "kind": "JOB", "hits": 1, "top_similarity": 0.9, "example_ids": ["x"],
+                     "query": "이력서 내용", "previews": ["질문 원문"]}
+    out = json.loads(JsonFormatter().format(record))
+    assert out["example_ids"] == ["x"] and out["top_similarity"] == 0.9
+    assert "query" not in out and "previews" not in out

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { fetchCompany } from '@/api/common/auth';
-import { createPosting, fetchRecruiterPosting, publishPosting, savePostingTemplate, updatePosting, type PostingIn } from '@/api/recruiter';
+import { createPosting, draftPostingFromDocuments, fetchRecruiterPosting, publishPosting, savePostingTemplate, updatePosting, type PostingIn } from '@/api/recruiter';
 import { describeError } from '@/shared/http/errors';
 import { Field } from '@/shared/ui/wf';
 import { Modal } from '@/shared/ui/overlay';
@@ -16,9 +16,11 @@ const thirtyDays = () => { const d = new Date(Date.now() + 30 * 86400000); retur
 
 interface Form { title: string; job_family: string; experience_level: string; employment_type: string; location: string;
   headcount: string; deadline_date: string; duties: string; requirements: string; preferred: string; coding_enabled: boolean;
-  coding_time_limit_min: string }
+  coding_time_limit_min: string; coding_difficulty: Difficulty }
 const EMPTY: Form = { title: '', job_family: 'DEV', experience_level: '신입', employment_type: '정규직', location: '', headcount: '1',
-  deadline_date: thirtyDays(), duties: '', requirements: '', preferred: '', coding_enabled: false, coding_time_limit_min: '60' };
+  deadline_date: thirtyDays(), duties: '', requirements: '', preferred: '', coding_enabled: false, coding_time_limit_min: '60', coding_difficulty: 'NORMAL' };
+
+type Difficulty = 'EASY' | 'NORMAL' | 'HARD';
 
 /** SC-R04 기업 관리 · 공고 작성·수정. 임시 저장은 비어 있어도 되고, 게시할 때 서버가 빠진 항목을 알려 줍니다. */
 export default function PostingForm() {
@@ -40,7 +42,7 @@ export default function PostingForm() {
     setV({ title: p.title ?? '', job_family: p.job_family ?? 'DEV', experience_level: p.experience_level ?? '', employment_type: p.employment_type ?? '',
       location: p.location ?? '', headcount: p.headcount ? String(p.headcount) : '', deadline_date: p.deadline_date ?? '',
       duties: p.duties ?? '', requirements: p.requirements ?? '', preferred: p.preferred ?? '', coding_enabled: p.coding_enabled,
-      coding_time_limit_min: p.coding_time_limit_min ? String(p.coding_time_limit_min) : '60' });
+      coding_time_limit_min: p.coding_time_limit_min ? String(p.coding_time_limit_min) : '60', coding_difficulty: p.coding_difficulty ?? 'NORMAL' });
   }, [existing.data]);
 
   const body = (): PostingIn => ({
@@ -49,6 +51,7 @@ export default function PostingForm() {
     duties: v.duties.trim() || '(주요 업무를 입력해 주십시오)', requirements: v.requirements.trim() || '(자격 요건을 입력해 주십시오)',
     preferred: v.preferred || null, coding_enabled: v.coding_enabled,
     coding_time_limit_min: v.coding_enabled ? Number(v.coding_time_limit_min) || null : null,
+    coding_difficulty: v.coding_difficulty,
     ...(pid ? { row_version: rowVersion } : {}),
   });
   const save = async () => {
@@ -78,10 +81,20 @@ export default function PostingForm() {
     onSuccess: () => { toast("템플릿으로 저장했습니다. '템플릿 불러오기'에서 쓸 수 있습니다"); setNaming(null); void qc.invalidateQueries({ queryKey: ['recruiter', 'posting-templates'] }); },
     onError: (e) => toast(describeError(e).message),
   });
+  // Fills only the empty boxes: what the recruiter has typed is never replaced by a draft.
+  const fromDocuments = useMutation({
+    mutationFn: () => draftPostingFromDocuments({ title: v.title.trim(), job_family: v.job_family, experience_level: v.experience_level || null }),
+    onSuccess: (d) => {
+      setV((s) => ({ ...s, duties: s.duties.trim() ? s.duties : d.duties, requirements: s.requirements.trim() ? s.requirements : d.requirements,
+        preferred: s.preferred.trim() ? s.preferred : d.preferred }));
+      toast(`회사 자료(${d.sources.join(', ')})로 비어 있는 칸을 채웠습니다. 게시 전에 내용을 확인해 주십시오`);
+    },
+    onError: (e) => toast(describeError(e).message),
+  });
   const jobLabel = JOBS.find(([k]) => k === v.job_family)?.[1] ?? '';
   const onSaveTemplate = () => setNaming(`${jobLabel} · ${v.title.trim() || '제목 없는 공고'}`);
   const set = (k: keyof Form) => (e: { target: { value: string } }) => setV((s) => ({ ...s, [k]: e.target.value }));
-  const busy = draft.isPending || publish.isPending;
+  const busy = draft.isPending || publish.isPending || fromDocuments.isPending;
   const title = !pid ? '새 공고 등록' : existing.data?.status === 'DRAFT' ? '공고 이어서 작성' : '공고 수정';
 
   return (
@@ -113,9 +126,15 @@ export default function PostingForm() {
             {v.coding_enabled && (
               <div className="row2">
                 <Field label="코딩테스트 제한 시간(분)" id="pf-limit" type="number" min={10} max={180} value={v.coding_time_limit_min} onChange={set('coding_time_limit_min')} />
-                <p className="hint" style={{ margin: 'auto 0 0' }}>문제는 서버가 하~중 난이도에서 정해 줍니다. 면접 질문이 모두 끝나면 코딩테스트가 이어서 시작됩니다.</p>
+                <div className="field"><label htmlFor="pf-difficulty">코딩 난이도</label>
+                  <select id="pf-difficulty" value={v.coding_difficulty} onChange={(e) => setV((s) => ({ ...s, coding_difficulty: e.target.value as Difficulty }))}>
+                    <option value="EASY">쉽게</option><option value="NORMAL">보통 (직무·경력 기준)</option><option value="HARD">어렵게</option>
+                  </select></div>
+                <p className="hint" style={{ margin: 'auto 0 0' }}>문제는 직무·경력·난이도에 맞는 Lv.0~5에서 지원자마다 서버가 정해 줍니다. 제한 시간이 짧으면 그 시간에 풀 수 있는 레벨로 낮춥니다. 면접 질문이 모두 끝나면 코딩테스트가 이어서 시작됩니다.</p>
               </div>)}
             <div className="btnrow">
+              <button className="btn" type="button" disabled={busy || v.title.trim().length < 2} aria-busy={fromDocuments.isPending || undefined}
+                title="공고 제목을 먼저 입력해 주십시오" onClick={() => fromDocuments.mutate()}>{fromDocuments.isPending ? '초안 작성 중…' : '회사 자료로 초안 작성'}</button>
               <button className="btn" type="button" disabled={busy} onClick={() => setPicking(true)}>템플릿 불러오기</button>
               <button className="btn" type="button" disabled={busy || saveTemplate.isPending} onClick={onSaveTemplate}>템플릿으로 저장</button>
               <button className="btn" type="button" disabled={busy} onClick={() => draft.mutate()}>임시 저장</button>

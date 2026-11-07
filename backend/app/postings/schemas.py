@@ -29,6 +29,7 @@ class PostingIn(BaseModel):
     coding_enabled: bool = False
     coding_problem_id: UUID | None = None
     coding_time_limit_min: int | None = Field(None, ge=10, le=180)
+    coding_difficulty: str | None = Field(None, pattern="^(EASY|NORMAL|HARD)$")
     row_version: int | None = None  # required on update (optimistic concurrency)
 
     @field_validator("job_family")
@@ -37,6 +38,21 @@ class PostingIn(BaseModel):
         if v is not None and v not in JOB_FAMILIES:
             raise ValueError("unknown job_family")
         return v
+
+
+class PostingDraftIn(BaseModel):
+    """What the recruiter has typed so far; the draft is written from the company's documents."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(min_length=2, max_length=200)
+    job_family: str | None = None
+    experience_level: str | None = Field(None, max_length=40)
+
+
+class PostingDraftOut(BaseModel):
+    duties: str
+    requirements: str
+    preferred: str
+    sources: list[str]  # titles of the documents it was written from
 
 
 class Weights(BaseModel):
@@ -68,7 +84,7 @@ class PlanSlot(BaseModel):
 
 
 class InterviewSettings(BaseModel):
-    """SC-R07 면접 설정. Without a plan the default five questions are used."""
+    """SC-R07 면접 설정. Without a plan the default ten questions are used (core/constants.py DEFAULT_PLAN)."""
     model_config = ConfigDict(extra="forbid")
     question_plan: list[PlanSlot] | None = Field(None, min_length=1, max_length=10)
     think_sec: Literal[5, 10, 20, 30] = 10
@@ -148,6 +164,8 @@ class PostingDetailOut(PostingSummaryOut):
     preferred: str | None
     duties: str | None
     coding_problem_id: UUID | None
+    coding_selection: str = "AUTO"
+    coding_difficulty: str = "NORMAL"
     coding_language: str | None
     coding_time_limit_min: int | None
     settings_locked: bool

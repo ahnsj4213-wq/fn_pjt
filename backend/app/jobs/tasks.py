@@ -25,6 +25,11 @@ async def question_examples_sync() -> None:
             "FROM question_examples"), {"m": get_settings().embed_model})).one()
         if pending or loaded < len(rag.load_file()):
             await enqueue(db, "index_question_examples", {}, dedupe_key="index_question_examples")
+        waiting = await db.scalar(text(
+            "SELECT count(*) FROM company_knowledge WHERE embedding IS NULL OR embedding_model IS DISTINCT FROM :m"),
+            {"m": get_settings().embed_model})
+        if waiting:
+            await enqueue(db, "index_company_knowledge", {}, dedupe_key="index_company_knowledge")
 
 
 @periodic("job_reaper")

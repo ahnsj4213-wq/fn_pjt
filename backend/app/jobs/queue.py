@@ -18,6 +18,7 @@ JOB_KINDS: dict[str, tuple[str, int, int]] = {
     "purge_files": ("NONE", 90, 10),
     "send_email": ("NONE", 30, 5),            # app/notify/mail.py
     "index_question_examples": ("CPU", 80, 5),  # RAG corpus: load + embed (app/questions/rag.py)
+    "index_company_knowledge": ("CPU", 60, 5),  # company documents waiting for an embedding (app/questions/knowledge.py)
 }
 
 

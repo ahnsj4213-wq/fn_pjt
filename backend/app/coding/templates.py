@@ -7,23 +7,13 @@ whose hidden inputs are generated here from a seed and whose expected outputs co
 import heapq
 import random
 from collections import Counter, deque
-from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import replace
+
+from app.coding.example_notes import NOTES
+from app.coding.levels import LEVELS
+from app.coding.template_base import Template, lines_starter, starter
 
 MOD = 1_000_000_007
-
-
-@dataclass(frozen=True)
-class Template:
-    key: str
-    title: str
-    difficulty: str  # 하 | 중
-    statement: str
-    public: tuple[str, ...]  # PUBLIC example inputs (fixed, shown to the candidate)
-    solve: Callable[[str], str]
-    hidden: Callable[[random.Random], list[str]]  # HIDDEN inputs: fixed edge cases first, then seeded random ones
-    time_limit_ms: int = 2000
-    memory_mb: int = 256
 
 
 def _ln(*xs) -> str:
@@ -55,7 +45,7 @@ def _prefix_in(a: list[int], qs: list[tuple[int, int]]) -> str:
 
 def _prefix_hidden(rnd: random.Random) -> list[str]:
     out = [_prefix_in([7], [(1, 1)]), _prefix_in([-5, 5, -5, 5], [(1, 4), (2, 3)])]
-    for n, q in ((6, 3), (50, 20), (1000, 200), (100000, 1000)):
+    for n, q in ((6, 3), (50, 20), (1000, 200), (30000, 1000)):
         a = [rnd.randint(-1000, 1000) for _ in range(n)]
         qs = []
         for _ in range(q):
@@ -326,7 +316,7 @@ def _rooms_hidden(rnd: random.Random) -> list[str]:
 TEMPLATES: dict[str, Template] = {t.key: t for t in (
     Template("prefix_sum", "구간 합 구하기", "하",
              "배열과 여러 개의 구간이 주어집니다. 각 구간 `[l, r]` (1부터 시작, 양 끝 포함)의 합을 구합니다.\n\n"
-             "### 입력\n첫째 줄에 `n` `q` (1 ≤ n, q ≤ 100,000), 둘째 줄에 `n`개의 정수 (절댓값 1,000 이하), "
+             "### 입력\n첫째 줄에 `n` `q` (1 ≤ n ≤ 30,000, 1 ≤ q ≤ 1,000), 둘째 줄에 `n`개의 정수 (절댓값 1,000 이하), "
              "이후 `q`줄에 `l` `r` (1 ≤ l ≤ r ≤ n)\n\n### 출력\n각 구간의 합을 한 줄에 하나씩\n",
              (_prefix_in([1, 2, 3, 4, 5], [(1, 3), (2, 4), (5, 5)]), _prefix_in([-1, 0, 1], [(1, 3)])), _prefix, _prefix_hidden),
     Template("palindrome", "회문 판별", "하",
@@ -378,4 +368,36 @@ TEMPLATES: dict[str, Template] = {t.key: t for t in (
              "### 입력\n첫째 줄에 회의 수 `n` (1 ≤ n ≤ 100,000), 이후 `n`줄에 `시작 끝` (0 ≤ 시작 < 끝 ≤ 1,000,000)\n\n### 출력\n회의실의 최소 개수\n",
              (_rooms_in([(0, 30), (5, 10), (15, 20)]), _rooms_in([(1, 2)])), _rooms, _rooms_hidden, 3000),
 )}
+_ARR = ("n = int(data[0])", "a = list(map(int, data[1:1 + n]))")
+_GRID = ("h, w = map(int, rows[0].split())", "grid = rows[1:1 + h]")
+# The first problems, placed on the Lv.0~5 scale (ADR-0021): level, tags, starter code.
+_FIRST: dict[str, tuple] = {
+    "prefix_sum": (2, ("누적 합", "배열"), starter("a, queries", ("n, q = int(data[0]), int(data[1])", "a = list(map(int, data[2:2 + n]))",
+                                                                 "queries = [(int(data[2 + n + 2 * i]), int(data[3 + n + 2 * i])) for i in range(q)]"),
+                                                default="[]", show="print(*solution({args}), sep=chr(10))")),
+    "palindrome": (1, ("문자열", "투 포인터"), lines_starter("s", ("s = rows[0]",), default='"NO"')),
+    "top_product": (1, ("정렬", "배열"), starter("n, a", _ARR)),
+    "char_freq": (1, ("해시", "정렬", "문자열"), lines_starter("s", ("s = rows[0]",), default="[]", show="print(*solution({args}), sep=chr(10))")),
+    "rotate_right": (1, ("배열", "구현"), starter("n, k, a", ("n, k = int(data[0]), int(data[1])", "a = list(map(int, data[2:2 + n]))"),
+                                                default="[]", show="print(*solution({args}))")),
+    "brackets": (2, ("스택", "문자열"), lines_starter("strings", ("t = int(rows[0])", "strings = [rows[1 + i] for i in range(t)]"),
+                                                     default="[]", show="print(*solution({args}), sep=chr(10))")),
+    "pair_count": (2, ("해시", "배열"), starter("n, target, a", ("n, target = int(data[0]), int(data[1])", "a = list(map(int, data[2:2 + n]))"))),
+    "islands": (3, ("BFS", "DFS", "격자"), lines_starter("h, w, grid", _GRID)),
+    "maze": (3, ("BFS", "격자", "최단 경로"), lines_starter("h, w, grid", _GRID)),
+    "stairs": (3, ("DP",), starter("n", ("n = int(data[0])",))),
+    "meeting_rooms": (3, ("정렬", "우선순위 큐", "그리디"), starter("n, meetings", ("n = int(data[0])",
+                                                                       "meetings = [(int(data[1 + 2 * i]), int(data[2 + 2 * i])) for i in range(n)]"))),
+}
+
+
+def _placed(t: Template) -> Template:
+    level, tags, code = _FIRST[t.key]
+    return replace(t, notes=NOTES.get(t.key, ()), level=level, tags=tags, starter=code, difficulty=LEVELS[level].difficulty, time_limit_ms=LEVELS[level].run_ms)
+
+
+from app.coding.bank_advanced import ADVANCED  # noqa: E402 - the bank builds on this module's Template
+from app.coding.bank_basic import BASIC  # noqa: E402
+
+TEMPLATES = {**{k: _placed(t) for k, t in TEMPLATES.items()}, **{t.key: t for t in (*BASIC, *ADVANCED)}}
 BY_TITLE = {t.title: t for t in TEMPLATES.values()}

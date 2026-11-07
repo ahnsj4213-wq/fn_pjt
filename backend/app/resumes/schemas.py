@@ -45,7 +45,7 @@ class ResumeContent(_Item):
     # SC-A10 form fields. Kept on the resume only: not part of the AI contract (to_ai_resume drops them).
     desired_job: Literal["DEV", "DATA_AI", "DESIGN", "MARKETING", "MGMT"] | None = None
     experience_level: Literal["NEW", "Y1_3", "Y3_5", "Y5_PLUS"] | None = None
-    intro: str | None = Field(None, max_length=3000)
+    intro: str | None = Field(None, max_length=10000)
 
     @model_validator(mode="after")
     def _minimum(self) -> "ResumeContent":
@@ -59,6 +59,7 @@ class ResumeContent(_Item):
 _AI_TO_FORM = {"experience": "career", "certifications": "certificates"}
 _FORM_ONLY = {"name", "desired_job", "experience_level", "intro"}
 _FORM_TO_AI = {v: k for k, v in _AI_TO_FORM.items()}
+AI_DESCRIPTION_MAX = 800
 
 
 def from_ai_resume(fields: dict) -> dict:
@@ -72,8 +73,14 @@ def from_ai_resume(fields: dict) -> dict:
 
 
 def to_ai_resume(content: dict) -> dict:
-    """Snapshot -> T3 input (experience, certifications). The name is not passed (questions never need it)."""
-    return {_FORM_TO_AI.get(k, k): v for k, v in (content or {}).items() if k not in _FORM_ONLY}
+    """Snapshot -> T3 input (experience, certifications). The name is not passed (questions never need it).
+    A description is cut to AI_DESCRIPTION_MAX: all of them together must leave room in the model's context."""
+    out = {_FORM_TO_AI.get(k, k): v for k, v in (content or {}).items() if k not in _FORM_ONLY}
+    for section in ("experience", "projects"):
+        if out.get(section):
+            out[section] = [{**row, "description": row["description"][:AI_DESCRIPTION_MAX]} if row.get("description") else row
+                            for row in out[section]]
+    return out
 
 
 def flatten(c: ResumeContent) -> str:

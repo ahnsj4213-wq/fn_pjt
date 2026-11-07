@@ -405,7 +405,23 @@ FROM next WHERE j.id=next.id RETURNING j.*;
 | 0022 | 코딩 문제를 **틀(템플릿)과 응시 건별 변형본**으로 나눈다. `template_key`, `variant_of`(틀), `variant_for`(응시 건, 유일), `variant_seed`. 틀에는 설명과 공개 예시만 두고, 비공개 케이스는 응시 건마다 `app/coding/templates.py`의 생성기와 정답 풀이로 만들어 변형본에 넣는다(코드가 계산, LLM 아님). 이전 채점 결과가 가리키는 틀의 비공개 케이스 3개만 남겼다 |
 | 0023 | `answer_evaluations.detail`(논리성·전문성 행의 세부 점수, STAR), `recruiter_reports.detail`(세부 항목 평균, STAR 비율, 코드가 잰 값, 점수에 섞은 방식, 기업 추가 항목 결과). 옛 행은 NULL이고 화면은 있을 때만 보여 준다 |
 | 0024 | `posting_eval_settings.custom_items`(기업 추가 평가 항목 최대 5개: 이름, 한 줄 설명, 상·중·하 기준, 가중치. 설정 버전 행마다 보관)와 `w_custom`(그 가중치 합). 가중치 합 100 검사는 `w_custom`을 더해서 한다 |
+| 0029 | ADR-0021: `coding_problems.level, tags, families, starter_code, source`, `job_postings.coding_selection`(AUTO/FIXED), `coding_difficulty`(EASY/NORMAL/HARD) |
 
 코딩 문제 흐름: 공고는 틀 하나를 가리킨다(담당자는 고르지 않고, 코딩을 켜면 서버가 하~중 틀 중 하나를 무작위로 정해 공고에 고정). 질문 구성 작업(`compose_questions`)이 변형본을 만들며 설명을 AI(T9 `problem_rewrite`)로 바꿔 쓴다. 바뀐 설명이 원본의 제목·숫자·`변수` 표기를 모두 담지 않으면 원본을 쓴다. 질문 구성 때 만들지 못해도 면접이 끝날 때 원본 설명으로 만든다. 채점·평가는 `coding_attempts.problem_id`가 가리키는 변형본을 쓴다.
 
 화이트보드는 기능에서 뺐다(2026-11-02 결정). 이미 저장된 `whiteboard_*` 열과 파일은 지우지 않고 읽는 코드만 없앴다.
+
+## 14. 회사 지식베이스 (마이그레이션 0028, ADR-0020)
+
+`company_knowledge`: 회사 프로젝트·기술 문서의 검색 조각 한 줄.
+
+| 열 | 내용 |
+|---|---|
+| `company_id` | 필수. 모든 검색의 범위 |
+| `posting_id` | NULL이면 회사 전체, 값이 있으면 그 공고만. `(posting_id, company_id)` 복합 외래키로 다른 회사의 공고를 거부 |
+| `doc_id`, `chunk_no` | 문서와 조각 순서. 유일 |
+| `doc_type` | `PROJECT`, `TECH`, `COMPANY`(0030: 회사 소개·서비스와 고객) |
+| `origin` | `RECRUITER`, `SYNTHETIC`(가상 기업) |
+| `embedding`, `embedding_model` | `index_company_knowledge` 작업이 채움 |
+
+색인은 `(company_id, posting_id)` B-tree만 둔다. 회사 범위 안에서 정확 검색한다. 이를 위해 `job_postings`에 `UNIQUE (id, company_id)`를 추가했다. 질문의 근거는 `interview_questions.grounding.sources`에 남고, 문서를 지워도 이미 만든 질문은 인용 문장을 유지한다.

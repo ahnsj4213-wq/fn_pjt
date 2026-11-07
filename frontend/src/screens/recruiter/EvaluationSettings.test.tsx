@@ -46,7 +46,8 @@ describe('면접 질문 관리 (SC-R07)', () => {
     const body = saved as unknown as { question_areas: string[]; interview: { question_plan: { area: string; text: string | null }[] } };
     expect(body.question_areas).not.toContain('COLLABORATION');
     expect(body.interview.question_plan[0]).toEqual({ area: 'PERSONALITY', text: '자기소개를 해 주십시오' });
-    expect(body.interview.question_plan[4].area).toBe('PERSONALITY');
+    expect(body.interview.question_plan[9].area).toBe('PERSONALITY');  // the tenth question was 협업: moved to the first remaining area
+    expect(body.interview.question_plan).toHaveLength(10);
   });
 
   it('keeps at least one area', async () => {

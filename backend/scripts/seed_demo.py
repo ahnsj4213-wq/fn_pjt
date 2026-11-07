@@ -31,7 +31,6 @@ async def seed_demo(app, *, title: str, recruiter_email: str = RECRUITER_EMAIL) 
             return False
         cid = await create_company(db, name="이투이테크", intro="사내 결제 플랫폼을 만드는 회사입니다.")
         await create_recruiter(db, company_id=cid, email=recruiter_email, name="담당자", password=PASSWORD)
-        pid = (await db.execute(text("SELECT id FROM coding_problems ORDER BY id LIMIT 1"))).scalar_one()
     origin = get_settings().trusted_origins[0]  # the API checks Origin like it does for the browser
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://seed",
                                  headers={"Origin": origin}) as rc:
@@ -41,7 +40,7 @@ async def seed_demo(app, *, title: str, recruiter_email: str = RECRUITER_EMAIL) 
         body = {"title": title, "job_family": "DEV", "requirements": "Python 웹 서비스 개발 경험",
                 "preferred": "대용량 트래픽 경험", "duties": "주문·결제 API 개발", "headcount": 1,
                 "deadline_date": (date.today() + timedelta(days=14)).isoformat(), "coding_enabled": True,
-                "coding_problem_id": str(pid), "coding_time_limit_min": 30}
+                "experience_level": "신입", "coding_time_limit_min": 30}
         r = await rc.post("/api/recruiter/postings", json=body)
         r.raise_for_status()
         r = await rc.post(f"/api/recruiter/postings/{r.json()['id']}/publish")

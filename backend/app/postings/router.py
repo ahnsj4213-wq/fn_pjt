@@ -1,25 +1,31 @@
 """Posting endpoints: recruiter management (company-scoped) and the public view (anyone, signed in or not: screen spec SC-A02/A03)."""
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.client import AIUnavailable, get_ai_client
 from app.audit import audit
 from app.auth.deps import RecruiterCtx, get_optional_principal, require_recruiter
 from app.auth.scope import get_for_company
 from app.auth.sessions import Principal
+from app.core.config import get_settings as app_settings
 from app.core.db import get_db
-from app.core.errors import not_found
+from app.core.errors import AppError, conflict, not_found
 from app.core.timeutil import utcnow
 from app.models import Application, CodingProblem, CodingTestcase, JobPosting
 from app.postings import service
+from app.questions import knowledge
 from app.postings.schemas import (
-    JOB_FAMILIES, EvalSettingsIn, EvalSettingsOut, InterviewSettings, PostingDetailOut, PostingIn, PostingPublicOut, PostingSummaryOut,
+    JOB_FAMILIES, EvalSettingsIn, EvalSettingsOut, InterviewSettings, PostingDetailOut, PostingDraftIn, PostingDraftOut, PostingIn, PostingPublicOut,
+    PostingSummaryOut,
 )
 
 recruiter_router = APIRouter(prefix="/api/recruiter", tags=["recruiter"])
 public_router = APIRouter(prefix="/api", tags=["common"])
+DRAFT_DOCUMENTS = 6
+DRAFT_MIN_SIMILARITY = 0.45  # a bare job title scores lower than a posting does (measured in ADR-0020)
 
 
 async def _posting(db: AsyncSession, ctx: RecruiterCtx, posting_id: UUID, lock: bool = False) -> JobPosting:
@@ -47,6 +53,30 @@ async def create_posting(body: PostingIn, ctx: RecruiterCtx = Depends(require_re
     out = await service.create_posting(db, ctx.company_id, ctx.user_id, body)
     await db.commit()
     return out
+
+
+@recruiter_router.post("/postings/ai-draft")
+async def draft_from_documents(body: PostingDraftIn, request: Request, ctx: RecruiterCtx = Depends(require_recruiter),
+                               db: AsyncSession = Depends(get_db)) -> PostingDraftOut:
+    """Text for the form from this company's documents (ADR-0020). Saves no posting; the recruiter edits and saves it."""
+    ai = get_ai_client()
+    family = JOB_FAMILIES.get(body.job_family or "", "")
+    try:
+        chunks = await knowledge.search_company(db, ai, app_settings().embed_model, company_id=ctx.company_id,
+                                                query=f"{body.title} {family}".strip(), k=DRAFT_DOCUMENTS, floor=DRAFT_MIN_SIMILARITY)
+        if not chunks:
+            raise conflict("NO_COMPANY_DOCUMENTS", "이 직무와 관련된 회사 자료가 없어 초안을 만들 수 없습니다. 직접 작성해 주십시오.")
+        r = await ai.llm("posting_draft", {"title": body.title, "job_family": family, "experience_level": body.experience_level,
+                                           "knowledge": [c.as_input() for c in chunks]}, lane="INTERACTIVE")
+    except AIUnavailable as e:
+        raise AppError(503, "AI_UNAVAILABLE", "AI 서버에 연결할 수 없습니다. 잠시 후 다시 시도하거나 직접 작성해 주십시오.") from e
+    if r.status != "OK" or not (r.output["duties"] and r.output["requirements"]):
+        raise AppError(422, "DRAFT_FAILED", "회사 자료로 초안을 만들지 못했습니다. 다시 시도하거나 직접 작성해 주십시오.")
+    await audit(db, action="POSTING_AI_DRAFT", target_type="company", target_id=ctx.company_id, actor_id=ctx.user_id, actor_role="RECRUITER",
+                company_id=ctx.company_id, request_id=getattr(request.state, "request_id", None))
+    await db.commit()
+    return PostingDraftOut(**{f: "\n".join(r.output[f]) for f in ("duties", "requirements", "preferred")},
+                           sources=list(dict.fromkeys(c.title for c in chunks)))
 
 
 @recruiter_router.get("/postings/{posting_id}")
@@ -150,7 +180,7 @@ async def list_coding_problems(ctx: RecruiterCtx = Depends(require_recruiter),
     for pr in problems:
         examples = (await db.execute(select(CodingTestcase).where(
             CodingTestcase.problem_id == pr.id, CodingTestcase.visibility == "PUBLIC").order_by(CodingTestcase.ordinal))).scalars()
-        out.append({"id": pr.id, "title": pr.title, "statement_md": pr.statement_md, "language": pr.language,
+        out.append({"id": pr.id, "title": pr.title, "statement_md": pr.statement_md, "language": pr.language, "level": pr.level, "tags": pr.tags, "source": pr.source,
                     "public_examples": [{"input": e.input, "output": e.expected_output} for e in examples]})
     return out
 

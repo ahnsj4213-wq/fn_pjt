@@ -1,0 +1,58 @@
+/* The coding test workspace. Colors, type and shapes come from the app's theme tokens (ADR-0018), in light and dark. */
+.shell { width: min(1400px, calc(100vw - 32px)); position: relative; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 12px; }
+
+/* The page heading stays for screen readers and focus; the problem bar below is the visible title. */
+:global(section):has(> .shell) > :global(h1) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.level { flex: none; padding: 2px 10px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 13px; font-weight: 700; }
+.title { margin: 0; font-size: 18px; font-weight: 700; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.chip { flex: none; padding: 2px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--ink); font-size: 12px; font-weight: 600; }
+.limits { color: var(--muted); font-size: 13px; }
+.spacer { flex: 1 1 auto; }
+.save { color: var(--muted); font-size: 13px; }
+.saveError { color: var(--bad-ink); font-size: 13px; }
+.timer { flex: none; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 16px; color: var(--ink); }
+.timerWarn { color: var(--bad-ink); }
+.track { flex: 1 0 100%; height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.fill { height: 100%; background: var(--accent); transition: width 1s linear; }
+.fillWarn { background: var(--bad-ink); }
+
+.steps { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
+.step { display: inline-flex; align-items: center; gap: 6px; }
+.step + .step::before { content: '›'; margin-right: 2px; }
+.stepNow { color: var(--accent); font-weight: 700; }
+.stepDone { color: var(--ink); }
+
+.split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 12px; align-items: stretch; }
+.problem { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; overflow-y: auto; max-height: calc(100vh - 150px); min-height: 480px; }
+.panelTitle { margin: 0 0 8px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.work { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.editor { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.editor :global(.cm-editor) { height: 400px; }
+.editor :global(.cm-scroller) { overflow: auto; }
+
+.console { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; min-height: 190px; }
+.tabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); }
+.tab { border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; padding: 6px 12px; cursor: pointer; border-bottom: 2px solid transparent; }
+.tab:hover { color: var(--ink); }
+.tabOn { color: var(--accent); border-bottom-color: var(--accent); }
+.tabBody { padding: 12px 14px; overflow-y: auto; max-height: 280px; display: flex; flex-direction: column; gap: 12px; font-size: 14px; }
+.hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.ok { margin: 0; color: var(--accent); font-weight: 600; }
+.fail { margin: 0; color: var(--bad-ink); font-weight: 600; }
+.case { display: flex; flex-direction: column; gap: 6px; }
+.caseHead { font-weight: 700; color: var(--ink); }
+.ioRow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.ioLabel { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+.pre { margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font-family: var(--font-mono); font-size: 13px; line-height: 1.5; white-space: pre; overflow: auto; max-height: 140px; }
+.err { color: var(--bad-ink); }
+
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.actionsHint { flex: 1 1 240px; }
+
+@media (max-width: 900px) {
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .problem { max-height: none; min-height: 0; }
+  .editor :global(.cm-editor) { height: 320px; }
+}

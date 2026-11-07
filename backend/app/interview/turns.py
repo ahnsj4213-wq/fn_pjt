@@ -13,7 +13,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.applications.lifecycle import register_evaluation
+from app.applications.lifecycle import register_evaluation, submit_live_code
 from app.core.constants import FOLLOWUP_ANSWER_LIMIT_SEC, FOLLOWUP_DECISION_TIMEOUT_SEC, FOLLOWUP_THINK_SEC
 from app.core.db import session_scope
 from app.core.logging import log_event
@@ -21,7 +21,8 @@ from app.core.timeutil import utcnow
 from app.interview import slots
 from app.jobs.queue import enqueue
 from app.notify import inbox
-from app.coding.variants import ensure_variant
+from app.coding.selection import base_problem_for, test_minutes
+from app.coding.variants import ensure_variant, get_variant
 from app.models import (
     Application, CodingAttempt, CodingProblem, FollowupDecision, Interview, InterviewAnswer, InterviewQuestion, InterviewTurn, JobPosting,
     QuestionSet, User,
@@ -29,6 +30,9 @@ from app.models import (
 
 log = logging.getLogger("app.interview")
 MAX_PRESENTATIONS = 3
+FOLLOWUP_PREVIOUS_ANSWERS = 2
+FOLLOWUP_PREVIOUS_CHARS = 200
+FOLLOWUP_KNOWLEDGE_COUNT = 2
 
 
 class TextModeRequired(Exception):
@@ -75,20 +79,28 @@ async def present_next(db: AsyncSession, app_id: UUID, input_mode: str = "VOICE"
     if q is None:
         return None
     n = await db.scalar(select(func.count()).select_from(InterviewTurn).where(InterviewTurn.question_id == q.id))
-    if n >= MAX_PRESENTATIONS:
+    if n >= MAX_PRESENTATIONS and input_mode != "TEXT":
         raise TextModeRequired(str(q.id))
     await db.execute(update(InterviewTurn).where(
         InterviewTurn.application_id == app_id, InterviewTurn.state.in_(["PRESENTING", "ANSWERING", "FINALIZING"]))
         .values(state="ABANDONED", end_reason="DISCONNECT", closed_at=utcnow()))
-    turn = InterviewTurn(application_id=app_id, question_id=q.id, presentation_no=n + 1, input_mode=input_mode,
-                         state="PRESENTING")
-    db.add(turn)
+    if n >= MAX_PRESENTATIONS:
+        # The cap limits voice attempts and is what sends a question to text mode, so text mode must still be able to ask it:
+        # the last attempt's row is used again (at most three rows per question, CHECK presentation_no).
+        turn = (await db.execute(select(InterviewTurn).where(InterviewTurn.question_id == q.id)
+                                 .order_by(InterviewTurn.presentation_no.desc()).limit(1))).scalar_one()
+        turn.state, turn.input_mode, turn.end_reason, turn.closed_at = "PRESENTING", input_mode, None, None
+        turn.opened_at, turn.deadline_at = None, None
+    else:
+        turn = InterviewTurn(application_id=app_id, question_id=q.id, presentation_no=n + 1, input_mode=input_mode,
+                             state="PRESENTING")
+        db.add(turn)
     await db.flush()
     await db.execute(update(Interview).where(Interview.application_id == app_id).values(
-        current_question_id=q.id, current_phase="PRESENTING", presentation_count=n + 1,
+        current_question_id=q.id, current_phase="PRESENTING", presentation_count=turn.presentation_no,
         answer_opened_at=None, answer_deadline_at=None))
     qset = await db.get(QuestionSet, q.question_set_id)
-    view = TurnView(turn.id, q.id, q.seq, q.role == "FOLLOWUP", q.text, q.answer_limit_sec, n + 1, input_mode,
+    view = TurnView(turn.id, q.id, q.seq, q.role == "FOLLOWUP", q.text, q.answer_limit_sec, turn.presentation_no, input_mode,
                     q.slot_type, q.answer_mode, q.think_sec if input_mode == "VOICE" else 0,
                     qset.main_count)
     if input_mode == "TEXT":
@@ -205,16 +217,34 @@ async def finalize(db: AsyncSession, turn_id: UUID, *, end_reason: str, transcri
     return await db.get(InterviewAnswer, answer_id)
 
 
+async def _followup_context(db: AsyncSession, app: Application, ans: InterviewAnswer) -> dict:
+    """What else the interviewer knows at this point (ADR-0020): the last answers, the follow-ups already asked, and the
+    company documents closest to this answer. Small on purpose: this call runs while the candidate waits (ADR-0019)."""
+    from app.ai.client import get_ai_client
+    from app.core.config import get_settings
+    from app.questions import knowledge
+
+    previous = (await db.execute(select(InterviewAnswer.id, InterviewAnswer.eval_text).where(
+        InterviewAnswer.application_id == app.id, InterviewAnswer.id != ans.id, InterviewAnswer.eval_text.is_not(None))
+        .order_by(InterviewAnswer.confirmed_at.desc()).limit(FOLLOWUP_PREVIOUS_ANSWERS))).all()
+    asked = (await db.execute(select(InterviewQuestion.text).where(
+        InterviewQuestion.application_id == app.id, InterviewQuestion.role == "FOLLOWUP"))).scalars().all()
+    chunks = await knowledge.search(db, get_ai_client(), get_settings().embed_model, company_id=app.company_id,
+                                    posting_id=app.posting_id, query=ans.eval_text or "", k=FOLLOWUP_KNOWLEDGE_COUNT, kind="FOLLOWUP")
+    return {"previous_answers": [{"id": str(i), "text": t[:FOLLOWUP_PREVIOUS_CHARS]} for i, t in previous], "asked": list(asked),
+            "company_context": [c.as_input() for c in chunks]}
+
+
 async def decide_followup(app_id: UUID, answer_id: UUID) -> InterviewQuestion | None:
     """6.2: at most 1 per main and the set's cap in total (posting setting, 0~4), grounded in the answer/resume,
-    decided within 5 s or skipped."""
+    decided within the time limit (a guard against a stuck model, ADR-0019) or skipped."""
     from app.ai.textrules import is_short_or_no_content, looks_like_question, shares_content
 
     async with session_scope() as db:
         ans = await db.get(InterviewAnswer, answer_id)
         q = await db.get(InterviewQuestion, ans.question_id)
         iv = await db.get(Interview, app_id)
-        if q.role != "MAIN":
+        if q.role != "MAIN" or q.answer_mode == "CODE":  # a coding answer is the code and its comments: nothing to ask aloud
             return None
         cap = (await db.get(QuestionSet, q.question_set_id)).followup_max
         has_fu = await db.scalar(select(func.count()).select_from(InterviewQuestion).where(InterviewQuestion.parent_id == q.id))
@@ -227,6 +257,17 @@ async def decide_followup(app_id: UUID, answer_id: UUID) -> InterviewQuestion | 
         evidence = [g["text"] for g in (q.grounding or {}).get("evidence", []) if g.get("text")]
         payload = {"question": q.text, "question_type": q.slot_type, "answer": ans.eval_text or "",
                    "resume_evidence": evidence, "followups_left": cap - iv.followups_used}
+        if cause is None:  # the follow-up goes where the posting and the resume meet
+            from app.ai.tasks.questions import flatten_resume
+            from app.ai.textrules import shared_terms
+            from app.questions.compose import job_brief
+            from app.resumes.schemas import to_ai_resume
+
+            app = await db.get(Application, app_id)
+            brief = job_brief(await db.get(JobPosting, app.posting_id))
+            payload |= {"job_brief": brief, "application_id": str(app_id), "answer_id": str(answer_id),
+                        "shared_terms": shared_terms(brief, flatten_resume(to_ai_resume(app.resume_snapshot))[0]),
+                        **await _followup_context(db, app, ans)}
         deadline_ms = int((ans.confirmed_at.timestamp() + FOLLOWUP_DECISION_TIMEOUT_SEC) * 1000)
     t0 = time.monotonic()
     out = None
@@ -262,7 +303,9 @@ async def decide_followup(app_id: UUID, answer_id: UUID) -> InterviewQuestion | 
             if ok:
                 fu = InterviewQuestion(question_set_id=q.question_set_id, application_id=app_id, company_id=q.company_id,
                                        seq=q.seq, role="FOLLOWUP", parent_id=q.id, slot_type=q.slot_type, source="AI",
-                                       text=out["question"].strip(), grounding={"anchor": out.get("anchor")},
+                                       text=out["question"].strip(),
+                                       grounding={"anchor": out.get("anchor"), "sources": out.get("sources") or [],
+                                                  "retrieved": [d["id"] for d in payload.get("company_context") or []]},
                                        answer_limit_sec=FOLLOWUP_ANSWER_LIMIT_SEC, prompt_version="followup_decide",
                                        think_sec=FOLLOWUP_THINK_SEC if q.think_sec else 0)
                 db.add(fu)
@@ -289,16 +332,16 @@ async def finish_interview(db: AsyncSession, app_id: UUID) -> str:
         InterviewQuestion.application_id == app_id, InterviewQuestion.answer_mode == "CODE"))
     if posting.coding_enabled and not live_coding:  # a live-coding question replaces the separate test (SC-A06)
         app.attempt_status = "CODING"
-        base = await db.get(CodingProblem, posting.coding_problem_id)
-        variant = await ensure_variant(db, app.id, base)  # this application's own copy (hidden cases generated for it)
+        variant = await get_variant(db, app.id) or await ensure_variant(db, app.id, await base_problem_for(db, app, posting))  # own copy, hidden cases generated for it
         db.add(CodingAttempt(application_id=app.id, company_id=app.company_id, problem_id=variant.id,
-                             language="python", started_at=now,
-                             deadline_at=now + timedelta(minutes=posting.coding_time_limit_min)))
+                             language="python", started_at=now, draft_code=variant.starter_code or "",
+                             deadline_at=now + timedelta(minutes=test_minutes(variant.level, posting.coding_time_limit_min))))
         await db.execute(update(Interview).where(Interview.application_id == app_id).values(last_heartbeat_at=now))
     else:
         # One UPDATE with eval_status: the table CHECK forbids a SUBMITTED row without an evaluation status (7.2).
+        grade_job = await submit_live_code(db, app) if posting.coding_enabled else None
         app.attempt_status, app.submitted_at = "SUBMITTED", now
-        await register_evaluation(db, app)
+        await register_evaluation(db, app, depends_on=grade_job)
         await inbox.interview_finished(db, app)
     await db.flush()
     return app.attempt_status

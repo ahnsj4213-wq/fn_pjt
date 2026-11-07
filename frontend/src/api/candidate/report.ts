@@ -59,7 +59,13 @@ export interface MyReport {
   grade: string;
   grade_kind: 'good' | 'hold' | 'bad';
   criteria: { key: string; label: string; desc: string; score: number; weight: number; custom?: boolean }[];
-  coding: { score: number; weight: number | null } | null;
+  coding: {
+    score: number;
+    weight: number | null;
+    items: { key: string; label: string; score: number; weight: number; comment: string | null; quote: string | null; evidence_status: string }[];
+    time: string | null;
+    improvements: string[];
+  } | null;
   summary: string;
   strengths: ReportPoint[];
   improvements: ReportPoint[];

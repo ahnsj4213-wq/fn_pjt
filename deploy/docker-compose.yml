@@ -31,6 +31,7 @@ x-backend-env: &backend-env
   AIHIRE_LLM_RT_SLOT: ${LLM_RT_SLOT:-0}
   AIHIRE_EMBED_URL: http://ai:8083
   AIHIRE_STT_URL: http://ai:8201
+  AIHIRE_RETAKE_POSTING_IDS: ${RETAKE_POSTING_IDS:-}
   AIHIRE_TTS_URL: http://ai:8202
   AIHIRE_LLM_MODEL: ${LLM_MODEL:-qwen3.5:4b}
   AIHIRE_EMBED_MODEL: bge-m3
@@ -203,7 +204,10 @@ services:
       POSTGRES_USER: aihire
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aihire_dev_only}
     volumes: [ "pgdata:/var/lib/postgresql/data" ]
-    networks: [internal]
+    # `internal` cannot publish ports, so postgres also joins `dbadmin` (nothing else does) to be reachable from
+    # the host for DBeaver and psql. Loopback only; the password is POSTGRES_PASSWORD from .env.
+    ports: [ "127.0.0.1:${POSTGRES_HOST_PORT:-55433}:5432" ]
+    networks: [internal, dbadmin]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aihire -d aihire"]
       interval: 2s
@@ -250,6 +254,7 @@ services:
 networks:
   internal:
     internal: true
+  dbadmin: {}  # host access to postgres only
   front: {}
   egress: {}
 

@@ -64,12 +64,14 @@ export function MyResume() {
       setFileId(out.file_id);
       setFileName(file.name);
       if (out.extraction_status === 'DONE' && out.fields) {
-        // What the file says replaces the standard sections; the choices only this form has stay as typed.
+        // What the file says replaces the standard sections and the cover letter; the choices only this form has stay as typed.
         const c: ResumeContent = { ...EMPTY_RESUME, ...out.fields, name: out.fields.name || form.name,
-          desired_job: form.desired_job || null, experience_level: null, intro: form.intro || null };
+          desired_job: form.desired_job || null, experience_level: null, intro: out.fields.intro || form.intro || null };
         setBase(c);
         setForm(toFlat(c));
         toast('파일에서 읽은 내용을 양식에 채웠습니다. 확인한 뒤 저장해 주십시오');
+      } else if (out.extraction_status === 'PENDING') {
+        setError('AI 서버가 응답하지 않아 파일을 아직 읽지 못했습니다. 잠시 후 파일을 다시 올리거나 아래 양식을 직접 채워 주십시오.');
       } else {
         setError(out.extraction_status === 'NO_TEXT'
           ? '파일은 첨부했지만 글자를 충분히 읽지 못했습니다. 아래 양식을 직접 채워 주십시오.'

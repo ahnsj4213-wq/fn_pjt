@@ -39,8 +39,9 @@ describe('문의 쪽지 (SC-R15)', () => {
     expect((await screen.findByTestId('toast')).textContent).toBe('보낼 내용을 입력해 주십시오');
     fireEvent.change(screen.getByLabelText('답장'), { target: { value: '다음 주에 안내드립니다' } });
     fireEvent.click(screen.getByRole('button', { name: '보내기' }));
-    expect(await screen.findByText('다음 주에 안내드립니다')).toBeTruthy();
-    expect(sent).toEqual({ body: '다음 주에 안내드립니다' });
+    // The typed text is also on screen in the reply box, so wait for the request itself and for the sent message bubble.
+    await waitFor(() => expect(sent).toEqual({ body: '다음 주에 안내드립니다' }));
+    expect(await screen.findByText('쪽지를 보냈습니다')).toBeTruthy();
   });
 });
 

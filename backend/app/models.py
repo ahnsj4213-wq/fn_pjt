@@ -112,6 +112,11 @@ class CodingProblem(Base):
     variant_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("coding_problems.id"))
     variant_for: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     variant_seed: Mapped[int | None] = mapped_column(BigInteger)
+    level: Mapped[int | None] = mapped_column(SmallInteger)  # Lv.0~5 (coding/levels.py)
+    tags: Mapped[list] = mapped_column(JSONB, default=list)  # algorithm tags: never sent to candidates
+    families: Mapped[list] = mapped_column(JSONB, default=list)  # job families it suits best; empty = any
+    starter_code: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[dict | None] = mapped_column(JSONB)  # origin, upstream_url, reference_urls, reference_idea, note
 
 
 class CodingTestcase(Base):
@@ -122,6 +127,7 @@ class CodingTestcase(Base):
     visibility: Mapped[str] = mapped_column(Text)
     input: Mapped[str] = mapped_column(Text)
     expected_output: Mapped[str] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)  # explanation of a PUBLIC example, shown to the candidate
 
 
 class JobPosting(Base):
@@ -146,6 +152,8 @@ class JobPosting(Base):
     coding_problem_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("coding_problems.id"))
     coding_language: Mapped[str | None] = mapped_column(Text)
     coding_time_limit_min: Mapped[int | None] = mapped_column(SmallInteger)
+    coding_selection: Mapped[str] = mapped_column(Text, default="AUTO")  # AUTO: per application by coding/selection.py; FIXED: coding_problem_id
+    coding_difficulty: Mapped[str] = mapped_column(Text, default="NORMAL")  # EASY | NORMAL | HARD
     current_settings_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     settings_locked_at: Mapped[datetime | None] = mapped_column(TS)
     published_at: Mapped[datetime | None] = mapped_column(TS)
@@ -382,6 +390,24 @@ class QuestionExample(Base):
     created_at: Mapped[datetime] = mapped_column(TS)
 
 
+class CompanyKnowledge(Base):
+    """One chunk of a company's project or technology document (migration 0028, ADR-0020). Read through questions/knowledge.py."""
+    __tablename__ = "company_knowledge"
+    id: Mapped[uuid.UUID] = _pk()
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    posting_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # NULL: every posting of the company
+    doc_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    chunk_no: Mapped[int] = mapped_column(SmallInteger, default=1)
+    doc_type: Mapped[str] = mapped_column(Text)  # PROJECT | TECH | COMPANY
+    title: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text)
+    origin: Mapped[str] = mapped_column(Text)  # RECRUITER | SYNTHETIC
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))
+    embedding_model: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
+
+
 class QuestionSet(Base):
     __tablename__ = "question_sets"
     id: Mapped[uuid.UUID] = _pk()
@@ -394,6 +420,7 @@ class QuestionSet(Base):
     followup_max: Mapped[int] = mapped_column(SmallInteger, default=4)
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
     ready_at: Mapped[datetime | None] = mapped_column(TS)
+    plan: Mapped[list | None] = mapped_column(JSONB)  # live composition: [{seq, area, text, mode}]; NULL = all written up front
 
 
 class InterviewQuestion(Base):

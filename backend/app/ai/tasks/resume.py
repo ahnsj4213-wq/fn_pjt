@@ -4,7 +4,8 @@ Every string value must be copied verbatim from the PDF text; values that fail t
 (counted in flags.dropped_values) so only text actually written in the resume reaches the form (RES-03).
 Long sources are split at page/line boundaries and merged.
 Descriptions are the first one or two sentences of the source only: copying whole career paragraphs used to run the
-output past num_predict, and a cut JSON fails every retry the same way (temperature 0, fixed seed).
+output past num_predict, and a cut JSON fails every retry the same way (temperature 0, fixed seed). The whole description
+and the cover letter are cut from the text by code afterwards (app/resumes/sections.py).
 """
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -64,13 +65,15 @@ DESC_MAX = 150
 def _verify(value: str | None, source: str) -> str | None:
     if value is None or not value.strip():
         return None
+    if value.strip() in source:  # find_span trims edge brackets for prose: "시앤지원(주)" must keep its own
+        return value.strip()
     span = find_span(value.strip(), source, min_chars=1)
     return span.text if span else None
 
 
 class ResumeExtract(TaskSpec):
     name = "resume_extract"
-    version = "resume_extract@1.1.0"
+    version = "resume_extract@1.2.0"
     lane = "INTERACTIVE"
     temperature = 0.0
     num_predict = 3000  # 4000-char chunk (~2.5k tokens) + output stays inside one 8k llama.cpp slot
@@ -78,6 +81,8 @@ class ResumeExtract(TaskSpec):
     system = ("너는 이력서 텍스트에서 표준 항목(성명, 학력, 경력, 프로젝트, 기술 스택, 자격증)을 뽑는 추출기다. "
               "모든 값은 원문에 적힌 글자를 그대로 복사한다. 날짜·학위명·회사명을 바꿔 쓰거나 요약·번역하지 않는다. "
               "원문에 없는 항목은 null 또는 빈 배열로 둔다. "
+              "experience에는 실제로 근무한 회사만, projects에는 제목이 적힌 프로젝트만 넣는다. 문장 속에 언급된 시스템·조직·군 복무를 "
+              "회사나 프로젝트로 만들지 않는다. "
               "description은 원문 설명의 앞부분 한두 문장(150자 이내)만 글자 그대로 복사하고 나머지는 쓰지 않는다.")
 
     def split(self, inp: dict) -> list[dict]:

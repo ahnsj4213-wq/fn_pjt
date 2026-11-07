@@ -55,11 +55,11 @@
 
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
-| QST-01 | 질문은행(직무·유형별), 덜 쓴 질문부터, 부족하면 AI 생성 후 은행에 추가, 유사 질문 중복 저장 금지 | P0 | questions | `app/questions/bank.py` | T-QST-01 | 미착수 | 유사도는 로컬 임베딩 (ADR-0005). 생성 시 RAG 예시 3개(`app/questions/rag.py`, `tests/test_question_rag.py`) |
-| QST-02 | 면접 시작 전 본질문 10개 구성 (6.1) | P0 | questions / 준비 단계 작업 | `app/questions/compose.py` | T-QST-02 | 미착수 | 인성2·이력서2·기업2·직무4, 순서 고정 |
-| QST-03 | 이력서 질문은 이력서에 실제 적힌 경험·프로젝트만 근거, 근거 없으면 버리고 은행 질문으로 | P0 | questions | `app/questions/resume_q.py` | T-QST-03, AC-07 | 미착수 | 근거 문장을 스냅샷 원문과 코드로 대조 |
+| QST-01 | 질문은행(직무·유형별), 덜 쓴 질문부터, 부족하면 AI 생성 후 은행에 추가, 유사 질문 중복 저장 금지 | P0 | questions | `app/questions/bank.py` | T-QST-01 | 미착수 | 유사도는 로컬 임베딩 (ADR-0005). 생성 시 RAG 예시 3개(`app/questions/rag.py`, `tests/test_question_rag.py`) **ADR-0020: 동기·직무는 회사 자료 기반 생성 우선, 은행은 대체 경로로 순서 변경.** `app/questions/knowledge.py`, `tests/test_company_knowledge.py` |
+| QST-02 | 면접 시작 전 본질문 10개 구성 (6.1) | P0 | questions / 준비 단계 작업 | `app/questions/compose.py` | T-QST-02 | 미착수 | 인성2·이력서2·기업2·직무4, 순서 고정 **2026-11-07 변경(ADR-0022, 사용자 결정): 시작 전에는 첫 질문만, 이후는 면접 중 답변을 반영해 한 문항씩 생성. `AIHIRE_QUESTION_MODE=upfront`로 원래 방식** |
+| QST-03 | 이력서 질문은 이력서에 실제 적힌 경험·프로젝트만 근거, 근거 없으면 버리고 은행 질문으로 | P0 | questions | `app/questions/resume_q.py` | T-QST-03, AC-07 | 미착수 | 근거 문장을 스냅샷 원문과 코드로 대조 ADR-0020: 근거를 `grounding.sources`(RESUME_SNAPSHOT)로 추적, 공고·회사 자료와 겹치는 항목 우선 |
 | QST-04 | 공고별 커스텀 질문(1개), 비우면 자동 채움 | P1 | postings / 평가 설정 API | `app/postings` | T-QST-04 | 미착수 | ADM-05(P0)가 커스텀 질문 설정을 포함 → 우선순위 불일치 OQ-02 |
-| QST-05 | 답변에 따른 꼬리질문 (6.2) | P0 | interview | `app/interview/followup.py` | T-QST-05, AC-12 | 미착수 | |
+| QST-05 | 답변에 따른 꼬리질문 (6.2) | P0 | interview | `app/interview/followup.py` | T-QST-05, AC-12 | 미착수 | ADR-0020: 앞선 답변·회사 자료를 입력에 추가, 근거를 `grounding.sources`로 추적 |
 | QST-06 | 출제 질문은 변경 불가 스냅샷 | P0 | questions / DB 트리거 | `migrations` | T-QST-06 | 미착수 | UPDATE 금지 트리거 |
 | QST-07 | 생성 실패 시 1회 재시도 후 질문은행 대체 | P0 | questions | `app/questions/compose.py` | T-QST-07 | 미착수 | |
 | QST-08 | JD에서 질문 후보 자동 추출·담당자 선택 | P2 | — | — | — | 미착수 | |
@@ -92,12 +92,12 @@
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
 | COD-01 | 켠 공고만, 면접 후 이어서, 순서 고정, 건너뛰기 불가 | P0 | coding | `app/coding` | T-COD-01, AC-15 | 미착수 | |
-| COD-02 | 문제 설명·입출력 예시, 언어 선택(MVP 1종), 남은 시간, 코드 편집기 | P0 | coding / `GET .../coding` | `pages/candidate/Coding` | T-COD-02 | 미착수 | 편집기는 번들 포함(오프라인 동작, AC-22) |
+| COD-02 | 문제 설명·입출력 예시, 언어 선택(MVP 1종), 남은 시간, 코드 편집기 | P0 | coding / `GET .../coding` | `pages/candidate/Coding` | T-COD-02 | 미착수 | 편집기는 번들 포함(오프라인 동작, AC-22) ADR-0021: 문제 설명 패널, Lv·제한 표시, 시작 코드, 실행 결과·테스트케이스 탭(`Coding.tsx`, `coding.module.css`) |
 | COD-03 | [실행]은 격리 환경, 정상/비정상 작동과 출력·오류 표시, 반복 가능, 실행만으로 완료 안 됨 | P0 | coding / `POST .../coding/run` | `runner/`, `app/coding` | T-COD-03, AC-15 | 미착수 | 공개 예시 입력으로만 실행 |
-| COD-04 | [최종 제출] 확인 후 스냅샷 저장, 공개·비공개 테스트로 자동 채점 | P0 | coding / `POST .../coding/submit` | `app/coding/grading.py` | T-COD-04 | 미착수 | |
+| COD-04 | [최종 제출] 확인 후 스냅샷 저장, 공개·비공개 테스트로 자동 채점 | P0 | coding / `POST .../coding/submit` | `app/coding/grading.py` | T-COD-04 | 미착수 | ADR-0021: 55문제 정답 풀이를 실제 샌드박스·채점기로 검증(`tools/verify_coding_bank.py`), 독립 풀이 대조(`tests/test_coding_bank.py`), 브라우저 E2E |
 | COD-05 | 제한시간 종료 시 마지막 저장 코드 자동 제출 | P0 | coding | `app/coding`, worker | T-COD-05, AC-15 | 미착수 | 서버 시간 기준. 브라우저가 닫혀도 서버가 제출 |
 | COD-06 | 네트워크 차단·CPU·메모리·시간·동시 실행 제한, 비공개 테스트 비노출 | P0 | runner | `runner/`, `app/coding/templates.py`, `variants.py` | T-COD-06, AC-15, tests/test_coding_variants.py | 미착수 | 샌드박스 검증 전에는 실행 기능 비활성 (ADR-0007). 2026-11-03: 비공개 테스트를 저장소·시드에서 빼고 응시 건마다 생성(`coding_problems` 변형본, 마이그레이션 0022). 문제는 담당자가 고르지 않는다 |
-| COD-07 | LLM 코드 가독성·복잡도·개선점 담당자용 서술, 점수 미반영 | P1 | evaluation | `app/evaluation/code_review.py` | T-COD-07 | 미착수 | 비공개 테스트는 프롬프트에 넣지 않음 |
+| COD-07 | LLM 코드 가독성·복잡도·개선점 담당자용 서술, 점수 미반영 → **2026-11-04 사용자 결정으로 변경: 효율성·문제 해결 방식·코드 품질을 점수에 반영하고 지원자에게도 공개**(ADR-0017) | P1 | evaluation | `app/ai/tasks/report.py`, `app/evaluation/pipeline.py`, `app/evaluation/scoring.py` | `tests/test_coding_metrics.py` | 구현 | 가짜 LLM으로만 시험. 실제 모델의 판정 정확도는 미측정. 비공개 테스트는 프롬프트에 넣지 않음 |
 | COD-08 | 응시 중 LLM 채팅 패널·AI 활용 평가 | P2 | — | — | — | 미착수 | |
 | COD-09 | 제출 코드 채팅형 꼬리질문 | P2 | — | — | — | 미착수 | |
 
@@ -158,7 +158,7 @@
 | ID | 요약 | 우선 | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|
 | RULE-6.1 | 본질문 10개: 인성2·이력서2·기업2·직무4, 순서 인성→이력서→기업→직무, 커스텀 1개는 직무 1개 대체, 담당자 변경 불가 | P0 | `app/questions/compose.py` | T-RULE-6.1 | 미착수 | |
-| RULE-6.2 | 꼬리질문 본질문당 최대 1·전체 최대 4, 생성 조건, 발화·이력서 문장 근거, 5초 내 미결정 시 건너뜀, 45초, 점수 평균, 꼬리 전 중단 시 본답변만 평가·감점 없음 | P0 | `app/interview/followup.py`, `app/evaluation/scoring.py` | T-RULE-6.2 | 미착수 | |
+| RULE-6.2 | 꼬리질문 본질문당 최대 1·전체 최대 4, 생성 조건, 발화·이력서 문장 근거, 5초 내 미결정 시 건너뜀(→ 30초로 변경, ADR-0019), 45초, 점수 평균, 꼬리 전 중단 시 본답변만 평가·감점 없음 | P0 | `app/interview/followup.py`, `app/evaluation/scoring.py` | T-RULE-6.2 | 미착수 | |
 | RULE-6.3 | 고정 루브릭 4항목, 1~5점 기준 문장, 텍스트만 평가, 태도·음성 지표 없음 | P0 | `app/evaluation/rubric.py` | T-RULE-6.3 | 미착수 | 기준 문장은 TRD에서 정함 (05-ai-pipeline) |
 | RULE-6.4 | 점수 계산: 문항 점수(꼬리 평균), 항목 점수 = 10문항 평균×20, 코딩 = 통과/전체×100, 총점 = Σ(항목×가중치/100), 근거 부족 1점, 답변 없음 전 항목 1점, 기본 가중치, 첫 응시 후 잠금, 버전 기록 | P0 | `app/evaluation/scoring.py` | T-RULE-6.4, AC-17 | 미착수 | 반올림 규칙은 TRD에서 정함 (OQ-10) |
 | RULE-6.5 | 코딩 점수 = 최종 제출 코드 공개+비공개 통과율, [실행] 미반영, 자동 제출도 동일, 미작성·컴파일 실패 0점, LLM 코멘트 미반영 | P0 | `app/coding/grading.py` | T-RULE-6.5 | 미착수 | |

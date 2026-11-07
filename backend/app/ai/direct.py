@@ -12,6 +12,7 @@ gateway per LLM server. Lanes on different servers no longer wait for each other
 ADR-0003 only matters inside one process; RT/INTERACTIVE share llm-rt through its two slots (ADR-0014).
 """
 import asyncio
+import logging
 import time
 import uuid
 
@@ -22,10 +23,14 @@ from app.aisvc.gateway import CallStats, DeadlineExceeded, Gateway, LLMUnavailab
 from app.aisvc.llamacpp import LlamaCppBackend
 from app.aisvc.ollama import ThinkingLeak
 from app.core.config import get_settings
+from app.core.logging import log_event
 
 HEALTH_TTL_SEC = 5.0
 LANE_SERVER = {"RT": "rt", "INTERACTIVE": "rt", "BATCH": "eval"}
 DEFAULT_DEADLINE_SEC = {"RT": 5.0, "INTERACTIVE": 120.0, "BATCH": 600.0}
+
+
+log = logging.getLogger("app.ai")
 
 
 class DirectAIClient:
@@ -53,6 +58,14 @@ class DirectAIClient:
         if gw.is_down():
             raise AIUnavailable(f"{LANE_SERVER[lane]} down")
         stats = CallStats()
+        t0 = time.perf_counter()
+
+        def logged(status: str, error: str | None = None, usage: dict | None = None) -> None:
+            """Metadata only: prompts and outputs hold resumes and answers, which never go to the logs."""
+            usage = usage or {}
+            log_event(log, "llm_task", task=task, lane=lane, status=status, error_code=error,
+                      latency_ms=int((time.perf_counter() - t0) * 1000), queue_ms=stats.queue_ms,
+                      prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0))
 
         async def call(messages: list[dict], schema: dict, options: dict) -> tuple[str, dict]:
             return await gw.call(lane, messages, schema, options, deadline_ms=deadline_ms, stats=stats,
@@ -63,11 +76,15 @@ class DirectAIClient:
         try:
             out = await run_task(spec, input, call)
         except DeadlineExceeded:
+            logged("TIMEOUT", "DEADLINE_EXCEEDED")
             return LLMResult(status="TIMEOUT", error="DEADLINE_EXCEEDED", manifest_hash=self._manifest_hash)
         except LLMUnavailable as e:
+            logged("LLM_UNAVAILABLE", "LLM_UNAVAILABLE")
             raise AIUnavailable(str(e)) from e
         except ThinkingLeak:
+            logged("INVALID", "THINKING_OUTPUT")
             return LLMResult(status="INVALID", error="THINKING_OUTPUT", manifest_hash=self._manifest_hash)
+        logged(out.status, out.error, out.usage)
         usage = dict(out.usage) | {"queue_ms": stats.queue_ms, "preempted": stats.preempted,
                                    "trace_id": str(uuid.uuid4())}
         return LLMResult(status=out.status, output=out.output, flags=out.flags, usage=usage,

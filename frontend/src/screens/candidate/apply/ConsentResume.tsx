@@ -104,6 +104,8 @@ export function ConsentResume() {
         const content = { ...EMPTY_RESUME, ...out.fields, name: out.fields.name ?? '' };
         const unsure = new Set(out.low_conf_fields.map((f) => LOW_CONF_BOX[f.split('.')[0]]).filter(Boolean));
         setExtracted({ fileId: out.file_id, fileName: pdf.name, content, form: toBoxes(content), unsure });
+      } else if (out.extraction_status === 'PENDING') {
+        setError('AI 서버가 응답하지 않아 파일을 아직 읽지 못했습니다. 잠시 후 다시 올리거나 이력서를 직접 만들어 주십시오.');
       } else {
         // RES-04: OCR could not read enough (blurred or tilted scan, engine unavailable): the candidate types it instead.
         setError(out.extraction_status === 'NO_TEXT'

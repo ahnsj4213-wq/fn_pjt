@@ -31,7 +31,7 @@ export function Result() {
                     </section>
                   ))}
                   <h3>잘한 점</h3>
-                  <ul>{f.strengths.map((t, i) => <li key={i}>{t}</li>)}</ul>
+                  {f.strengths.length ? <ul>{f.strengths.map((t, i) => <li key={i}>{t}</li>)}</ul> : <p className="hint">이번 면접에서는 찾지 못했습니다.</p>}
                   <h3>보완할 점</h3>
                   <ul>{f.improvements.map((t, i) => <li key={i}>{t}</li>)}</ul>
                   {f.coding && (

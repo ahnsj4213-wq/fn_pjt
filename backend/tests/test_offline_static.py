@@ -53,6 +53,10 @@ def test_no_cloud_ai_sdk_in_dependencies():
 
 _URL = re.compile(r"https?://([^/\s\"'`)<>\\:]+)")
 _ALLOWED_HOST = re.compile(r"^(localhost|127\.0\.0\.1|0\.0\.0\.0|[a-z][a-z0-9-]*)$")  # single label = compose service
+# ADR-0021: where a problem's idea came from, kept as text in its metadata. Nothing requests it and no screen links to it
+# (the check below proves the second; AC-22's network log proves the first). One host, only in these files.
+_CITATION_HOST = "lovelyunsh.tistory.com"
+_CITATION_FILES = {"bank_basic.py", "bank_advanced.py", "template_base.py"}
 
 
 def _source_files():
@@ -70,9 +74,18 @@ def test_source_has_no_external_hosts():
     hits = []
     for f in _source_files():
         for host in _URL.findall(f.read_text(encoding="utf-8", errors="replace")):
+            if host == _CITATION_HOST and f.name in _CITATION_FILES:
+                continue
             if not _ALLOWED_HOST.match(host) and not host.startswith("{"):  # "{...}" = an f-string placeholder
                 hits.append(f"{f.relative_to(REPO)}: {host}")
     assert not hits, hits
+
+
+def test_problem_citations_are_never_linked_or_fetched():
+    frontend = [f for f in (REPO / "frontend" / "src").rglob("*.tsx") if ".test." not in f.name]
+    assert not [f.name for f in frontend if "reference_urls" in f.read_text(encoding="utf-8", errors="replace")]
+    code = [f for f in (REPO / "backend" / "app").rglob("*.py") if "reference_urls" in f.read_text(encoding="utf-8", errors="replace")]
+    assert {f.name for f in code} <= {"template_base.py", "bank_basic.py", "bank_advanced.py", "models.py"}  # models.py: a comment
 
 
 def test_webrtc_never_uses_ice_servers():

@@ -17,6 +17,8 @@ PG = "postgresql://aihire:aihire_dev_only@127.0.0.1:55432"
 TEST_DB = "aihire_test"
 os.environ["AIHIRE_DATABASE_URL"] = f"postgresql+asyncpg://aihire:aihire_dev_only@127.0.0.1:55432/{TEST_DB}"
 os.environ["AIHIRE_ENV"] = "test"
+# Most tests compose the whole set before the interview; tests of live composition switch it on themselves.
+os.environ.setdefault("AIHIRE_QUESTION_MODE", "upfront")
 # Redis DB 15 keeps tests away from development data; tests needing Redis skip when it is not running.
 os.environ.setdefault("AIHIRE_REDIS_URL", "redis://127.0.0.1:6379/15")
 os.environ.setdefault("AIHIRE_DATA_DIR", str(Path(__file__).parent / ".data"))
@@ -162,3 +164,25 @@ def fake_runner():
     runner_client.set_transport(httpx.MockTransport(handle))
     yield state
     runner_client.set_transport(None)
+
+
+@pytest.fixture
+def older_live_question(monkeypatch):
+    """New question sets have no live coding; this composes one the old way, to test the sets that still hold such a turn."""
+    from sqlalchemy import select
+
+    from app.core.constants import Area
+    from app.models import CodingProblem
+    from app.questions import compose as C
+
+    plain = C.plan_slots
+
+    async def with_live_question(db, posting, settings):
+        slots, _ = await plain(db, posting, settings)
+        next(s for s in slots if s.area == Area.JOB_SKILL and s.text is None).mode = "CODE"
+        pid = posting.coding_problem_id
+        problem = await db.get(CodingProblem, pid) if pid else (await db.execute(
+            select(CodingProblem).where(CodingProblem.is_active).order_by(CodingProblem.title).limit(1))).scalar_one()
+        return slots, problem
+
+    monkeypatch.setattr(C, "plan_slots", with_live_question)

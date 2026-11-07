@@ -3,7 +3,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { fetchMyApplication } from '@/api/candidate';
 import {
-  enterTextMode, fetchInterviewState, finishTurn, nextTextQuestion, replayQuestion, reportProctor, resumeInterview,
+  enterTextMode, fetchInterviewState, finishTurn, nextTextQuestion, replayQuestion, reportProctor, resumeInterview, retakeInterview,
   sendTextAnswer, startAnswer, startInterview, type InterviewState,
 } from '@/api/candidate/interview';
 import { useSession } from '@/app/session';
@@ -26,6 +26,7 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000]; // then fall back to text mod
 const QUESTIONS_WAIT_LIMIT = 60; // ~3 minutes at retry_after_sec=3
 const GAZE_WARN_MS = 1_500; // SC-A06: a warning after 1.5 s of looking away
 const GAZE_SUSPECT = 3;
+const CAMERA_RETRY_MS = 3_000; // a dropped camera is opened again this often
 const RING = 263.9;
 
 const AREA_LABEL: Record<string, string> = {
@@ -52,7 +53,9 @@ export function Interview() {
   const [notice, setNotice] = useState<string | null>(null);
   const [textState, setTextState] = useState<InterviewState | null>(null);
   const [gateLabel, setGateLabel] = useState('면접 이어서 하기');
+  const canRetake = useRef(false);
   const [followupMax, setFollowupMax] = useState<number | null>(null);
+  const [liveGraded, setLiveGraded] = useState(false);
   const [warnings, setWarnings] = useState(0);
   const [warned, setWarned] = useState(false);
   const [hasVideo, setHasVideo] = useState(false);
@@ -174,6 +177,8 @@ export function Interview() {
     live.current = true;
     fetchInterviewState(aid).then((st) => {
       setFollowupMax(st.followup_max);
+      setLiveGraded(!!st.live_code_graded);
+      canRetake.current = !!st.retake_allowed;
       setWarnings(st.gaze_warnings);
       if (st.attempt_status === 'INTERRUPTED') {
         if (st.interrupted_from === 'CODING') setGateLabel('코딩테스트 이어서 하기');
@@ -247,10 +252,63 @@ export function Interview() {
   useHeartbeat(aid, inSession);
   useTicker(inVoice);
 
+  // The camera can drop mid-interview (unplugged, taken by another app, USB power saving). A muted or ended track is
+  // "no camera", not "looking away"; an ended one is opened again every few seconds and whenever a device appears.
+  const [camGen, setCamGen] = useState(0);
+  useEffect(() => {
+    const s = stream.current;
+    if (!inSession || !s) return;
+    const track = s.getVideoTracks()[0];
+    let stopped = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const reopen = async () => {
+      if (stopped) return;
+      if (retry) clearTimeout(retry);
+      const cam = await navigator.mediaDevices.getUserMedia({ video: check?.cam ? { deviceId: check.cam } : true })
+        .catch(() => navigator.mediaDevices.getUserMedia({ video: true }))
+        .catch(() => null);
+      if (stopped) { cam?.getTracks().forEach((t) => t.stop()); return; }
+      const fresh = cam?.getVideoTracks()[0];
+      if (!fresh) { retry = setTimeout(() => void reopen(), CAMERA_RETRY_MS); return; }
+      s.getVideoTracks().forEach((t) => { s.removeTrack(t); t.stop(); });
+      s.addTrack(fresh);
+      if (video.current) video.current.srcObject = s;
+      setHasVideo(true);
+      setNotice('카메라가 다시 연결되었습니다.');
+      setCamGen((n) => n + 1);
+    };
+    const onDevice = () => void reopen();
+    if (!track || track.readyState === 'ended') {
+      if (track) setNotice('카메라 연결이 끊겼습니다. 다시 연결하는 중입니다. 카메라 연결을 확인해 주십시오.');
+      setHasVideo(false);
+      navigator.mediaDevices.addEventListener?.('devicechange', onDevice);
+      void reopen();
+    } else {
+      setHasVideo(!track.muted);
+      const onMute = () => setHasVideo(false);
+      const onUnmute = () => setHasVideo(true);
+      const onEnded = () => setCamGen((n) => n + 1); // re-run: the branch above takes over
+      track.addEventListener('mute', onMute);
+      track.addEventListener('unmute', onUnmute);
+      track.addEventListener('ended', onEnded);
+      return () => {
+        track.removeEventListener('mute', onMute);
+        track.removeEventListener('unmute', onUnmute);
+        track.removeEventListener('ended', onEnded);
+      };
+    }
+    return () => {
+      stopped = true;
+      if (retry) clearTimeout(retry);
+      navigator.mediaDevices.removeEventListener?.('devicechange', onDevice);
+    };
+  }, [inSession, camGen, stream.current]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Looking away for 1.5 s -> one warning, recorded on the server (SC-A06). Looking back clears the banner.
+  // Without a working camera there is nothing to judge: no warning.
   const gaze = useGaze(video, inVoice && hasVideo);
   useEffect(() => {
-    if (gaze !== 'away' || !inVoice) { setWarned(false); return; }
+    if (gaze !== 'away' || !inVoice || !hasVideo) { setWarned(false); return; }
     const t = setTimeout(() => {
       setWarned(true);
       reportProctor(aid, 'GAZE_AWAY', GAZE_WARN_MS)
@@ -258,7 +316,7 @@ export function Interview() {
         .catch(() => setWarnings((n) => n + 1));
     }, GAZE_WARN_MS);
     return () => clearTimeout(t);
-  }, [gaze, inVoice, aid]);
+  }, [gaze, inVoice, hasVideo, aid]);
 
   // Video element appears with the voice layout; attach the stream whenever it (re)mounts.
   useEffect(() => { if (video.current && stream.current) video.current.srcObject = stream.current; }, [inVoice]);
@@ -288,6 +346,13 @@ export function Interview() {
   const quit = () => {
     link.current?.close();
     link.current = null;
+    if (canRetake.current) { // test posting: the next start composes new questions from the first one
+      retakeInterview(aid).then(
+        (r) => { toast('면접을 중단했습니다. 처음 질문부터 다시 만들 수 있습니다'); navigate(`/postings/${encodeURIComponent(r.posting_id)}/apply`); },
+        (e) => dispatch({ type: 'error', message: describeError(e).message }),
+      );
+      return;
+    }
     toast('면접을 중단했습니다');
     navigate(app.data ? `/postings/${encodeURIComponent(app.data.posting.id)}` : '/me/applications');
   };
@@ -356,9 +421,9 @@ export function Interview() {
     ? [turn?.isFollowup ? '면접관이 꼬리질문을 하고 있습니다' : '면접관이 질문하고 있습니다', '질문을 끝까지 들어 주십시오']
     : ui.interjecting ? ['면접관이 말하는 중', '말씀이 끝나면 남은 시간 동안 이어서 답변합니다']
       : ui.phase === 'THINKING' ? ['생각할 시간', `${turn?.thinkSec ?? 10}초가 지나면 답변이 시작됩니다`]
-        : ui.phase === 'ANSWERING' ? ['답변 중', `제한시간 ${fmtLimit(turn?.limitSec ?? 60)} · 다 말했으면 '답변 완료'를 눌러 주십시오`]
+        : ui.phase === 'ANSWERING' ? ['답변 중', `제한시간 ${fmtLimit(turn?.limitSec ?? 60)} · ${toolKind === 'code' ? "코드를 다 썼으면" : '다 말했으면'} '답변 완료'를 눌러 주십시오`]
           : ui.phase === 'CLOSING' ? ['답변을 정리하고 있습니다', '잠시만 기다려 주십시오']
-            : ['답변을 분석하고 있습니다', 'AI가 답변 내용을 보고 꼬리질문이 필요한지 판단합니다'];
+            : ['답변을 분석하고 있습니다', '답변 내용을 바탕으로 다음 질문을 준비합니다. 10초 정도 걸릴 수 있습니다'];
 
   const bubble = ui.interjecting
     ? { cls: ' cut', type: '면접관이 끼어들었습니다', text: ui.interjectText ?? '' }
@@ -423,7 +488,7 @@ export function Interview() {
             </div>
             <div className="phase"><b>{phaseText[0]}</b><span>{phaseText[1]}</span></div>
           </div>
-          {(ui.phase === 'ANSWERING' || ui.phase === 'CLOSING') && (
+          {(ui.phase === 'ANSWERING' || ui.phase === 'CLOSING') && toolKind !== 'code' && (
             <div className="sttlive">
               <span className="hint">실시간 자막 · 말한 내용이 글자로 바뀝니다</span>
               <p data-testid="captions" aria-live="polite">{ui.captions.length ? ui.captions.join(' ') : '말씀을 기다리고 있습니다'}</p>
@@ -440,7 +505,7 @@ export function Interview() {
             </div>
           )}
         </section>
-        {turn && toolKind === 'code' && <CodeTool key={turn.id} ref={tool} aid={aid} turnId={turn.id} canSubmit={canSubmit} />}
+        {turn && toolKind === 'code' && <CodeTool key={turn.id} ref={tool} aid={aid} turnId={turn.id} canSubmit={canSubmit} graded={liveGraded} />}
       </div>
       <div className="run-actions">
         {ui.phase === 'THINKING' && !ui.replaying && turn && (
@@ -463,7 +528,7 @@ export function Interview() {
 }
 
 /** Text mode (INT-18): the same questions and time limits, typed answers. */
-function TextInterview({ aid, initial, onFinished }: {
+export function TextInterview({ aid, initial, onFinished }: {
   aid: string;
   initial: InterviewState;
   onFinished: (next: 'CODING' | 'DONE') => void;
@@ -473,6 +538,7 @@ function TextInterview({ aid, initial, onFinished }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const clock = useRef(createServerClock());
+  const tool = useRef<ToolHandle>(null);
   useTicker(!!st.turn?.deadline_at);
 
   const apply = (s: InterviewState) => {
@@ -503,6 +569,7 @@ function TextInterview({ aid, initial, onFinished }: {
     setBusy(true);
     setError(null);
     try {
+      await tool.current?.flush();  // live coding: the code written so far is kept with the answer
       await sendTextAnswer(aid, st.turn.turn_id, answer);
       setAnswer('');
       apply(await nextTextQuestion(aid));
@@ -530,7 +597,10 @@ function TextInterview({ aid, initial, onFinished }: {
             {remaining !== null && <span data-testid="timer">{displaySeconds(remaining)}초</span>}
           </div>
           <p data-testid="question">{t.question_text}</p>
-          <TextAreaField label="답변" value={answer} maxLength={2000} onChange={(e) => setAnswer(e.target.value)} />
+          {t.answer_mode === 'CODE' && <CodeTool key={t.turn_id} ref={tool} aid={aid} turnId={t.turn_id} canSubmit graded={!!st.live_code_graded} />}
+          {t.answer_mode !== 'CODE' && (
+            <TextAreaField label="답변" value={answer} maxLength={2000} onChange={(e) => setAnswer(e.target.value)} />
+          )}
           <Button variant="primary" onClick={() => void submit()} busy={busy} data-testid="text-answer-submit">답변 완료</Button>
         </>
       )}

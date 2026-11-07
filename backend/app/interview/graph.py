@@ -12,7 +12,8 @@ Nodes:
   wait_answer      `interrupt()`: the graph stops here while the candidate answers. The runtime (voice session or the text
                    endpoint) resumes it with how the answer window ended (`BUTTON`/`TIMEOUT`/...), or with `abandoned`.
   transcribe       the transport hands over what was heard (STT text, audio) and the answer is confirmed once.
-  decide_followup  T4 (rules first, then the model within 5 s, otherwise skip), then the code picks the edge.
+  decide_followup  T4 (rules first, then the model within its time limit, otherwise skip), then (live composition) the next main
+                   question is composed from the answers so far, then the code picks the edge.
   finish           `turns.finish_interview`: the coding test or submission + evaluation job, atomically.
 Every fork is decided by code; no model picks the next step. The transport (audio, timers, STT) is not part of the graph's
 state: it is passed as `config["configurable"]["io"]` (a `TurnIO`). The state holds ids and small flags only, never an answer.
@@ -33,6 +34,7 @@ from app.core.logging import log_event
 from app.interview import turns
 from app.interview.checkpoint import get_checkpointer
 from app.models import Application
+from app.questions import live
 
 log = logging.getLogger("app.interview")
 
@@ -107,6 +109,7 @@ def _io(config) -> TurnIO:
 # ── nodes ──────────────────────────────────────────────────────────────────────
 async def present(state: State) -> dict:
     app_id = UUID(state["application_id"])
+    await live.ensure_next(app_id)  # live composition: the next main question is made now, from the answers so far (ADR-0022)
     async with session_scope() as db:
         app = await db.get(Application, app_id)
         if app is None or app.attempt_status != "INTERVIEWING":
@@ -148,6 +151,7 @@ async def decide_followup(state: State) -> dict:
     app_id = UUID(state["application_id"])
     if state.get("answer_id") and not state["turn"]["is_followup"]:
         await turns.decide_followup(app_id, UUID(state["answer_id"]))
+    await live.ensure_next(app_id)  # no follow-up: the next main question is composed before the route is decided
     async with session_scope() as db:
         nxt = await turns.next_question(db, app_id)
     route = "DONE" if nxt is None else "FOLLOWUP" if nxt.role == "FOLLOWUP" else "NEXT"

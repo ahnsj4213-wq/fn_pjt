@@ -69,6 +69,8 @@ export interface PostingDetail extends PostingSummary {
   preferred: string | null;
   duties: string | null;
   coding_problem_id: string | null;
+  coding_selection?: 'AUTO' | 'FIXED';
+  coding_difficulty?: 'EASY' | 'NORMAL' | 'HARD';
   coding_language: string | null;
   coding_time_limit_min: number | null;
   settings_locked: boolean;
@@ -90,6 +92,7 @@ export interface PostingIn {
   deadline_date?: string | null;
   coding_enabled: boolean;
   coding_problem_id?: string | null;
+  coding_difficulty?: 'EASY' | 'NORMAL' | 'HARD';
   coding_time_limit_min?: number | null;
   row_version?: number;
 }
@@ -127,6 +130,9 @@ export const fetchRecruiterPostings = (status?: PostingStatus) =>
   apiFetch<PostingSummary[]>(`/api/recruiter/postings${status ? `?status=${status}` : ''}`);
 export const fetchRecruiterPosting = (id: string) => apiFetch<PostingDetail>(`/api/recruiter/postings/${enc(id)}`);
 export const createPosting = (body: PostingIn) => apiFetch<PostingDetail>('/api/recruiter/postings', { method: 'POST', body });
+export interface PostingDraft { duties: string; requirements: string; preferred: string; sources: string[] }
+export const draftPostingFromDocuments = (body: { title: string; job_family: string; experience_level: string | null }) =>
+  apiFetch<PostingDraft>('/api/recruiter/postings/ai-draft', { method: 'POST', body });
 export const updatePosting = (id: string, body: PostingIn) =>
   apiFetch<PostingDetail>(`/api/recruiter/postings/${enc(id)}`, { method: 'PUT', body });
 export const publishPosting = (id: string) => apiFetch<PostingDetail>(`/api/recruiter/postings/${enc(id)}/publish`, { method: 'POST' });
@@ -243,6 +249,8 @@ export interface RecruiterReport {
 
 export interface CodingResult {
   enabled: boolean;
+  /** Level, tags and origin of the problem this applicant was given: for the recruiter only (ADR-0021). */
+  problem?: { title: string; level: number | null; tags: string[]; source: { origin?: string; reference_urls?: string[] } | null; expected?: string | null } | null;
   submission?: {
     kind: string;
     submitted_at: string;

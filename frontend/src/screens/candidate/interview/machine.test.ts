@@ -95,3 +95,14 @@ describe('interview machine', () => {
     expect(progressOf({ ...s, phase: 'ANSWERING' }, 1)).toBeCloseTo((1 + 0.8) / 5);
   });
 });
+
+describe('live coding turn', () => {
+  it('keeps the microphone off: the answer is the code', () => {
+    let s = run({ type: 'event', ev: q('t1', { answer_mode: 'CODE' }) });
+    s = reduce(s, ev({ type: 'tts_end', turn_id: 't1', played: true }));
+    s = reduce(s, ev({ type: 'answer_opened', turn_id: 't1', opened_at: '2026-10-28T00:00:01.000Z',
+      deadline_at: '2026-10-28T00:01:01.000Z', warn_at: '2026-10-28T00:00:51.000Z', limit_sec: 60 }));
+    expect(s.phase).toBe('ANSWERING');
+    expect(micOn(s)).toBe(false);
+  });
+});

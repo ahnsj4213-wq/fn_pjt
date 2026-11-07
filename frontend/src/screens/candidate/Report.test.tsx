@@ -106,6 +106,30 @@ describe('결과 리포트 (SC-A08)', () => {
     expect(screen.getByText(/'끝까지 마무리했습니다'/)).toBeTruthy();
   });
 
+  it('shows the four coding metrics with their weights, comments and code quotes', async () => {
+    const coding: MyReport['coding'] = { score: 92, weight: 20, time: 'O(n)', improvements: ['입력 검증을 추가하십시오'], items: [
+      { key: 'correctness', label: '정확성', score: 100, weight: 60, comment: '공개·비공개 테스트를 실행한 통과율입니다.', quote: null, evidence_status: 'MEASURED' },
+      { key: 'efficiency', label: '효율성', score: 80, weight: 20, comment: '입력 크기에 비례합니다.', quote: 'for x in values:', evidence_status: 'OK' },
+      { key: 'approach', label: '문제 해결 방식', score: 80, weight: 10, comment: '단계로 나누었습니다.', quote: 'def solve(values):', evidence_status: 'OK' },
+      { key: 'quality', label: '코드 품질', score: 80, weight: 10, comment: '이름이 분명합니다.', quote: 'total_sum = 0', evidence_status: 'OK' },
+    ] };
+    server.use(http.get('*/api/candidate/applications/a1/report', () => HttpResponse.json({ ...REPORT, coding })));
+    renderRoutes([{ path: '/my/applications/:aid/report', element: <Report /> }], { path: '/my/applications/a1/report', session: candidateSession });
+    const card = await screen.findByRole('region', { name: '코딩테스트 평가' });
+    for (const label of ['정확성', '효율성', '문제 해결 방식', '코드 품질']) expect(within(card).getByText(label)).toBeTruthy();
+    expect(within(card).getByText('×60%')).toBeTruthy();
+    expect(within(card).getByText('for x in values:')).toBeTruthy();
+    expect(within(card).getByText(/시간 복잡도 추정: O\(n\)/)).toBeTruthy();
+    expect(within(card).getByText('입력 검증을 추가하십시오')).toBeTruthy();
+  });
+
+  it('says so when no strength was found instead of showing an empty box', async () => {
+    server.use(http.get('*/api/candidate/applications/a1/report', () => HttpResponse.json({ ...REPORT, strengths: [] })));
+    open();
+    await screen.findByRole('heading', { name: '백엔드 개발자 (신입)' });
+    expect(screen.getByText('이번 면접에서는 찾지 못했습니다.')).toBeTruthy();
+  });
+
   it('opens the question a link points to', async () => {
     server.use(http.get('*/api/candidate/applications/a1/report', () => HttpResponse.json(REPORT)));
     open();

@@ -163,3 +163,36 @@ def test_langchain_tracing_is_forced_off_so_nothing_is_sent_out():
     import app.interview.checkpoint  # noqa: F401 - importing it sets the switches
 
     assert os.environ["LANGSMITH_TRACING"] == "false" and os.environ["LANGCHAIN_TRACING_V2"] == "false"
+
+
+async def test_live_coding_turn_shows_its_problem_and_nothing_hidden(client, make_client, voice_ai, older_live_question):
+    """The question says "화면의 문제": the screen must have it. Statement and public examples (with their explanations) come
+    from this application's own copy; hidden cases never; other turns and other candidates get nothing."""
+    from tests.helpers import candidate
+
+    app_id, cand = await started(client, make_client)
+    assert (await cand.post(url(app_id, "/interview/text-mode"))).status_code == 200
+    seen_plain = None
+    for _ in range(8):
+        st = (await cand.post(url(app_id, "/interview/next"))).json()
+        t = st["turn"]
+        if t["answer_mode"] == "CODE":
+            break
+        seen_plain = t
+        assert (await cand.post(url(app_id, f"/interview/turns/{t['turn_id']}/text-answer"), json={"text": "답변입니다."})).status_code == 202
+    else:
+        pytest.fail("no live-coding question in the default plan")
+    r = await cand.get(url(app_id, f"/interview/turns/{t['turn_id']}/problem"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "### 입력" in body["statement_md"] and "### 출력" in body["statement_md"]
+    assert len(body["examples"]) >= 1 and all(e["note"] and e["input"] and e["output"] for e in body["examples"])
+    hidden = [i for (i,) in await q("SELECT input FROM coding_testcases WHERE visibility='HIDDEN' AND problem_id IN "
+                                    "(SELECT id FROM coding_problems WHERE variant_for=:a)", a=app_id)]
+    assert hidden and not any(h in r.text for h in hidden)  # the application's own hidden cases exist and stay on the server
+    assert seen_plain is not None
+    plain = await cand.get(url(app_id, f"/interview/turns/{seen_plain['turn_id']}/problem"))
+    assert plain.status_code == 409 and plain.json()["error"]["code"] == "NOT_CODING_TURN"
+    other = make_client()
+    await candidate(other)
+    assert (await other.get(url(app_id, f"/interview/turns/{t['turn_id']}/problem"))).status_code == 404

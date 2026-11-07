@@ -18,7 +18,7 @@ from app.models import CodingProblem, CodingTestcase
 
 _NUM = re.compile(r"\d[\d,]*")
 _TICK = re.compile(r"`[^`]+`")
-_HEADINGS = ("### 입력", "### 출력")
+_HEADING = re.compile(r"^#+ .+$", re.MULTILINE)
 
 
 def seed_for(application_id: UUID) -> int:
@@ -27,7 +27,7 @@ def seed_for(application_id: UUID) -> int:
 
 def statement_preserves(original: str, rewritten: str) -> bool:
     """A rewrite may change the story and the names, never the format or the numbers that decide the answer."""
-    if any(h not in rewritten for h in _HEADINGS):
+    if not set(_HEADING.findall(original)) <= set(_HEADING.findall(rewritten)):  # every section of the explanation stays
         return False
     nums = lambda s: {n.replace(",", "") for n in _NUM.findall(s)}  # noqa: E731
     if not nums(original) <= nums(rewritten):
@@ -58,13 +58,15 @@ async def ensure_variant(db: AsyncSession, application_id: UUID, base: CodingPro
         async with db.begin_nested():
             v = CodingProblem(title=tpl.title, statement_md=text_, language=base.language, time_limit_ms=tpl.time_limit_ms,
                               memory_mb=tpl.memory_mb, is_active=False, difficulty=tpl.difficulty, template_key=tpl.key,
-                              variant_of=base.id, variant_for=application_id, variant_seed=seed)
+                              variant_of=base.id, variant_for=application_id, variant_seed=seed, level=tpl.level, tags=list(tpl.tags),
+                              starter_code=tpl.starter, source=tpl.source)
             db.add(v)
             await db.flush()
             ordinal = 0
-            for inp in tpl.public:
+            for n, inp in enumerate(tpl.public):
                 ordinal += 1
-                db.add(CodingTestcase(problem_id=v.id, ordinal=ordinal, visibility="PUBLIC", input=inp, expected_output=tpl.solve(inp)))
+                db.add(CodingTestcase(problem_id=v.id, ordinal=ordinal, visibility="PUBLIC", input=inp, expected_output=tpl.solve(inp),
+                                      note=tpl.notes[n] if n < len(tpl.notes) else None))
             for inp in tpl.hidden(random.Random(seed)):
                 ordinal += 1
                 db.add(CodingTestcase(problem_id=v.id, ordinal=ordinal, visibility="HIDDEN", input=inp, expected_output=tpl.solve(inp)))
@@ -83,4 +85,8 @@ async def problem_of(db: AsyncSession, application_id: UUID, posting) -> CodingP
     attempt = await db.get(CodingAttempt, application_id)
     if attempt is not None:
         return await db.get(CodingProblem, attempt.problem_id)
-    return await ensure_variant(db, application_id, await db.get(CodingProblem, posting.coding_problem_id))
+    from app.coding.selection import base_problem_for  # local: selection imports models the same way
+    from app.models import Application
+
+    app = await db.get(Application, application_id)
+    return await ensure_variant(db, application_id, await base_problem_for(db, app, posting))

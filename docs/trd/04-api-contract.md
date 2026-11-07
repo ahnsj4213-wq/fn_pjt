@@ -192,6 +192,7 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 |---|---|---|---|
 | `GET /api/recruiter/postings?status=DRAFT\|OPEN\|CLOSED` (구현) | → `[PostingSummaryOut]`. 탭은 `effective_status`로 거른다(OPEN인데 마감이 지나면 CLOSED, JOB-07). 최근 수정 순 | 422 | — |
 | `POST /api/recruiter/postings` (구현) | `PostingIn` → 201 `PostingDetailOut`(DRAFT). 기본 가중치 설정 v1을 함께 만든다(6.4) | 422 `VALIDATION` | — |
+| `POST /api/recruiter/postings/ai-draft` (구현) | `{title(2~200자), job_family?, experience_level?}` → `{duties, requirements, preferred, sources[]}`. 호출한 담당자 회사의 공고 공통 문서만 근거로 쓰는 초안(T11). 공고를 저장하지 않는다 | 403 역할, 409 `NO_COMPANY_DOCUMENTS`, 422 `DRAFT_FAILED`, 503 `AI_UNAVAILABLE` | `POSTING_AI_DRAFT` |
 | `GET /api/recruiter/postings/{pid}` (구현) | → `PostingDetailOut` | 404(삭제 포함) | — |
 | `PUT /api/recruiter/postings/{pid}` (구현) | `PostingIn`(+ `row_version` 필수) → 200 `PostingDetailOut`. 잠금 전에 `coding_enabled`가 바뀌면 그 기본 가중치로 새 설정 버전을 만들고(커스텀 질문 유지) `weights_reset: true` | 409 `VERSION_CONFLICT`(`current_row_version`), 409 `POSTING_CLOSED`, 409 `SETTINGS_LOCKED`, 422 `DEADLINE_IN_PAST`, 422 `VALIDATION` | — |
 | `GET /api/recruiter/postings/{pid}/preview` (구현) | → `PostingPublicOut`(지원자에게 보이는 모습, JOB-03) | 404 | — |
@@ -201,7 +202,7 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | `GET /api/recruiter/postings/{pid}/evaluation-settings` (구현) | → `EvalSettingsOut` | 404 | — |
 | `PUT /api/recruiter/postings/{pid}/evaluation-settings` (구현) | `{weights: {expertise, logic, attitude, delivery, coding?}, custom_question?}` → `EvalSettingsOut`(새 버전 행 + `current_settings_id`, 공고 행 `FOR UPDATE`). 빈 커스텀 질문은 NULL(자동 채움, QST-04) | 422 `WEIGHTS_CODING_MISMATCH`, 422 `WEIGHT_SUM_NOT_100`(`total`), 422 `WEIGHT_STEP`, 422 `CUSTOM_ITEM_DUPLICATE`, 422 `CUSTOM_QUESTION_TOO_SHORT`, 409 `SETTINGS_LOCKED` | SETTINGS_CHANGE(`version`) |
 | `POST /api/recruiter/postings/{pid}/evaluation-settings/reset` (구현) | → `EvalSettingsOut`(기본 가중치, 커스텀 질문 없음. ADM-05 [초기화]) | 409 `SETTINGS_LOCKED` | SETTINGS_CHANGE(`reset`) |
-| `GET /api/recruiter/coding-problems` (구현) | → `[{id, title, statement_md, language, public_examples: [{input, output}]}]`(활성 문제, OQ-14) | — | — |
+| `GET /api/recruiter/coding-problems` (구현) | → `[{id, title, statement_md, language, level, tags, source, public_examples: [{input, output}]}]`(활성 문제, OQ-14) | — | — |
 
 데이터 형식은 다음과 같다.
 - `PostingIn` = `{title?, job_family?(코드), requirements?, preferred?, duties?, headcount?, deadline_date?(KST 날짜), coding_enabled, coding_problem_id?, coding_time_limit_min?, row_version?}`. 임시저장 중에는 모두 선택이고, 완결성은 게시 때 검사한다.
@@ -218,7 +219,7 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | `GET /api/recruiter/applications/{aid}` | → `{id, candidate{name, email, phone}, posting{id, title}, attempt_status, interrupted_from, eval_status, decision, decision_version, answered_main_count, text_mode_used, can_decide, can_re_evaluate, applied_at, submitted_at}` | 404 | — |
 | `GET /api/recruiter/applications/{aid}/resume` · `/resume-file` | 지원 시점 스냅샷 / 원본 PDF(1.4, RES-08) | 404 | RESUME_FILE_VIEW(파일) |
 | `GET /api/recruiter/applications/{aid}/report` | → `RecruiterReport`(4.3). 리포트 탭을 열 때만 호출 | 409 `REPORT_NOT_READY` | REPORT_VIEW |
-| `GET /api/recruiter/applications/{aid}/coding-result` | → `{enabled, submission{kind, submitted_at, code, compile_ok, grading_status, passed, total, score}, tests[{ordinal, visibility, passed, outcome, time_ms, input, expected_output}], code_review}`. 비공개 테스트는 담당자에게만 공개(6.6). 코드 리뷰는 점수 미반영(COD-07) | 404 | — |
+| `GET /api/recruiter/applications/{aid}/coding-result` | → `{enabled, problem{title, level, tags, source, expected}, submission{kind, submitted_at, code, compile_ok, grading_status, passed, total, score}, tests[{ordinal, visibility, passed, outcome, time_ms, input, expected_output}], code_review}`. 비공개 테스트는 담당자에게만 공개(6.6). 코드 리뷰는 점수 미반영(COD-07) | 404 | — |
 | `POST /api/recruiter/applications/{aid}/decision` | `{decision: "PASS"\|"FAIL", expected_version}`(version = 결정 이력 행 수) → 200 `{decision, version, decided_at}`. 같은 값이면 변경 없이 200 | 409 `EVAL_NOT_DONE`, 409 `DECISION_CONFLICT`(`current_version`) | DECISION_SET(`from`, `to`) |
 | `GET /api/recruiter/applications/{aid}/decision-history` | → `[{from, to, decided_by{id, name}, decided_at}]`(ADM-04, AC-20) | 404 | — |
 | `POST /api/recruiter/applications/{aid}/re-evaluate` | → 202 `{eval_status: "PENDING"}`(ON_HOLD→PENDING, `register_evaluation(trigger="RECRUITER")`) | 409 `NOT_ON_HOLD` | RE_EVALUATE |
@@ -290,7 +291,7 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 
 | 메서드·경로 | 상태 조건 | 요청 → 응답 | 오류 |
 |---|---|---|---|
-| `GET …/coding` | CODING | → `{problem{title, statement_md, examples[{input, output}]}, language: "python", languages: ["python"], deadline_at, server_now, draft{code, revision, saved_at}, run_available}`. 예시는 PUBLIC만 | 409 `INVALID_STATE` |
+| `GET …/coding` | CODING | → `{problem{title, statement_md, level, time_limit_ms, memory_mb, starter_code, examples[{input, output, note}]}, started_at, language: "python", languages: ["python"], deadline_at, server_now, draft{code, revision, saved_at}, run_available}`. 예시는 PUBLIC만 | 409 `INVALID_STATE` |
 | `PUT …/coding/draft` | CODING, 마감 + 유예 전 | `{code, revision}`(클라이언트 단조 증가) → `{revision, saved_at, applied}`. 저장된 번호보다 클 때만 반영(D-11) | 409 `TIME_OVER`, 413 `CODE_TOO_LARGE` |
 | `POST …/coding/runs` | CODING, 마감 전 | `{code}` → `{run_id, verdict: NORMAL\|ABNORMAL\|ENV_ERROR, outcome, stdout, stderr, truncated, duration_ms}`. **동기 실행**(벽시계 10초), 공개 예시만. NORMAL = 제한 안 종료 코드 0(E-Q1). 점수 미반영(COD-03) | 429 `RUN_BUSY`, 503 `CODE_EXECUTION_UNAVAILABLE`, 409 `TIME_OVER` |
 | `GET …/coding/runs/{run_id}` | 본인 | → 같은 형식(새로고침 복구) | 404 |
@@ -425,3 +426,17 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | CP-8 | `GET /api/postings`, `GET /api/candidate/applications` | 페이지네이션이 없다 | 공고 수가 늘면 `page`·`size` 추가(응답 형식 `{items, total, page, size}`로 변경) | 지금 규모(시연)에서는 문제없음. 바꿀 때 D 타입을 함께 바꾼다 |
 | CP-9 | `postings/router.py` 게시 | 감사 로그가 없다(마감·삭제는 있음) | `POSTING_PUBLISH` 감사 추가 | ADM-10(P2) 공고 이력을 감사 로그로 대신할 수 있게(추적표 비고) |
 | CP-10 | `consent/router.py` | `answers`에 빠진 항목이 있으면 `fields` 없이 422 | `fields: [{loc: ["body", "answers", code], type: "missing"}]` | 1.2 형식 통일 |
+
+## 테스트 공고 재응시 (개발·검증 전용)
+
+`POST /api/candidate/applications/{aid}/interview/retake` — 지원자 본인만, `AIHIRE_RETAKE_POSTING_IDS`에 등록된 공고만(그 외 403 `RETAKE_NOT_ALLOWED`). 미제출 응시(`INTERVIEWING`·`INTERRUPTED`·`CODING`)의 기록을 지우고 `READY`로 되돌린다(그 외 상태 409 `INVALID_STATE`). 지원 id·동의·이력서 스냅샷은 유지한다. 설정이 비어 있으면(운영 기본값) 모든 공고에 1회 응시 규칙이 그대로 적용된다.
+
+## 회사 지식베이스 (ADR-0020)
+
+담당자만, 항상 로그인한 담당자의 회사 범위. 화면은 없고 API만 있다.
+
+| 메서드·경로 | 입력 | 동작 | 실패 |
+|---|---|---|---|
+| `GET /api/recruiter/knowledge` | - | 회사의 문서 목록 `{doc_id, doc_type, title, posting_id, chunks, indexed}` | 403 역할 불일치 |
+| `POST /api/recruiter/knowledge` | `{doc_type: PROJECT\|TECH\|COMPANY, title(1~120자), text(20~20000자), posting_id?}` | 500자 단위로 조각내 저장, 임베딩 작업 등록, 감사 로그 `KNOWLEDGE_ADD`. 201 | 404 다른 회사 공고, 422 형식 |
+| `DELETE /api/recruiter/knowledge/{doc_id}` | - | 삭제, 감사 로그 `KNOWLEDGE_DELETE`. 이미 만든 질문은 그대로. 204 | 404 다른 회사 문서 |

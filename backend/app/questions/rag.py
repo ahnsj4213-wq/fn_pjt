@@ -94,13 +94,18 @@ async def find_examples(db: AsyncSession, ai: AIClient, model: str, kind: str, q
     if len(vec) != EMBED_DIM:
         return []
     rows = (await db.execute(text(
-        "SELECT id, text FROM question_examples WHERE kind = :k AND embedding IS NOT NULL AND embedding_model = :m "
+        "SELECT id, text, 1 - (embedding <=> CAST(:v AS vector)) FROM question_examples "
+        "WHERE kind = :k AND embedding IS NOT NULL AND embedding_model = :m "
         "ORDER BY embedding <=> CAST(:v AS vector) LIMIT :n"),
         {"k": kind, "m": model, "v": vec_literal(vec), "n": k + len(exclude)})).all()
     skip = set(exclude)
-    out = [Example(i, t) for i, t in rows if t not in skip][:k]
+    kept = [r for r in rows if r[1] not in skip][:k]
+    out = [Example(i, t) for i, t, _ in kept]
     if not out:
         log_event(log, "rag_skipped", kind=kind, reason="no_indexed_examples")
+    else:  # ids and scores only (SEC-08): the query holds resume and posting text
+        log_event(log, "rag_search", kind=kind, hits=len(out), top_similarity=round(float(kept[0][2]), 3),
+                  example_ids=[str(e.id) for e in out])
     return out
 
 

@@ -37,3 +37,9 @@
 | 0014 | 컨테이너 구성도: frontend(Next.js)·api·mailer·worker(Celery)·scheduler·llm-rt·llm-eval·stt·tts·embed·postgres(pgvector)·redis·minio, 샌드박스는 worker가 실행 | 사용자 결정 | ADR-0001 서비스 분리, ADR-0010 앞단 대체 |
 | 0015 | 컨테이너 통합 12→8: frontend·api(+migrate)·worker(+beat)·postgres·redis·llm-gpu·ai(STT·TTS·평가 LLM·임베딩)·mailer | 사용자 결정 | ADR-0014 배치 부분 대체 |
 | 0016 | 면접 진행과 질문 만들기를 LangGraph 그래프로(진행: present→ask→wait_answer(interrupt)→transcribe→decide_followup→present/finish, 만들기: plan→분야별 채우기→verify→write)present→ask→wait_answer(interrupt)→transcribe→decide_followup→present/finish), PostgreSQL 체크포인트, 전송은 TurnIO로 주입 | 사용자 결정 | ADR-0009 턴 엔진 위의 흐름 제어 |
+| 0017 | 코딩 점수 = 정확성 60·효율성 20·문제 해결 방식 10·코드 품질 10, 지원자·담당자 리포트 공개, 라이브 코딩도 채점 | 사용자 결정 | PRD 6.5, COD-07 변경 |
+| 0018 | 팀 표준 화면정의서의 색·글꼴·컴포넌트 모양 적용, 다크 모드 제거, 아키텍처·라우트·API는 유지 | 사용자 결정 | wireframe-v14는 구조 기준으로 유지 |
+| 0019 | 꼬리질문 판단 제한 5초 → 30초, 인용 불일치 1회 재요청 (PRD 6.2의 5초와 충돌, 실측 근거) | 사용자 결정 | RULE-6.2 수치 변경 |
+| 0020 | 회사 지식베이스 RAG 필수화: 회사·공고 범위 검색, 동기·직무 질문 생성 우선, 근거 `grounding.sources`, 자료 없으면 공고 기반 대체, 가상 기업 12곳 | 사용자 결정 | QST-01 순서 변경 |
+| 0021 | 코딩 문제은행 Lv.0~5 55문제, 직무·경력·난이도로 공고별 레벨을 정하고 지원 건마다 최근 출제를 피해 선정, 태그·출처는 담당자 전용 | 사용자 요청 | COD-01~06, 이전 "하~중 문제를 공고에 고정" 결정 변경 |
+| 0022 | 본질문을 면접 중에 한 문항씩 생성: 시작 전에는 계획과 첫 질문만, 이후는 직전 답변·이력서·회사 자료로 생성, 실패·지연은 질문은행 | 사용자 결정 | QST-02 변경, `AIHIRE_QUESTION_MODE=upfront`로 원래 방식 |

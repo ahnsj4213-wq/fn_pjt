@@ -80,7 +80,8 @@ class FakeAIClient:
 
     @staticmethod
     def _reply_question_generate(inp: dict) -> dict:
-        src = QuestionGenerate._source(inp)
+        docs = [f"{d['title']}: {d['text']}" for d in inp.get("knowledge") or []]
+        src = "\n".join(docs) if docs and inp.get("kind") == "COMPANY" else QuestionGenerate._source(inp)
         pieces = [x.strip() for x in src.replace(".", "\n").splitlines() if len(x.strip()) >= 4]
         qs = []
         for i, basis in enumerate(pieces[: int(inp.get("n", 3)) + 2]):
@@ -133,8 +134,11 @@ class FakeAIClient:
 
     @staticmethod
     def _reply_code_review(inp: dict) -> dict:
-        return {"readability": "함수와 변수 이름이 역할을 잘 드러낸다.",
-                "complexity": {"time": "unknown", "comment": "입력 크기에 따른 반복 구조를 확인해야 한다."},
+        lines = [ln.strip() for ln in inp.get("code", "").splitlines() if len(ln.strip()) >= 6]
+        quote = lines[0][:50] if lines else ""
+        return {"efficiency": {"quote": quote, "time": "O(n)", "comment": "입력 크기에 비례해 동작한다.", "score": 4},
+                "approach": {"quote": quote, "comment": "요구사항을 단계로 나누어 풀었다.", "score": 4},
+                "quality": {"quote": quote, "comment": "변수 이름이 역할을 드러낸다.", "score": 4},
                 "improvements": ["예외 입력에 대한 처리를 추가하면 좋다."]}
 
     @staticmethod
@@ -145,6 +149,14 @@ class FakeAIClient:
     @staticmethod
     def _reply_problem_rewrite(inp: dict) -> dict:
         return {"statement": inp["statement"]}  # the fake keeps the wording (it has to pass the preserve check)
+
+    @staticmethod
+    def _reply_question_adapt(inp: dict) -> dict:
+        return {"questions": []}  # every bank question keeps its own text unless a test says otherwise
+
+    @staticmethod
+    def _reply_posting_draft(inp: dict) -> dict:
+        return {"duties": ["회사 자료에 나온 서비스를 개발하고 개선합니다."], "requirements": ["관련 업무를 끝까지 맡아 본 경험."], "preferred": []}
 
     # ── speech / embeddings ──
     async def stt(self, pcm16k: bytes, *, purpose: str = "answer") -> STTResult:

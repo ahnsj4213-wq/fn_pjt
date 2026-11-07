@@ -11,6 +11,7 @@ The MinIO SDK is synchronous; calls run in a worker thread so the event loop (We
 """
 import asyncio
 import io
+import os
 from pathlib import Path
 from typing import Protocol
 
@@ -38,9 +39,16 @@ class LocalStorage:
         return self.root / _safe(key)
 
     async def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
-        p = self._path(key)
+        await asyncio.to_thread(self._write, self._path(key), data)
+
+    def _write(self, p: Path, data: bytes) -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(p.write_bytes, data)
+        p.write_bytes(data)
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            # The worker runs as root (docker.sock) and shares this volume with the api's user: keep what it makes writable.
+            owner = self.root.stat()
+            for path in (p.parent, p):
+                os.chown(path, owner.st_uid, owner.st_gid)
 
     async def get(self, key: str) -> bytes | None:
         p = self._path(key)

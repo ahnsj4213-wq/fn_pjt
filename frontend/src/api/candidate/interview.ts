@@ -39,6 +39,8 @@ export interface InterviewState {
   followup_max: number | null;
   gaze_warnings: number;
   next_after_interview: 'CODING' | 'DONE';
+  live_code_graded?: boolean;
+  retake_allowed?: boolean;
   warnings: string[];
   turn: TurnView | null;
   slot_grace_until: string | null;
@@ -55,6 +57,8 @@ export interface AiHealth {
 export const prepareInterview = (aid: string) =>
   apiFetch<{ attempt_status: AttemptStatus; questions_ready: boolean }>(`${base(aid)}/interview/prepare`, { method: 'POST' });
 export const fetchInterviewState = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/state`);
+export const retakeInterview = (aid: string) =>
+  apiFetch<{ attempt_status: AttemptStatus; posting_id: string }>(`${base(aid)}/interview/retake`, { method: 'POST' });
 export const startInterview = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/start`, { method: 'POST' });
 export const resumeInterview = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/resume`, { method: 'POST' });
 export const enterTextMode = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/text-mode`, { method: 'POST' });
@@ -70,6 +74,10 @@ export const startAnswer = (aid: string, turnId: string) =>
 export const submitTurnCode = (aid: string, turnId: string, language: string, code: string) =>
   apiFetch<{ turn_id: string; saved_at: string }>(`${base(aid)}/interview/turns/${enc(turnId)}/code`,
     { method: 'PUT', body: { language, code } });
+/** Live coding: the problem shown on screen for this turn (statement + PUBLIC examples with explanations). */
+export interface TurnProblem { title: string; statement_md: string; examples: { input: string; output: string; note?: string | null }[] }
+export const fetchTurnProblem = (aid: string, turnId: string) =>
+  apiFetch<TurnProblem>(`${base(aid)}/interview/turns/${enc(turnId)}/problem`);
 export const sendTextAnswer = (aid: string, turnId: string, text: string) =>
   apiFetch<{ turn_id: string; state: string }>(`${base(aid)}/interview/turns/${enc(turnId)}/text-answer`,
     { method: 'POST', body: { text } });
@@ -108,9 +116,13 @@ export const sendOffer = (aid: string, purpose: 'PRECHECK' | 'INTERVIEW', sdp: s
 
 // ---- coding (TRD 04 §5.3) ----
 export interface CodingView {
-  problem: { title: string; statement_md: string; examples: { input: string; output: string }[] };
+  problem: {
+    title: string; statement_md: string; level: number | null; time_limit_ms: number; memory_mb: number; starter_code: string;
+    examples: { input: string; output: string; note?: string | null }[];
+  };
   language: string;
   languages: string[];
+  started_at: string;
   deadline_at: string;
   server_now: string;
   draft: { code: string; revision: number; saved_at: string | null };

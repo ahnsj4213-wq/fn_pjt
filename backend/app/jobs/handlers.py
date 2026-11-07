@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai import rubric
 from app.ai.client import get_ai_client
 from app.coding import grading
+from app.coding.selection import base_problem_for
 from app.coding.variants import ensure_variant, get_variant, problem_of
 from app.coding.runner import RunnerUnavailable
 from app.core.config import get_settings
@@ -48,6 +49,7 @@ from app.questions import graph as compose_graph
 from app.questions import rag
 from app.resumes import ocr
 from app.resumes.schemas import from_ai_resume
+from app.resumes.sections import apply_sections, read_sections
 
 log = logging.getLogger("app.worker")
 
@@ -57,9 +59,17 @@ async def _prepare_coding_variant(db: AsyncSession, app: Application) -> None:
     """Make this application's coding problem now, with the statement reworded by the model. Best effort: a failure here
     only means the variant is made unreworded when the interview ends (turns.finish_interview)."""
     posting = await db.get(JobPosting, app.posting_id)
-    if not posting.coding_enabled or not posting.coding_problem_id or await get_variant(db, app.id) is not None:
+    if await get_variant(db, app.id) is not None:
         return
-    base = await db.get(CodingProblem, posting.coding_problem_id)
+    # A live-coding question (SC-A06) names its problem; otherwise the posting's coding test does.
+    live = (await db.execute(select(InterviewQuestion.grounding).where(
+        InterviewQuestion.application_id == app.id, InterviewQuestion.source == "PROBLEM"))).scalars().first()
+    if live and live.get("problem_id"):
+        base = await db.get(CodingProblem, UUID(live["problem_id"]))
+    elif posting.coding_enabled:
+        base = await base_problem_for(db, app, posting)
+    else:
+        return
     statement = None
     try:
         r = await get_ai_client().llm("problem_rewrite", {"statement": base.statement_md}, lane="BATCH")
@@ -102,6 +112,17 @@ async def index_question_examples(ctx: JobCtx) -> None:
     async with session_scope() as db:
         await fenced_complete(db, ctx)
     log_event(log, "question_examples_indexed", **counts)
+
+
+@handler("index_company_knowledge")
+async def index_company_knowledge(ctx: JobCtx) -> None:
+    from app.questions import knowledge
+
+    async with sessionmaker()() as db:  # commits per batch itself
+        counts = await knowledge.embed_pending(db, get_ai_client(), get_settings().embed_model)
+    async with session_scope() as db:
+        await fenced_complete(db, ctx)
+    log_event(log, "company_knowledge_indexed", count=counts["embedded"])
 
 
 # ── tts_pregen (T20: not a start condition) ────────────────────────────────────
@@ -160,10 +181,12 @@ async def extract_resume(ctx: JobCtx) -> None:
     if len(source.strip()) < ocr.MIN_CHARS_PER_PAGE:
         r_status, values = "NO_TEXT", {"extraction_status": "NO_TEXT"}
     else:
-        r = await get_ai_client().llm("resume_extract", {"source_text": source}, lane="INTERACTIVE")
+        sections = read_sections(source)
+        r = await get_ai_client().llm("resume_extract", {"source_text": sections.body if sections.body.strip() else source},
+                                      lane="INTERACTIVE")
         r_status = r.status
         if r.status == "OK":
-            fields = from_ai_resume(r.output)
+            fields = apply_sections(from_ai_resume(r.output), sections)
             values = {"extraction_status": "DONE", "extracted_fields": fields}
             if lines:
                 values["low_conf_fields"] = ocr.low_conf_fields(fields, lines, cfg.ocr_low_conf)

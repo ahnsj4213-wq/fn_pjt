@@ -155,7 +155,7 @@ function onEvent(s: InterviewUi, ev: ServerEvent): InterviewUi {
 
 /** The mic is on only while an answer is open or closing (C11, C16: kept until answer_finalized). */
 export function micOn(s: InterviewUi): boolean {
-  return s.phase === 'ANSWERING' || s.phase === 'CLOSING';
+  return (s.phase === 'ANSWERING' || s.phase === 'CLOSING') && s.turn?.answerMode !== 'CODE';
 }
 
 /**

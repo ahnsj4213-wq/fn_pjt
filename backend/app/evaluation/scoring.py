@@ -8,9 +8,12 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from app.core.constants import CRITERIA, Criterion
 
-SCORING_VERSION = "score-v2"
+SCORING_VERSION = "score-v3"
 RULE_WEIGHT = Decimal("0.3")  # share of an area score that comes from code-measured values (details.py) when there are any
 Q = Decimal("0.01")
+# Inside the coding score (ADR-0017). Correctness is measured by running the tests; the rest are model judgements, so
+# the measured part keeps the largest share.
+CODING_METRIC_WEIGHTS = {"correctness": 60, "efficiency": 20, "approach": 10, "quality": 10}
 WEIGHT_KEYS = {Criterion.EXPERTISE: "expertise", Criterion.LOGIC: "logic", Criterion.ATTITUDE: "attitude",
                Criterion.DELIVERY: "delivery"}
 
@@ -64,6 +67,20 @@ def coding_score(passed: int, total: int) -> Decimal:
     if total <= 0:
         return Decimal("0.00")
     return q2(Decimal(passed) * 100 / Decimal(total))
+
+
+def measured_efficiency(score: int, passed: int, limit_hit: bool) -> int:
+    """What the tests showed overrides the model's reading: nothing passed -> 1; a time or memory limit hit -> at most 2."""
+    if passed <= 0:
+        return 1
+    return min(score, 2) if limit_hit else score
+
+
+def coding_total(correctness: Decimal, efficiency: int, approach: int, quality: int) -> Decimal:
+    """The coding score: correctness (0~100, measured) plus the three 1~5 judgements x 20, weighted (ADR-0017)."""
+    w = CODING_METRIC_WEIGHTS
+    judged = efficiency * 20 * w["efficiency"] + approach * 20 * w["approach"] + quality * 20 * w["quality"]
+    return q2((correctness * w["correctness"] + Decimal(judged)) / 100)
 
 
 def compute(questions: list[QuestionScores], weights: dict[str, int], coding: Decimal | None,

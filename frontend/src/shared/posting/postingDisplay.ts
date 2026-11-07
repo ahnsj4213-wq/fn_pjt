@@ -19,8 +19,8 @@ export function lines(text: string | null | undefined): string[] {
   return (text ?? '').split('\n').map((l) => l.replace(/^[-•·*]\s*/, '').trim()).filter(Boolean);
 }
 
-/** Poster colours of the wireframe; a company keeps one colour everywhere (no image: SC-R04 "기본 디자인"). */
-const POSTER_COLORS = ['#1f5fa8', '#0f766e', '#7c3aed', '#c2410c', '#be185d', '#334155'];
+/** Violet tones of the team palette; a company keeps one colour everywhere (no image: SC-R04 "기본 디자인"). */
+const POSTER_COLORS = ['#5B2BB8', '#4A1FA0', '#7C4DDB', '#3F1F8C', '#6A3CC9', '#2F1A6B'];
 
 export function posterColor(company: string): string {
   let h = 0;

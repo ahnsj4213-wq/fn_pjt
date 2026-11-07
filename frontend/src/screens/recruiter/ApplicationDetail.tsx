@@ -3,7 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router';
 import { useSession } from '@/app/session';
 import {
-  createNote, fetchApplication, fetchApplicationResume, fetchDecisionHistory, fetchNotes, fetchReport, reEvaluate, resumeFileUrl, saveDecision,
+  createNote, fetchApplication, fetchCodingResult, fetchApplicationResume, fetchDecisionHistory, fetchNotes, fetchReport, reEvaluate, resumeFileUrl, saveDecision,
   type ApplicationDetail as Detail, type CriterionKey,
 } from '@/api/recruiter';
 import { formatDate, formatDateTime } from '@/shared/format';
@@ -15,6 +15,24 @@ import { MailModal } from './MailModal';
 
 const CRITERIA: Record<CriterionKey, string> = { EXPERTISE: '전문성', LOGIC: '논리성', ATTITUDE: '표현 및 태도', DELIVERY: '전달력' };
 const SLOT: Record<string, string> = { PERSONALITY: '인성', MOTIVATION: '지원 동기', JOB_SKILL: '직무 기술', PROJECT: '프로젝트 경험', COLLABORATION: '협업', RESUME: '이력서', COMPANY: '기업', JOB: '직무', CUSTOM: '공고 질문' };
+
+/** The problem the server gave this applicant: level, tags and origin stay on the recruiter's side (ADR-0021). */
+function CodingProblemInfo({ id }: { id: string }) {
+  const q = useQuery({ queryKey: ['recruiter', 'coding-result', id], queryFn: () => fetchCodingResult(id) });
+  const p = q.data?.problem;
+  if (!p) return null;
+  const s = q.data?.submission;
+  return (
+    <div data-testid="coding-problem-info">
+      <h3 style={{ margin: '0 0 4px' }}>출제 문제</h3>
+      <p className="fine" style={{ margin: 0 }}>
+        {p.level !== null && <b>Lv.{p.level} </b>}{p.title}{p.tags.length > 0 && ` · ${p.tags.join(', ')}`} · {p.source?.origin === 'ORIGINAL' ? '자체 제작' : '출처 기록 없음'}
+        {s?.total != null && ` · 자동 채점 ${s.passed}/${s.total}`}
+      </p>
+      {p.expected && <p className="fine" style={{ margin: '4px 0 0' }}>기대 수준: {p.expected}</p>}
+    </div>
+  );
+}
 
 function Resume({ id }: { id: string }) {
   const r = useQuery({ queryKey: ['recruiter', 'resume', id], queryFn: () => fetchApplicationResume(id) });
@@ -56,6 +74,7 @@ function Report({ id }: { id: string }) {
                 {r.coding && <div className="srow"><span>코딩테스트</span><span className="bar"><i style={{ width: `${Number(r.coding.score)}%` }} /></span>
                   <b>{Math.round(Number(r.coding.score))}</b><small>가중치 {r.coding.weight ?? 0}%</small></div>}
               </div>
+              {r.coding && <CodingProblemInfo id={id} />}
               <div className="total"><span>AI 종합 점수</span><b style={{ fontSize: 20 }}>{Math.round(Number(r.total_score))}점</b></div>
               {r.insufficient_count > 0 && <p className="hint" style={{ margin: 0 }}>근거가 부족해 점수를 내지 못한 항목이 {r.insufficient_count}개 있습니다.</p>}
               <div><b>요약</b><PlainText text={r.summary} /></div>

@@ -6,7 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.timeutil import utcnow
 from app.jobs.queue import enqueue
-from app.models import Application, CodingAttempt, CodingSubmission, InterviewSlot
+from app.models import (
+    Application,
+    CodingAttempt,
+    CodingSubmission,
+    InterviewAnswer,
+    InterviewQuestion,
+    InterviewSlot,
+    JobPosting,
+)
 
 
 async def register_evaluation(db: AsyncSession, app: Application, trigger: str = "SUBMIT",
@@ -27,9 +35,12 @@ async def expire_unfinished(db: AsyncSession, posting_id: UUID) -> int:
     now = utcnow()
     for app in rows:
         was_coding = app.interrupted_from == "CODING"
+        was_interview = app.interrupted_from == "INTERVIEWING"
         app.attempt_status, app.interrupted_from, app.expired_at = "EXPIRED", None, now
         await db.flush()
         grade_job = await auto_submit_draft(db, app, kind="AUTO_EXPIRED") if was_coding else None
+        if was_interview and (await db.get(JobPosting, posting_id)).coding_enabled:
+            grade_job = await submit_live_code(db, app, only_if_written=True)
         if app.answered_main_count > 0:  # OQ-07: evaluate answered questions only; zero answers -> no evaluation
             await register_evaluation(db, app, depends_on=grade_job)
         await db.execute(delete(InterviewSlot).where(InterviewSlot.application_id == app.id))
@@ -39,14 +50,28 @@ async def expire_unfinished(db: AsyncSession, posting_id: UUID) -> int:
 async def auto_submit_draft(db: AsyncSession, app: Application, kind: str) -> int | None:
     """COD-05: submit the last saved draft once (manual and automatic submits race safely on the unique key).
     Returns the grading job id, or None when a submission already existed."""
+    attempt = await db.get(CodingAttempt, app.id, with_for_update=True)
+    if attempt is None:
+        return None
+    return await _snapshot_and_grade(db, app, attempt.draft_code or "", kind)
+
+
+async def submit_live_code(db: AsyncSession, app: Application, *, only_if_written: bool = False) -> int | None:
+    """A live-coding question replaces the separate test (SC-A06), so its code is what gets graded in a coding posting
+    (screen-spec decision 2026-10-30, ADR-0017). No code = an empty submission (scores 0) unless `only_if_written`."""
+    code = await db.scalar(select(InterviewAnswer.code_text).join(
+        InterviewQuestion, InterviewQuestion.id == InterviewAnswer.question_id).where(
+        InterviewAnswer.application_id == app.id, InterviewQuestion.answer_mode == "CODE", InterviewQuestion.role == "MAIN"))
+    if not code and only_if_written:
+        return None
+    return await _snapshot_and_grade(db, app, code or "", "LIVE")
+
+
+async def _snapshot_and_grade(db: AsyncSession, app: Application, code: str, kind: str) -> int | None:
     import hashlib
 
     from sqlalchemy.dialects.postgresql import insert
 
-    attempt = await db.get(CodingAttempt, app.id, with_for_update=True)
-    if attempt is None:
-        return None
-    code = attempt.draft_code or ""
     res = await db.execute(insert(CodingSubmission).values(
         application_id=app.id, company_id=app.company_id, code=code, code_sha256=hashlib.sha256(code.encode()).digest(),
         kind=kind).on_conflict_do_nothing(index_elements=["application_id"]).returning(CodingSubmission.id))

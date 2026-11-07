@@ -1,16 +1,20 @@
 """The question composition graph (LangGraph, ADR-0016, ai-architecture 6.1): one run per `compose_questions` job,
 `thread_id` = compose:<application>:<settings version>, checkpoints in PostgreSQL.
 
-    START -> plan -> personality -> collaboration -> project -> motivation -> job_skill -> verify -> write -> END
+    START -> plan -> personality -> collaboration -> project -> motivation -> job_skill -> adapt -> verify -> write -> END
 
-  plan           the plan's slots get their questions' source: asked as written (CUSTOM), the coding problem (PROBLEM), or
+  plan           live mode (default, ADR-0022): only the first slot is composed here; the plan is stored with the set and
+                 app.questions.live composes each later question when the candidate reaches it, from the answers so far.
+                 The plan's slots get their questions' source: asked as written (CUSTOM), the coding problem (PROBLEM), or
                  left to the area nodes below.
-  personality    bank only (least used, ties random)                    } each area node picks from the bank first,
-  collaboration  bank only                                              } makes the rest with T2/T3 (RAG examples,
-  project        T3 against the resume, else the job bank               } copies dropped), and falls back to the question
-  motivation     company bank, T2 for the rest                          } bank and the shared seed questions. Which source
-  job_skill      job bank, T2 for the rest                              } wins is decided by code; a failed or invalid
+  personality    bank only (least used, ties random)                    } the other nodes make their questions with T2/T3
+  collaboration  bank only                                              } (company documents, RAG examples, copies dropped)
+  project        T3 against the resume, else the job bank               } and fall back to the question bank and the
+  motivation     T2 from the company's documents, else company bank     } shared seed questions. Which source wins is
+  job_skill      T2 from posting and documents, else job bank           } decided by code; a failed or invalid
                                                                           model answer only means the next source.
+  adapt          T12: every question taken from the bank is asked again with something concrete from the resume or the company
+                 documents (other companies' documents as job cases when it has none); a rewrite that fails the checks keeps the bank text
   verify         every slot has exactly one question and no two are alike (ComposeError otherwise)
   write          one transaction: the live set of an older settings version is superseded, the READY set with its immutable
                  MAIN rows is written, and the TTS pre-synthesis job is queued.
@@ -47,6 +51,7 @@ class State(TypedDict, total=False):
     empty: dict[str, list[list]]  # area -> [[seq, slot], ...] still to fill
     picked: list[dict]  # C.Picked as plain data
     qset_id: str | None
+    live: bool  # only the first question now; app.questions.live makes the others during the interview (ADR-0022)
 
 
 # ── plain data <-> composer objects ────────────────────────────────────────────
@@ -83,17 +88,20 @@ async def plan(state: State) -> dict:
     async with session_scope() as db:
         app, settings, c = await _context(db, state)
         slots, problem = await C.plan_slots(db, c.posting, settings)
+        live = get_settings().question_mode == "live"
+        first = min(s.seq for s in slots)
         empty: dict[str, list[list]] = {a.value: [] for a in Area}
         for sl in slots:
+            if live and sl.seq != first:
+                continue
             if sl.text is not None:
-                c.picked.append(C.Picked(sl.seq, sl.area.value, sl.text, "CUSTOM"))
+                c.picked.append(C.custom_pick(settings, sl))
             elif sl.mode == "CODE":
-                c.picked.append(C.Picked(sl.seq, sl.area.value, f"{problem.title}: 화면의 문제를 코드로 풀면서, 어떻게 "
-                                         "풀었는지 말로 설명해 주십시오.", "PROBLEM", grounding={"problem_id": str(problem.id)}))
+                c.picked.append(C.Picked(sl.seq, sl.area.value, f"{problem.title}: {C.CODE_QUESTION}", "PROBLEM", grounding={"problem_id": str(problem.id)}))
             else:
                 empty[sl.area.value].append([sl.seq, sl.area.value])
         return {"plan": [_slot_to_dict(s) for s in slots], "problem_id": str(problem.id) if problem else None,
-                "empty": empty, "picked": [_picked_to_dict(p) for p in c.picked]}
+                "empty": empty, "picked": [_picked_to_dict(p) for p in c.picked], "live": live}
 
 
 def _area_node(area: Area, fill):
@@ -110,11 +118,20 @@ def _area_node(area: Area, fill):
 
 
 async def _fill_personality(db, c, slots):
-    await C._fill_bank_only(db, c, "PERSONALITY", slots)
+    await C._fill_bank_only(db, c, "PERSONALITY", slots, (await C.adapt_context(c))[2])
 
 
 async def _fill_collaboration(db, c, slots):
-    await C._fill_bank_only(db, c, "COLLABORATION", slots)
+    await C._fill_bank_only(db, c, "COLLABORATION", slots, (await C.adapt_context(c))[2])
+
+
+async def adapt(state: State) -> dict:
+    """T12: the common questions taken from the bank, fitted to the resume and the company documents (bank text when it fails)."""
+    async with session_scope() as db:
+        _app, _settings, c = await _context(db, state)
+        resume, docs, _about = await C.adapt_context(c)
+        await C._adapt_bank_picks(c, resume, docs)
+        return {"picked": [_picked_to_dict(p) for p in c.picked]}
 
 
 async def _fill_project(db, c, slots):
@@ -131,7 +148,7 @@ async def _fill_job(db, c, slots):
 
 async def verify(state: State) -> dict:
     picked = [_picked_from_dict(p) for p in state["picked"]]
-    want = sorted(s["seq"] for s in state["plan"])
+    want = sorted(s["seq"] for s in state["plan"])[:1] if state.get("live") else sorted(s["seq"] for s in state["plan"])
     if sorted(p.seq for p in picked) != want:
         raise C.ComposeError(f"slots {want} but questions for {sorted(p.seq for p in picked)}")
     texts = [p.text for p in sorted(picked, key=lambda x: x.seq)]
@@ -154,7 +171,7 @@ async def write(state: State) -> dict:
             live.status = "SUPERSEDED"  # weights/custom question changed before the interview (start() re-enqueues)
             await db.flush()
         qset = await C.write_set(db, app, settings, [_slot_from_dict(s) for s in state["plan"]],
-                                 sorted((_picked_from_dict(p) for p in state["picked"]), key=lambda p: p.seq))
+                                 sorted((_picked_from_dict(p) for p in state["picked"]), key=lambda p: p.seq), live=bool(state.get("live")))
         await enqueue(db, "tts_pregen", {"question_set_id": str(qset.id)}, application_id=app_id, dedupe_key=f"tts:{qset.id}")
         return {"qset_id": str(qset.id)}
 
@@ -169,10 +186,11 @@ def build() -> StateGraph:
     g.add_node("plan", plan)
     for name, area, fill in AREA_NODES:
         g.add_node(name, _area_node(area, fill))
+    g.add_node("adapt", adapt)
     g.add_node("verify", verify)
     g.add_node("write", write)
     g.add_edge(START, "plan")
-    chain = ["plan"] + [n for n, _a, _f in AREA_NODES] + ["verify", "write"]
+    chain = ["plan"] + [n for n, _a, _f in AREA_NODES] + ["adapt", "verify", "write"]
     for a, b in zip(chain, chain[1:]):
         g.add_edge(a, b)
     g.add_edge("write", END)

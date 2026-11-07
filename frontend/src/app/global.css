@@ -20,7 +20,7 @@
   --space-4: 16px;
   --space-6: 24px;
   --space-8: 32px;
-  /* Self-hosted Gothic A1 / IBM Plex Sans KR (@fontsource, OFL-1.1): no web-font download (AC-22). */
+  /* Self-hosted Pretendard Variable (OFL-1.1): no web-font download (AC-22). */
   --font-sans: var(--font-body);
   --font-mono: Consolas, 'D2Coding', ui-monospace, monospace;
 }

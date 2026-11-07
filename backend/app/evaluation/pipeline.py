@@ -5,8 +5,8 @@
 - `load_report_inputs` + `build_report`: the final run. The first reads everything in one short transaction; the
   second makes the model calls with no transaction open (they take minutes on the CPU, past the 30 s
   idle-in-transaction limit of core/db.py). Units come from `answer_pre_evaluations` with the current manifest hash
-  or a fresh T5 call; scores are computed by code (scoring.py); T6 summary, T7 candidate feedback and T8 code review
-  (P1, never scored) produce the prose. Nothing is written here: the caller persists inside its fenced transaction.
+  or a fresh T5 call; scores are computed by code (scoring.py); T6 summary and T7 candidate feedback produce the prose,
+  T8 gives the coding judgements the coding score is computed from (ADR-0017). Nothing is written here: the caller persists inside its fenced transaction.
 """
 import asyncio
 import time
@@ -18,23 +18,37 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import rubric
 from app.ai.client import AIClient
+from app.coding.grading import strip_comments
 from app.core.constants import CRITERIA, Criterion
 from app.core.db import session_scope
 from app.core.storage import get_storage
 from app.evaluation import details
-from app.evaluation.scoring import RULE_WEIGHT, SCORING_VERSION, QuestionScores, ScoreResult, UnitScores, compute, no_answer_unit
+from app.evaluation.scoring import (
+    CODING_METRIC_WEIGHTS,
+    RULE_WEIGHT,
+    SCORING_VERSION,
+    QuestionScores,
+    ScoreResult,
+    UnitScores,
+    coding_total,
+    compute,
+    measured_efficiency,
+    no_answer_unit,
+)
 from app.models import (
     AnswerPreEvaluation,
     Application,
     CodingProblem,
     CodingSubmission,
     CodingTestcase,
+    CodingTestResult,
     InterviewAnswer,
     InterviewQuestion,
     Job,
     JobPosting,
     PostingEvalSettings,
 )
+from app.coding.levels import LEVELS
 from app.coding.variants import problem_of
 from app.questions.compose import job_brief
 
@@ -105,7 +119,9 @@ async def _coding(db: AsyncSession, app: Application, posting: JobPosting) -> tu
         return {"passed": 0, "total": 0, "reached": False}, None  # OQ-07: never reached the coding step -> 0
     if sub.grading_status != "DONE":
         raise CodingNotGraded(str(sub.id))
-    return {"passed": sub.passed, "total": sub.total, "score": sub.score, "reached": True}, sub
+    limit_hit = await db.scalar(select(func.count()).select_from(CodingTestResult).where(
+        CodingTestResult.submission_id == sub.id, CodingTestResult.outcome.in_(["TIMEOUT", "MEMORY_LIMIT"])))
+    return {"passed": sub.passed, "total": sub.total, "score": sub.score, "reached": True, "limit_hit": bool(limit_hit)}, sub
 
 
 @dataclass
@@ -198,17 +214,20 @@ async def build_report(ai: AIClient, app: Application, inp: ReportInputs) -> Rep
         raise EvaluationFailed(f"expected {len(mains)} main questions, found {len(question_scores)}")
 
     coding, weights = inp.coding, inp.weights
+    review = await _code_review(ai, posting, inp) if inp.problem is not None else None
     coding_value = None
-    if "coding" in weights:
-        coding_value = Decimal(coding["score"]) if coding and coding.get("reached") else Decimal("0.00")
     det = await details.analyze(rows, units, get_storage())
+    if "coding" in weights:
+        coding_value, det.detail["coding"] = _coding_metrics(coding, review)
     custom_scores, det.detail["custom"] = await _custom_items(ai, rows, inp.custom_items)
     scores = compute(question_scores, weights, coding_value, det.rule_scores, custom_scores)
     det.detail["blend"] = {"scoring": SCORING_VERSION, "rule_weight": float(RULE_WEIGHT), "rule_scores": {k: float(v) for k, v in det.rule_scores.items()}}
 
-    summary = await _summary(ai, rows, units, scores)
-    feedback = await _feedback(ai, rows, units, scores)
-    review = await _code_review(ai, posting, inp) if inp.problem is not None else None
+    if _anything_answered(rows):
+        summary = await _summary(ai, rows, units, scores)
+        feedback = await _feedback(ai, rows, units, scores)
+    else:  # nothing to read: the model would only make something up, so the texts are fixed (and say so)
+        summary, feedback = dict(NO_ANSWER_SUMMARY), dict(NO_ANSWER_FEEDBACK)
     answered_main = sum(1 for m, a, _, _ in rows if a is not None and not a.is_no_answer)
     return Report(inp.manifest_hash, units, scores, answered_main, summary, feedback, review, coding, rows, det.detail)
 
@@ -238,6 +257,23 @@ async def _custom_items(ai: AIClient, rows, items: list[dict]) -> tuple[dict[str
                        "grade": g["grade"], "score": g["score"] * 20, "evidence_status": g["evidence_status"],
                        "quote": (g["quote"] or {}).get("text"), "quote_no": (g["quote"] or {}).get("no"), "comment": g["comment"]})
     return scores, detail
+
+
+NO_ANSWER_SUMMARY = {
+    "overall": "면접 질문에 답변한 내용이 없어 항목별로 평가할 수 없었습니다. 모든 평가 항목은 최저점으로 처리되었습니다.",
+    "strengths": [],
+    "improvements": [{"text": "질문마다 먼저 결론을 말하고 이유와 사례를 덧붙이는 방식으로 답변을 시작해 보세요. 답변이 있어야 평가할 수 있습니다.",
+                      "question_refs": []}],
+}
+NO_ANSWER_FEEDBACK = {
+    "strengths": [],
+    "improvements": ["질문마다 짧게라도 결론을 먼저 말하고, 이유와 경험을 한두 문장 덧붙여 답변해 보세요."],
+}
+
+
+def _anything_answered(rows) -> bool:
+    """True when at least one main or follow-up answer has content (a silent or empty answer is not an answer)."""
+    return any(x is not None and not x.is_no_answer for _m, a, _fq, fa in rows for x in (a, fa))
 
 
 def _comments(payload: dict | None) -> dict:
@@ -279,10 +315,39 @@ async def _feedback(ai: AIClient, rows, units: dict, scores: ScoreResult) -> dic
     return r.output
 
 
-async def _code_review(ai: AIClient, posting: JobPosting, report_in: ReportInputs) -> dict | None:
-    """T8 gets the statement, PUBLIC examples and the code — hidden tests never reach the prompt (COD-06, SC-79)."""
+async def _code_review(ai: AIClient, posting: JobPosting, report_in: ReportInputs) -> dict:
+    """T8 gets the statement, PUBLIC examples and the code without comments: hidden tests and their results never reach
+    the prompt (COD-06, SC-79). The result is part of the score, so a failure fails the attempt (EVL-06)."""
+    level = LEVELS.get(report_in.problem.level)
     inp = {"problem": report_in.problem.statement_md, "language": posting.coding_language or "python",
-           "code": report_in.submission.code,
+           "level_expectation": f"Lv.{level.level}: {level.expected}" if level else "",
+           "code": strip_comments(report_in.submission.code)[:CODE_MAX_CHARS],
            "examples": [{"input": t.input, "output": t.expected_output} for t in report_in.public_tests]}
     r = await ai.llm("code_review", inp, lane="BATCH")
-    return r.output if r.status == "OK" else None  # P1, not scored: a failed review leaves it empty
+    if r.status != "OK":
+        raise EvaluationFailed(f"code_review {r.status}")
+    return r.output
+
+
+CODING_LABELS = {"correctness": "정확성", "efficiency": "효율성", "approach": "문제 해결 방식", "quality": "코드 품질"}
+NO_CODE_COMMENT = "제출한 코드가 없습니다."
+
+
+def _coding_metrics(coding: dict | None, review: dict | None) -> tuple[Decimal, dict]:
+    """The coding score and what the report shows of it. No counts of hidden tests here: the applicant reads this."""
+    w = CODING_METRIC_WEIGHTS
+    if not coding or not coding.get("reached") or review is None:  # never reached it, or nothing was written
+        items = [{"key": k, "label": CODING_LABELS[k], "score": 0, "weight": w[k], "comment": NO_CODE_COMMENT,
+                  "quote": None, "evidence_status": "NO_CODE"} for k in w]
+        return Decimal("0.00"), {"items": items, "time": None, "improvements": []}
+    correctness = Decimal(coding["score"])
+    m = review["metrics"]
+    scores = {k: int(m[k]["score"]) for k in ("efficiency", "approach", "quality")}
+    scores["efficiency"] = measured_efficiency(scores["efficiency"], coding["passed"], coding["limit_hit"])
+    items = [{"key": "correctness", "label": CODING_LABELS["correctness"], "score": float(correctness), "weight": w["correctness"],
+              "comment": "공개·비공개 테스트를 실행한 통과율입니다.", "quote": None, "evidence_status": "MEASURED"}]
+    for k, v in scores.items():
+        items.append({"key": k, "label": CODING_LABELS[k], "score": v * 20, "weight": w[k], "comment": m[k]["comment"],
+                      "quote": (m[k]["quote"] or {}).get("text"), "evidence_status": m[k]["evidence_status"]})
+    total = coding_total(correctness, scores["efficiency"], scores["approach"], scores["quality"])
+    return total, {"items": items, "time": review["complexity"]["time"], "improvements": review["improvements"]}

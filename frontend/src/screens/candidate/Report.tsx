@@ -116,6 +116,7 @@ const Feedback = ({ a }: { a: ReportAnswer }) => (a.good || a.fix) ? (
 ) : null;
 
 function Points({ list, kind, go }: { list: ReportPoint[]; kind: 'good' | 'bad'; go: (no: number) => void }) {
+  if (list.length === 0) return <p className="hint" style={{ margin: 0 }}>{kind === 'good' ? '이번 면접에서는 찾지 못했습니다.' : '표시할 내용이 없습니다.'}</p>;
   return (
     <ol className="fb">
       {list.map((p) => (
@@ -242,6 +243,23 @@ export function Report({ mode = 'candidate' }: { mode?: 'candidate' | 'recruiter
           </div>
         </div>
       </section>
+
+      {r.coding && r.coding.items.length > 0 && (
+        <section className="card" aria-label="코딩테스트 평가">
+          <h2>코딩테스트 평가 <small>{r.coding.score}점</small></h2>
+          <div className="areas">
+            {r.coding.items.map((m) => (
+              <div key={m.key}>
+                <div className="arow"><span>{m.label}</span><Bar v={m.score} low={m.score < 65} /><b>{Math.round(m.score)}</b><small>×{m.weight}%</small></div>
+                {m.comment && <p className="fine" style={{ margin: '4px 0 0' }}>{m.comment}{m.key === 'efficiency' && r.coding?.time && r.coding.time !== 'unknown' ? ` (시간 복잡도 추정: ${r.coding.time})` : ''}</p>}
+                {m.quote && <p className="fine" style={{ margin: '2px 0 0' }}><code>{m.quote}</code></p>}
+              </div>
+            ))}
+          </div>
+          {r.coding.improvements.length > 0 && <><h3>개선점</h3><ul>{r.coding.improvements.map((t) => <li key={t}>{t}</li>)}</ul></>}
+          <p className="fine">정확성은 테스트를 실행한 결과입니다. 나머지 항목은 AI가 코드를 읽고 판단한 값으로, 코드 점수는 서버가 비중대로 계산합니다.</p>
+        </section>
+      )}
 
       <section className="grid2">
         <div className="card"><h2>좋았던 점 <small>강점 1~3순위</small></h2><Points list={r.strengths} kind="good" go={goQ} /></div>

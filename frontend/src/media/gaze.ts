@@ -57,6 +57,7 @@ export function useGaze(video: RefObject<HTMLVideoElement | null>, enabled: bool
     }).catch(() => { if (live) setGaze('unavailable'); });
     return () => {
       live = false;
+      setGaze('loading'); // a stale "away" must not outlive the camera it came from
       if (timer) clearInterval(timer);
       detector?.close();
     };

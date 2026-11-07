@@ -18,13 +18,15 @@ class Area(StrEnum):
 
 
 INTRO_QUESTION = "1분 정도로 간단하게 자기소개를 해 주십시오."
-# Default five questions: 자기소개(인성), 지원 동기, 직무, 경험, 협업 (SC-A06).
+# Default ten questions (2026-11-04): 인성 2 (the first is the self-introduction), 지원 동기 1, 직무 3 (the first is live coding in
+# 개발·데이터·AI), 경험 3 (asked from the resume), 협업 1. A posting can set its own plan of 1~10 (SC-R07).
 DEFAULT_PLAN: tuple[tuple[Area, str | None], ...] = (
-    (Area.PERSONALITY, INTRO_QUESTION), (Area.MOTIVATION, None), (Area.JOB_SKILL, None), (Area.PROJECT, None),
+    (Area.PERSONALITY, INTRO_QUESTION), (Area.PERSONALITY, None), (Area.MOTIVATION, None),
+    (Area.JOB_SKILL, None), (Area.JOB_SKILL, None), (Area.JOB_SKILL, None),
+    (Area.PROJECT, None), (Area.PROJECT, None), (Area.PROJECT, None),
     (Area.COLLABORATION, None),
 )
 # The first job question is live coding in these families (SC-A06); elsewhere it is an ordinary spoken question.
-CODING_FAMILIES = ("DEV", "DATA_AI")
 
 # Timing (SC-A06, SC-R07). The main answer limit and think time come from the posting settings.
 THINK_SEC_CHOICES = (5, 10, 20, 30)
@@ -46,7 +48,7 @@ GAZE_SUSPECT_COUNT = 3  # 3 or more gaze warnings are recorded as suspected chea
 MAX_FOLLOWUPS_PER_MAIN = 1
 MAX_FOLLOWUPS_TOTAL = 4
 DEFAULT_FOLLOWUP_MAX = 2
-FOLLOWUP_DECISION_TIMEOUT_SEC = 5.0
+FOLLOWUP_DECISION_TIMEOUT_SEC = 30.0  # ADR-0019: a guard against a stuck model, not a quality rule (a real answer takes 5~7 s)
 
 # RES-02
 RESUME_MAX_BYTES = 10 * 1024 * 1024

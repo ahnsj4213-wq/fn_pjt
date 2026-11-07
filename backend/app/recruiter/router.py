@@ -11,7 +11,9 @@ from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.applications.lifecycle import register_evaluation
-from app.applications.report import ReportOut, build_report, crit_key, legacy_keys
+from app.coding.levels import LEVELS
+from app.coding.variants import get_variant
+from app.applications.report import ReportOut, build_report, coding_view, crit_key, legacy_keys
 from app.audit import audit
 from app.auth.deps import RecruiterCtx, require_recruiter
 from app.auth.scope import get_for_company
@@ -208,7 +210,7 @@ async def get_report(aid: UUID, request: Request, ctx: RecruiterCtx = Depends(re
         "application_id": a.id, "total_score": str(rep.total_score), "ai_reference": ai_reference(rep.total_score),
         "criteria": [{"key": k, "score": str(v), "weight": weights[w], "insufficient": insufficient.get(w, 0)}
                      for k, w, v in crit_keys],
-        "coding": {"score": str(rep.score_coding), "weight": weights.get("coding")} if rep.score_coding is not None else None,
+        "coding": {**coding_view(rep, weights), "score": str(rep.score_coding)} if rep.score_coding is not None else None,
         "insufficient_count": rep.insufficient_count, "no_answer_count": rep.no_answer_count,
         "answered_main_count": rep.answered_main_count, "summary": rep.summary,
         "strengths": rep.strengths, "improvements": rep.improvements, "questions": questions,
@@ -271,7 +273,11 @@ async def coding_result(aid: UUID, ctx: RecruiterCtx = Depends(require_recruiter
         tests = [{"ordinal": tc.ordinal, "visibility": tc.visibility, "passed": r.passed, "outcome": r.outcome,
                   "time_ms": r.time_ms, "input": tc.input, "expected_output": tc.expected_output} for r, tc in rows]
     rep = await db.get(RecruiterReport, a.id)
-    return {"enabled": True, "submission": None if sub is None else {
+    variant = await get_variant(db, a.id)
+    return {"enabled": True, "problem": None if variant is None else {
+        "title": variant.title, "level": variant.level, "tags": variant.tags, "source": variant.source,
+        "expected": LEVELS[variant.level].expected if variant.level is not None else None},
+        "submission": None if sub is None else {
         "kind": sub.kind, "submitted_at": sub.submitted_at, "code": sub.code, "compile_ok": sub.compile_ok,
         "grading_status": sub.grading_status, "passed": sub.passed, "total": sub.total,
         "score": str(sub.score) if sub.score is not None else None},

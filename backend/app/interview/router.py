@@ -20,7 +20,7 @@ from app.core.db import get_db
 from app.core.errors import AppError, conflict
 from app.core.timeutil import utcnow
 from app.interview import graph as igraph
-from app.interview import infra, slots, turns
+from app.interview import infra, retake as retakes, slots, turns
 from app.jobs.queue import enqueue
 from app.core.storage import get_storage
 from app.models import (
@@ -75,6 +75,8 @@ async def interview_state(db: AsyncSession, app: Application) -> dict:
             "followups_used": iv.followups_used if iv else 0, "followup_max": qset.followup_max if qset else None,
             "gaze_warnings": iv.gaze_warning_count if iv else 0,
             "next_after_interview": "CODING" if posting.coding_enabled and not live_coding else "DONE", "warnings": [],
+            "live_code_graded": posting.coding_enabled,
+            "retake_allowed": retakes.retake_allowed(posting.id, app.attempt_status),
             "turn": turn_view, "slot_grace_until": slot_until if app.attempt_status == "INTERRUPTED" else None,
             "coding_deadline_at": coding.deadline_at if coding else None}
 
@@ -246,6 +248,29 @@ async def resume(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: 
     return await interview_state(db, app)
 
 
+@router.post("/interview/retake")
+async def retake(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: AsyncSession = Depends(get_db)) -> dict:
+    """Test postings only: stop this attempt and go back to READY, so the next start composes new questions."""
+    from app.voice import registry
+
+    app = await _own(db, ctx, aid)
+    if str(app.posting_id) not in get_settings().retake_posting_id_set:
+        raise AppError(403, "RETAKE_NOT_ALLOWED", "이 공고는 다시 응시할 수 없습니다.")
+    await db.rollback()
+    session = registry.get(aid)
+    if session is not None:
+        await session.close("RETAKE")
+    app = await _own(db, ctx, aid, lock=True)
+    if not retakes.retake_allowed(app.posting_id, app.attempt_status):
+        raise invalid_state(app)
+    posting = await db.get(JobPosting, app.posting_id)
+    settings_id = posting.current_settings_id
+    keys = await retakes.reset_attempt(db, aid)
+    await db.commit()
+    await retakes.clean_up(aid, settings_id, keys)
+    return {"attempt_status": "READY", "posting_id": posting.id}
+
+
 @router.post("/interview/text-mode")
 async def text_mode(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: AsyncSession = Depends(get_db)) -> dict:
     """INT-18 (P1): the server decides (T12): re-ask cap reached, or no live voice connection for 20 s."""
@@ -346,6 +371,30 @@ async def _think_command(db: AsyncSession, ctx: CandidateCtx, aid: UUID, turn_id
     return {"turn_id": turn.id}
 
 
+@router.get("/interview/turns/{turn_id}/problem")
+async def turn_problem(aid: UUID, turn_id: UUID, ctx: CandidateCtx = Depends(require_candidate),
+                       db: AsyncSession = Depends(get_db)) -> dict:
+    """Live coding (SC-A06): the problem this application is asked to solve on screen: statement and PUBLIC examples (with
+    their explanations). Hidden cases never leave the server. The problem is this application's own copy (coding/variants.py)."""
+    from app.coding.variants import ensure_variant
+    from app.models import CodingProblem, CodingTestcase
+
+    app = await _own(db, ctx, aid)
+    turn = await _turn(db, app, turn_id)
+    q = await db.get(InterviewQuestion, turn.question_id)
+    pid = (q.grounding or {}).get("problem_id") if q.answer_mode == "CODE" else None
+    base = await db.get(CodingProblem, UUID(pid)) if pid else None
+    if base is None:
+        raise conflict("NOT_CODING_TURN", "이 질문에는 화면에 보여 줄 문제가 없습니다.")
+    problem = await ensure_variant(db, app.id, base)
+    examples = (await db.execute(select(CodingTestcase).where(
+        CodingTestcase.problem_id == problem.id, CodingTestcase.visibility == "PUBLIC")
+        .order_by(CodingTestcase.ordinal))).scalars().all()
+    await db.commit()
+    return {"title": problem.title, "statement_md": problem.statement_md,
+            "examples": [{"input": t.input, "output": t.expected_output, "note": t.note} for t in examples]}
+
+
 class CodeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     language: str = Field(pattern="^(python|java|javascript)$")
@@ -358,6 +407,9 @@ async def turn_code(aid: UUID, turn_id: UUID, body: CodeIn, ctx: CandidateCtx = 
     """Live coding [코드 제출] / [다시 제출]: the last submission inside the answer window counts (SC-A06)."""
     app = await _own(db, ctx, aid)
     await _turn(db, app, turn_id)
+    posting = await db.get(JobPosting, app.posting_id)
+    if posting.coding_enabled and body.language != "python":  # graded in the sandbox, which runs Python only (X-10)
+        raise AppError(422, "CODE_LANGUAGE_UNSUPPORTED", "이 공고의 코딩 평가는 Python만 지원합니다.")
     if not await turns.save_code(db, turn_id, body.code, body.language, get_settings().answer_grace_seconds):
         raise conflict("TURN_CLOSED", "이 질문의 답변 시간이 끝났습니다.")
     await db.commit()

@@ -75,6 +75,7 @@ class Gate:
     opened_at: datetime
     close_at: datetime  # deadline + grace; moved earlier by [답변 완료] + drain
     vad: EnergyVAD = field(default_factory=EnergyVAD)
+    listening: bool = True  # False on a live coding turn: the answer is the code, so no audio is kept or transcribed
     audio: list = field(default_factory=list)
     queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     captions: list[str] = field(default_factory=list)
@@ -212,7 +213,7 @@ class VoiceSession:
             now = utcnow()
             self.last_rx = time.monotonic()
             gate = self.gate
-            if gate is None or gate.finalized:
+            if gate is None or gate.finalized or not gate.listening:
                 continue
             for f in self._resampler.resample(frame):
                 pcm = f.to_ndarray().reshape(-1).astype(np.int16, copy=False)
@@ -332,14 +333,14 @@ class VoiceSession:
         grace = timedelta(seconds=s.answer_grace_seconds)
         self.finish.clear()
         self.finish_reason = self.finish_at = None
-        gate = Gate(view.turn_id, opened_at, deadline_at + grace)
+        gate = Gate(view.turn_id, opened_at, deadline_at + grace, listening=view.answer_mode != "CODE")
         self.gate = gate
         self._worker = self._spawn(self._stt_worker(gate, "answer"))
         warn_at = deadline_at - timedelta(seconds=WARN_BEFORE_SEC)
         self.send("answer_opened", view.turn_id, opened_at=dcp.iso(opened_at), deadline_at=dcp.iso(deadline_at),
                   warn_at=dcp.iso(warn_at), limit_sec=view.limit_sec)
         warn = self._spawn(self._warn_at(view.turn_id, warn_at))
-        if view.answer_mode == "SPEECH" and not view.is_followup:
+        if s.interject_enabled and view.answer_mode == "SPEECH" and not view.is_followup:  # off: PRD SCOPE-9.2
             check_at = opened_at + timedelta(seconds=view.limit_sec * INTERJECT_AT_FRACTION)
             reason = await self._wait_finish(gate, until=check_at)
             if reason is None and self._speaking(gate):
@@ -478,7 +479,10 @@ class VoiceSession:
             log_event(log, "tts_failed", application_id=str(self.app_id), error_code=type(e).__name__)
             return None
         if out.pcm48k:
-            await storage.put(key, out.pcm48k, "application/octet-stream")
+            try:
+                await storage.put(key, out.pcm48k, "application/octet-stream")
+            except Exception as e:  # noqa: BLE001 - only a cache: losing it must not end the candidate's voice session
+                log_event(log, "tts_cache_failed", logging.WARNING, application_id=str(self.app_id), error_code=type(e).__name__)
         return out.pcm48k or None
 
     async def _mark_finalizing(self, turn_id: UUID, reason: str) -> None:

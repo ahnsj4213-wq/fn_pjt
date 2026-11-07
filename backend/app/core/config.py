@@ -34,6 +34,13 @@ def is_private_endpoint(url: str) -> bool:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AIHIRE_", env_file=".env", extra="ignore")
 
+    # Test postings whose stopped interview starts over with new questions. Empty = one attempt everywhere (INT-01).
+    retake_posting_ids: str = ""
+
+    @property
+    def retake_posting_id_set(self) -> set[str]:
+        return {x.strip() for x in self.retake_posting_ids.split(",") if x.strip()}
+
     env: str = Field("dev", pattern="^(dev|test|prod)$")
     database_url: str = "postgresql+asyncpg://aihire:aihire_dev_only@127.0.0.1:55432/aihire"
     data_dir: Path = Path("var")
@@ -48,6 +55,11 @@ class Settings(BaseSettings):
     max_concurrent_interviews: int = 2
     slot_lease_seconds: int = 120  # T10: INTERRUPTED grace
     answer_grace_seconds: float = 1.0  # T9
+    interject_enabled: bool = False  # the interviewer cutting into a long answer; out of scope (PRD SCOPE-9.2)
+    # live = only the first main question before the interview, each later one composed from the previous answers when it is
+    # reached (ADR-0022, changes QST-02); upfront = all main questions composed before the interview (the PRD's original rule).
+    question_mode: str = Field("live", pattern="^(live|upfront)$")
+    live_compose_timeout_seconds: float = 45.0  # a slower composition takes the question bank instead
     tts_playout_guard_seconds: float = 0.3
 
     # Retention (8.5, legal review pending X-13)
@@ -64,6 +76,8 @@ class Settings(BaseSettings):
     # RAG for question generation (ai-architecture 6.1): reference examples per T2/T3 call, copy threshold
     rag_example_count: int = Field(3, ge=0, le=10)
     rag_copy_cosine: float = Field(0.9, gt=0, le=1)
+    rag_knowledge_count: int = Field(4, ge=0, le=10)  # company documents shown to T2 (T4 gets fewer, ADR-0020)
+    rag_knowledge_min_similarity: float = Field(0.5, ge=0, le=1)  # measured: ADR-0020
 
     # EVL-02 / OQ-09
     short_answer_min_chars: int = 15

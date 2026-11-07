@@ -3,14 +3,16 @@ from app.ai.tasks.base import Check, LLMCall, Outcome, TaskInvalid, TaskSpec, ru
 from app.ai.tasks.custom_criteria import CustomCriteria
 from app.ai.tasks.evaluate import EvaluateAnswer
 from app.ai.tasks.followup import FollowupDecide
+from app.ai.tasks.posting_draft import PostingDraft
 from app.ai.tasks.problem_rewrite import ProblemRewrite
+from app.ai.tasks.question_adapt import QuestionAdapt
 from app.ai.tasks.questions import QuestionGenerate, ResumeQuestion
 from app.ai.tasks.report import CandidateFeedback, CodeReview, ReportSummary
 from app.ai.tasks.resume import ResumeExtract
 
 TASKS: dict[str, TaskSpec] = {t.name: t for t in (
     ResumeExtract(), QuestionGenerate(), ResumeQuestion(), FollowupDecide(),
-    EvaluateAnswer(), ReportSummary(), CandidateFeedback(), CodeReview(), ProblemRewrite(), CustomCriteria())}
+    EvaluateAnswer(), ReportSummary(), CandidateFeedback(), CodeReview(), ProblemRewrite(), CustomCriteria(), PostingDraft(), QuestionAdapt())}
 
 LANES = ("RT", "INTERACTIVE", "BATCH")
 

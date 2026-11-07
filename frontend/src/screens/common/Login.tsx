@@ -79,8 +79,13 @@ export function Login() {
   };
 
   return (
-    <div className="wrap">
-      <div className="stub">
+    <div className="split">
+      <aside className="split-side">
+        <p className="wordmark">Huge</p>
+        <p className="side-tagline">뽑히는 나를 만드는<br />AI 모의면접 서비스</p>
+      </aside>
+      <div className="split-main">
+      <div className="stub split-form">
         <div className="tabs" role="tablist" aria-label="회원 유형">
           {TABS.map((t) => (
             <button key={t.key} type="button" role="tab" aria-selected={t.key === tab}
@@ -113,6 +118,7 @@ export function Login() {
             ? <button type="button" className="link" onClick={() => setModal('signup')}>회원가입</button>
             : <button type="button" className="link" onClick={() => setModal('bizsignup')}>기업회원 가입</button>}
         </div>
+      </div>
       </div>
       {modal === 'signup' && <SignupModal onClose={() => setModal(null)} onDone={(sess) => {
         setModal(null);

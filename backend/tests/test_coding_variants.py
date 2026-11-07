@@ -12,7 +12,7 @@ from app.models import CodingProblem, CodingTestcase
 
 
 def test_every_template_generates_valid_cases_and_changes_with_the_seed():
-    assert len(T.TEMPLATES) == 11
+    assert len(T.TEMPLATES) >= 50
     for t in T.TEMPLATES.values():
         a, b = t.hidden(random.Random(1)), t.hidden(random.Random(2))
         assert len(a) >= 5 and a == t.hidden(random.Random(1)), t.key  # deterministic per seed
@@ -61,6 +61,10 @@ def test_statement_rewrite_check_keeps_format_and_numbers():
     assert not statement_preserves(t.statement, story.replace("100,000", "10,000"))
     assert not statement_preserves(t.statement, story.replace("### 출력", "출력"))
     assert not statement_preserves(t.statement, story.replace("`n`", "`m`"))
+    # Seen with the real model: it dropped the first heading of a problem. Every section has to stay.
+    full = T.TEMPLATES["next_taller"].statement
+    assert statement_preserves(full, full)
+    assert not statement_preserves(full, full.replace("### 문제 상황" + chr(10), ""))
 
 
 async def test_variant_is_private_stable_and_differs_per_application():

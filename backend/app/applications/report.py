@@ -268,7 +268,7 @@ async def build_report(db: AsyncSession, app: Application) -> ReportOut:
         application_id=app.id, posting_id=posting.id, posting_title=posting.title or "", company_name=company.name, candidate_name=(user.name if user else "") or "",
         interviewed_at=app.submitted_at, main_count=len([q for q in qs if q.role == "MAIN"]), followup_count=sum(1 for q in qs if q.role == "FOLLOWUP" and q.id in answers),
         avg_answer_sec=round(sum(seconds_all) / len(seconds_all), 1) if seconds_all else None, total=round(total, 1), grade=g, grade_kind=kind,
-        criteria=criteria, coding={"score": round(float(rep.score_coding)), "weight": weights.get("coding")} if rep.score_coding is not None else None,
+        criteria=criteria, coding=coding_view(rep, weights),
         summary=rep.summary, strengths=points(rep.strengths, "strengths"), improvements=points(rep.improvements, "improvements"),
         chips=chips, questions=questions,
         areas=[{"key": k, "label": lab, "desc": desc, "score": next(c["score"] for c in criteria if c["key"] == k), "items": area_items[k]}
@@ -280,6 +280,15 @@ async def build_report(db: AsyncSession, app: Application) -> ReportOut:
         proctor={"leave_count": leave[0], "away_ms": int(leave[1])},
         media={"audio_deleted": app.audio_purged_at is not None, "audio_auto_delete_days": get_settings().retention_audio_days},
         share_result=app.share_result, notice=NOTICE, detail=rep.detail or {})
+
+
+def coding_view(rep: RecruiterReport, weights: dict) -> dict | None:
+    """The coding score and its four metrics (ADR-0017). Reports from before score-v3 have no metrics: `items` is empty."""
+    if rep.score_coding is None:
+        return None
+    d = (rep.detail or {}).get("coding") or {}
+    return {"score": round(float(rep.score_coding)), "weight": weights.get("coding"), "items": d.get("items", []),
+            "time": d.get("time"), "improvements": d.get("improvements", [])}
 
 
 def evidence_of(unit: AnswerOut, key: str) -> list[Evidence]:

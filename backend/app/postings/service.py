@@ -140,7 +140,8 @@ async def detail_out(db: AsyncSession, p: JobPosting, weights_reset: bool = Fals
     c = (await counts(db, [p.id])).get(p.id, (0, 0))
     s = await current_settings(db, p)
     return PostingDetailOut(**summary_out(p, c), requirements=p.requirements, preferred=p.preferred, duties=p.duties,
-                            coding_problem_id=p.coding_problem_id, coding_language=p.coding_language,
+                            coding_problem_id=p.coding_problem_id, coding_selection=p.coding_selection, coding_difficulty=p.coding_difficulty,
+                            coding_language=p.coding_language,
                             coding_time_limit_min=p.coding_time_limit_min, settings_locked=p.settings_locked_at is not None,
                             row_version=p.row_version, evaluation_settings=settings_out(s, p), weights_reset=weights_reset)
 
@@ -176,13 +177,19 @@ def _apply_fields(p: JobPosting, body: PostingIn) -> bool:
     p.deadline_at = kst_end_of_day(body.deadline_date) if body.deadline_date else None
     p.coding_enabled = body.coding_enabled
     p.coding_problem_id = problem_id if body.coding_enabled else None
+    if body.coding_problem_id:  # naming a problem pins it; otherwise each application gets its own (coding/selection.py)
+        p.coding_selection = "FIXED"
+    elif p.coding_selection is None:
+        p.coding_selection = "AUTO"
+    p.coding_difficulty = body.coding_difficulty or p.coding_difficulty or "NORMAL"
     p.coding_language = "python" if body.coding_enabled else None
     p.coding_time_limit_min = body.coding_time_limit_min if body.coding_enabled else None
     return coding_changed
 
 
 async def ensure_problem(db: AsyncSession, p: JobPosting) -> None:
-    """A coding posting without a problem gets a random active one (fixed for the posting, so applicants are compared fairly)."""
+    """`coding_problem_id` must be set on a coding posting (publish checks it). With coding_selection AUTO it is only the fallback;
+    what an applicant gets comes from coding/selection.py, at one level for the whole posting so applicants stay comparable."""
     if not p.coding_enabled or p.coding_problem_id:
         return
     with db.no_autoflush:  # the posting row is half edited (coding on, no problem yet): do not flush it before the id is set

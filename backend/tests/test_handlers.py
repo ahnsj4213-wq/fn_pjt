@@ -66,11 +66,28 @@ async def q(sql: str, **params):
         return (await db.execute(text(sql), params)).all()
 
 
-async def setup_app(client, make_client, *, settings: dict | None = None, **posting) -> tuple[str, str, httpx.AsyncClient]:
+FIVE_QUESTIONS = [{"area": "PERSONALITY", "text": INTRO_QUESTION}, {"area": "MOTIVATION", "text": None}, {"area": "JOB_SKILL", "text": None},
+                  {"area": "PROJECT", "text": None}, {"area": "COLLABORATION", "text": None}]
+
+
+async def setup_app(client, make_client, *, settings: dict | None = None, default_plan: bool = False, **posting
+                    ) -> tuple[str, str, httpx.AsyncClient]:
+    """`default_plan=True` keeps the product's default (ten questions); otherwise the posting gets the old five-question plan,
+    which most tests are written around (they test behavior, not the number of questions)."""
     company_id, _ = await recruiter(client)
     p = await create_posting(client, **posting)
+    url = f"/api/recruiter/postings/{p['id']}/evaluation-settings"
+    if not default_plan and not (settings and "interview" in settings):
+        cur = (await client.get(url)).json()
+        iv = {"question_plan": FIVE_QUESTIONS, "think_sec": cur["interview"]["think_sec"], "answer_sec": cur["interview"]["answer_sec"],
+              "followup_max": cur["interview"]["followup_max"]}
+        settings = {"weights": cur["weights"], **(settings or {}), "interview": iv}
+        if settings.get("custom_question"):  # a plan has no use for the old single custom question: it becomes the job slot's text
+            plan = [dict(s) for s in FIVE_QUESTIONS]
+            plan[2]["text"] = settings.pop("custom_question")
+            settings["interview"] = {**iv, "question_plan": plan}
     if settings:
-        r = await client.put(f"/api/recruiter/postings/{p['id']}/evaluation-settings", json=settings)
+        r = await client.put(url, json=settings)
         assert r.status_code == 200, r.text
     cand = make_client()
     await candidate(cand)
@@ -191,6 +208,22 @@ async def test_extract_resume_maps_to_form_keys_and_marks_failure(make_client, f
     assert f["skills"] == ["Python"]  # "Rust" is not in the PDF text: dropped (RES-03)
     assert "experience" not in f and "certifications" not in f
 
+    seen = {}
+
+    def reply_sections(inp, msgs):
+        seen.update(inp)
+        return {"name": None, "education": [], "skills": [], "certifications": [],
+                "experience": [{"company": "커머스랩", "role": None, "period": None, "description": "짧게"}], "projects": []}
+
+    fake_ai.responses["resume_extract"] = reply_sections
+    pdf2 = text_pdf(["경력사항", "커머스랩", "주문 처리 API 응답 지연 개선", "결제 장애 재발 방지", "자기소개서", "데이터로 판단합니다"])
+    r = await cand.post("/api/candidate/resume-files", files={"file": ("cv3.pdf", pdf2, "application/pdf")})
+    await drain()
+    f = (await cand.get(f"/api/candidate/resume-files/{r.json()['file_id']}")).json()["fields"]
+    assert f["intro"] == "데이터로 판단합니다" and "데이터로" not in seen["source_text"]
+    assert f["career"][0]["description"] == "주문 처리 API 응답 지연 개선 결제 장애 재발 방지"
+
+    fake_ai.responses.pop("resume_extract")
     fake_ai.fail["resume_extract"] = "invalid"
     r = await cand.post("/api/candidate/resume-files", files={"file": ("cv2.pdf", pdf, "application/pdf")})
     await drain()
@@ -281,7 +314,7 @@ async def test_evaluation_reuses_pre_evaluations_and_writes_report(client, make_
     (det,), = await q("SELECT detail FROM recruiter_reports WHERE application_id=:a", a=app_id)
     assert [x["score"] for x in det["sub"]["logic"]] == [80, 60, 60] and [x["score"] for x in det["sub"]["expertise"]] == [60, 60, 60]
     assert {x["key"]: x["rate"] for x in det["sub"]["star"]["items"]} == {"situation": 100, "task": 0, "action": 100, "result": 100}
-    assert det["blend"]["scoring"] == "score-v2" and det["blend"]["rule_scores"] == {"attitude": 100.0}
+    assert det["blend"]["scoring"] == "score-v3" and det["blend"]["rule_scores"] == {"attitude": 100.0}
     assert det["rules"]["negative"]["count"] == 0 and "speed" not in det["rules"]  # text answers: no speech measurements
     rows = await q("SELECT criterion, detail FROM answer_evaluations WHERE detail IS NOT NULL")
     assert {c for c, _ in rows} == {"EXPERTISE", "LOGIC"}
@@ -397,11 +430,11 @@ async def test_grading_defers_on_sandbox_error_and_evaluation_waits(client, make
     await q("UPDATE jobs SET run_after=now() WHERE state='QUEUED' RETURNING id")
     await drain()
     rep = await q("SELECT score_coding, total_score FROM recruiter_reports WHERE application_id=:a", a=app_id)
-    # default coding weights 30/20/15/15 + coding 20: 52 x 0.65 + 66.4 x 0.15 + 100 x 0.2 = 63.76
+    # Coding score (ADR-0017): every test passed, the fake judges 4/4/4: 100 x .6 + 80 x .4 = 92.
     (sc, total), = rep
     (areas,) = await q("SELECT score_expertise, score_logic, score_attitude, score_delivery FROM recruiter_reports WHERE application_id=:a", a=app_id)
-    assert str(sc) == "100.00" and [str(x) for x in areas] == ["52.00", "52.00", "66.40", "52.00"]
-    assert float(total) == round(float(areas[0]) * .3 + float(areas[1]) * .2 + float(areas[2]) * .15 + float(areas[3]) * .15 + 100 * .2, 2)
+    assert str(sc) == "92.00" and [str(x) for x in areas] == ["52.00", "52.00", "66.40", "52.00"]
+    assert float(total) == round(float(areas[0]) * .3 + float(areas[1]) * .2 + float(areas[2]) * .15 + float(areas[3]) * .15 + 92 * .2, 2)
     assert await q("SELECT coding_all_passed FROM candidate_feedback WHERE application_id=:a", a=app_id) == [(True,)]
     # T8 never sees hidden tests (COD-06, SC-79): the hidden inputs are absent from every code_review prompt.
     hidden = [i for (i,) in await q("SELECT input FROM coding_testcases WHERE visibility='HIDDEN'")]
@@ -432,3 +465,185 @@ async def test_company_items_are_graded_and_weighted_into_the_total(client, make
     own = [x for x in view["criteria"] if x.get("custom")]
     assert [(x["label"], x["score"], x["weight"]) for x in own] == [("책임감", 60, 20)]
     assert any(a["label"] == "책임감" for a in view["areas"]) and len(view["criteria"]) == 5
+
+
+async def test_an_interview_with_no_answers_gets_fixed_texts_not_invented_praise(client, make_client, fake_ai):
+    """Nothing was answered: every area is the lowest score, and the summary and feedback are not written by the model."""
+    _, app_id, cand = await setup_app(client, make_client)
+    await prepare_and_compose(cand, app_id)
+    await submit_and_register(app_id)
+    await drain()
+    assert await q("SELECT eval_status FROM applications WHERE id=:a", a=app_id) == [("DONE",)]
+    assert not [c for c in fake_ai.calls if c.task in ("report_summary", "candidate_feedback")]
+    (summary, strengths, improvements, total), = await q(
+        "SELECT summary, strengths, improvements, total_score FROM recruiter_reports WHERE application_id=:a", a=app_id)
+    assert "답변한 내용이 없어" in summary and strengths == [] and len(improvements) == 1 and float(total) == 20.0
+    (fb_strengths, fb_improvements), = await q("SELECT strengths, improvements FROM candidate_feedback WHERE application_id=:a", a=app_id)
+    assert fb_strengths == [] and len(fb_improvements) == 1
+
+
+# ── the ten-question default and resume questions that say what they are about ─────────────────────────────────
+async def test_default_plan_is_ten_questions_with_fixed_counts_per_type(client, make_client, fake_ai):
+    _, app_id, cand = await setup_app(client, make_client, default_plan=True)
+    qs = await prepare_and_compose(cand, app_id)
+    assert [x.seq for x in qs] == list(range(1, 11)) and all(x.role == "MAIN" for x in qs)
+    from collections import Counter
+    assert Counter(x.slot_type for x in qs) == {"PERSONALITY": 2, "MOTIVATION": 1, "JOB_SKILL": 3, "PROJECT": 3, "COLLABORATION": 1}
+    assert qs[0].text == INTRO_QUESTION and qs[0].source == "CUSTOM"
+    assert {x.answer_mode for x in qs} == {"SPEECH"}  # no live coding, whatever the job family
+    assert len({x.text for x in qs}) == 10, "no question is asked twice"
+    (main_count,) = (await q("SELECT main_count FROM question_sets WHERE application_id=:a", a=app_id))[0]
+    assert main_count == 10
+
+
+async def test_resume_questions_name_the_part_of_the_resume_they_are_about(client, make_client, fake_ai):
+    from app.questions.compose import RESUME_TAILS
+    _, app_id, cand = await setup_app(client, make_client, default_plan=True)
+    qs = [x for x in await prepare_and_compose(cand, app_id) if x.slot_type == "PROJECT"]
+    assert len(qs) == 3
+    for x in qs:
+        quote = x.grounding["evidence"][0]["text"]
+        assert x.source in ("AI", "BANK_FALLBACK")
+        if x.source == "AI":
+            # "커머스랩 백엔드 개발자 업무에서 …하셨는데, <question>": the resume is never named or quoted
+            assert "이력서" not in x.text and "‘" not in x.text and "적으신" not in x.text
+            assert quote[:12] in x.text and x.grounding["asked"] and any(x.text.endswith(t) for t in RESUME_TAILS)  # the model's own wording is kept only as grounding.asked
+    assert any(x.text.startswith(("커머스랩 백엔드 개발자 업무에서", "정산 배치 개선 프로젝트에서")) for x in qs)
+
+
+def test_the_single_custom_question_takes_only_the_first_job_slot():
+    from app.models import PostingEvalSettings
+    from app.questions.compose import plan_of
+    s = PostingEvalSettings(question_plan=None, custom_question="우리 팀의 결제 장애 대응을 개선한다면 무엇부터 하시겠습니까?")
+    plan = plan_of(s)
+    jobs = [t for a, t in plan if a.value == "JOB_SKILL"]
+    assert len(plan) == 10 and jobs == [s.custom_question, None, None]
+
+
+async def test_a_yes_or_no_resume_question_is_asked_again_as_a_how_or_why_question(fake_ai):
+    from app.ai.tasks import TASKS
+    from app.ai.tasks.questions import ResumeQuestion
+    assert isinstance(TASKS["resume_question"], ResumeQuestion)
+    resume = {"experience": [{"company": "커머스랩", "role": "백엔드 개발자", "period": "2020-2024",
+                              "description": "주문 처리 API의 응답 지연을 줄이기 위해 복합 인덱스를 추가했다."}]}
+    quote = "주문 처리 API의 응답 지연을 줄이기 위해 복합 인덱스를 추가했다"
+    replies = iter([
+        {"questions": [{"text": "주문 처리 API의 응답 지연을 줄이기 위해 복합 인덱스를 추가한 경험이 있나요?",
+                        "evidence": [{"field": "experience[0].description", "quote": quote}]}]},
+        {"questions": [{"text": "주문 처리 API의 응답 지연을 줄일 때 왜 복합 인덱스를 선택했고 결과는 어땠습니까?",
+                        "evidence": [{"field": "experience[0].description", "quote": quote}]}]},
+    ])
+    fake_ai.responses["resume_question"] = lambda inp, messages: next(replies)
+    r = await fake_ai.llm("resume_question", {"resume": resume, "job_brief": "백엔드", "n": 1}, lane="INTERACTIVE")
+    assert r.status == "OK" and len(fake_ai.calls) == 1 and len(fake_ai.calls[0].messages) == 2  # asked a second time
+    assert [x["text"] for x in r.output["questions"]] == ["주문 처리 API의 응답 지연을 줄일 때 왜 복합 인덱스를 선택했고 결과는 어땠습니까?"]
+
+
+def test_technical_failure_words_are_not_mistaken_for_questions_about_disability():
+    from app.ai.textrules import is_forbidden_question as bad
+    for ok in ("고객 배치잡 지연과 DB 장애가 겹쳤을 때 무엇을 근거로 어떻게 대응하셨습니까?", "서비스 장애 복구 절차를 어떻게 만드셨나요?", "장애 대응 훈련은 어떻게 진행했습니까?", "서비스에 장애가 있었을 때 무엇을 먼저 확인하셨습니까?"):
+        assert not bad(ok), ok
+    for no in ("장애인이십니까?", "신체적 장애가 있으신가요?", "장애 등급이 어떻게 되나요?", "건강 상태는 어떤가요?", "결혼 계획이 있으십니까?", "나이가 어떻게 되나요?"):
+        assert bad(no), no
+
+
+def test_the_lead_in_names_the_whole_sentence_of_the_resume_not_just_the_short_quote():
+    from app.questions.compose import RESUME_TAILS, ground_question
+    desc = "입사 첫해에 사내 도구를 만들었다. Greenplum 대용량 DB를 운영하며 고객 배치잡 지연이 발생했을 때 실행계획과 Grafana 지표를 비교해 원인을 찾았다. 이후 재발을 막았다."
+    resume = {"experience": [{"company": "데이터웍스", "role": "DB 엔지니어", "period": "2019-2023", "description": desc}]}
+    start = desc.index("Grafana 지표")
+    text = ground_question(resume, {"text": "그때 무엇을 근거로 어떻게 해결하셨습니까?",
+                                    "evidence": [{"field": "experience[0].description", "start": start, "end": start + 10, "text": "Grafana 지표"}]})
+    assert text.startswith("데이터웍스 DB 엔지니어 업무에서 Greenplum 대용량 DB를 운영하며 고객 배치잡 지연")
+    assert "원인을 찾으셨는데, " in text and "이력서" not in text and "2019" not in text
+    assert "입사 첫해" not in text and "재발" not in text  # only the sentence the quote belongs to
+    assert text.endswith(RESUME_TAILS[0]) and "그때 무엇을" not in text  # the model's sentence is not used
+
+
+def test_three_resume_questions_use_different_how_or_why_questions_and_never_ask_yes_or_no():
+    from app.ai.tasks.questions import is_yes_no
+    from app.questions.compose import RESUME_TAILS, ground_question
+    resume = {"experience": [{"company": "A", "role": "B", "period": "2020", "description": "정산 서비스의 DB 장애 대응 절차를 만들었다."}]}
+    ev = {"field": "experience[0].description", "start": 0, "end": 20, "text": "정산 서비스의 DB 장애 대응 절차"}
+    texts = [ground_question(resume, {"text": "만들었습니까?", "evidence": [ev]}, n) for n in range(3)]
+    assert len({t.split("만드셨는데, ")[1] for t in texts}) == 3
+    assert all(not is_yes_no(t) and t.endswith("?") and any(w in t for w in ("무엇", "어떻게")) for t in texts) and len(RESUME_TAILS) == 3
+
+
+def test_resume_sentences_are_told_back_politely_whatever_their_ending():
+    from app.ai.textrules import polite_did as _did
+    cases = {"복합 인덱스를 추가했다.": "복합 인덱스를 추가하셨는데", "원인을 찾았다": "원인을 찾으셨는데", "사내 도구를 만들었다": "사내 도구를 만드셨는데",
+             "응답 지연을 줄였다": "응답 지연을 줄이셨는데", "지표를 맞췄습니다.": "지표를 맞추셨는데", "응답 지연을 3.2초에서 1.4초로 단축": "응답 지연을 3.2초에서 1.4초로 단축하셨는데",
+             "배포 자동화 담당함": "배포 자동화 담당하셨는데"}
+    for given, want in cases.items():
+        assert _did(given) == want, given
+    assert _did("Python, SQL") is None
+
+
+def test_yes_no_detection_ignores_questions_with_an_interrogative_word():
+    from app.ai.tasks.questions import is_yes_no
+    for yes_no in ("복합 인덱스를 추가한 경험이 있나요?", "장애를 해결하셨나요?", "Kafka를 해 보셨습니까?", "이 일을 직접 하셨습니까?"):
+        assert is_yes_no(yes_no), yes_no
+    for ok in ("어떻게 극복하셨습니까?", "무엇을 근거로 원인을 좁혔나요?", "왜 그 방법을 선택하셨습니까?", "결과는 어땠나요?"):
+        assert not is_yes_no(ok), ok
+
+
+async def test_job_questions_prefer_the_bank_questions_nearest_to_the_posting(client, make_client, fake_ai):
+    """The posting's duties pick the job questions: the question about them is taken before an unrelated one."""
+    from app.models import QuestionBank
+    from app.questions.compose import _Ctx, _rank_by_relevance
+
+    class Ai:  # a tiny embedding: one axis for "database", one for "screen"
+        async def embed(self, texts):
+            return [[1.0 if "데이터베이스" in t or "DB" in t else 0.0, 1.0 if "화면" in t else 0.0] + [0.0] * (1024 - 2) for t in texts]
+
+    rows = [QuestionBank(text="화면 렌더링 성능 문제를 개선했던 방법을 말씀해 주세요."), QuestionBank(text="데이터베이스 트랜잭션 격리 수준을 고른 기준을 말씀해 주세요."),
+            QuestionBank(text="웹 접근성을 높인 방법을 말씀해 주세요.")]
+    c = _Ctx(None, None, None, None, Ai())
+    ranked = await _rank_by_relevance(c, rows, "백엔드 개발자 업무: DB 설계와 성능 개선")
+    assert ranked[0].text.startswith("데이터베이스")
+    class Down:
+        async def embed(self, texts):
+            from app.ai.client import AIUnavailable
+            raise AIUnavailable("down")
+    assert await _rank_by_relevance(_Ctx(None, None, None, None, Down()), rows, "x") == rows  # embeddings down: unchanged order
+
+
+async def test_common_bank_questions_are_fitted_to_the_resume_and_keep_their_text_when_a_rewrite_fails(client, make_client, fake_ai):
+    from app.ai.tasks.questions import flatten_resume
+
+    def adapt(inp, msgs):
+        flat = flatten_resume(inp["resume"])[0]
+        line = next(ln.split(": ", 1)[1] for ln in flat.splitlines() if len(ln.split(": ", 1)[-1]) >= 12)
+        quote = line[:12]
+        good, bad = inp["items"][0], inp["items"][1]
+        return {"questions": [{"id": good["id"], "basis_quote": quote},
+                              {"id": bad["id"], "basis_quote": "한국대학교 컴퓨터공학"}]}  # school: not work, so not used
+    fake_ai.responses["question_adapt"] = adapt
+    _, app_id, cand = await setup_app(client, make_client, default_plan=True)
+    qs = await prepare_and_compose(cand, app_id)
+    bank = [x for x in qs if x.source in ("BANK", "BANK_FALLBACK")]
+    adapted = [x for x in bank if x.grounding and x.grounding.get("adapted_from")]
+    assert len(adapted) == 1 and adapted[0].text != adapted[0].grounding["adapted_from"]
+    assert adapted[0].prompt_version.startswith("question_adapt@") and adapted[0].bank_question_id is not None
+    assert adapted[0].grounding["basis"]["field"].startswith("experience[") and adapted[0].text.endswith(adapted[0].grounding["adapted_from"])
+    assert all("한국대학교" not in x.text for x in bank)  # the school was refused: that question kept the bank text
+
+
+def test_the_adapted_sentence_is_built_by_code_around_the_bank_question():
+    from app.ai.tasks.question_adapt import fit
+    q = "피드백을 받고 일하는 방식을 바꿨던 경험을 말씀해 주세요."
+    assert fit(q, "물류 수요 예측 모델 개선, 예측 오차 18% 감소", "RESUME") == "물류 수요 예측 모델 개선 업무를 하실 때, " + q
+    h = "협업 중에 맡은 일이 늦어지는 팀원이 있다면 어떻게 하시겠습니까?"
+    assert fit(h, "복합 인덱스를 추가했다", "RESUME") == "복합 인덱스를 추가하셨는데, 그 과정에서 " + h
+    assert fit(h, "x", "DOCUMENT", "공장 망 단절 대응") == "공장 망 단절 대응 같은 일을 맡았을 때 " + h
+    assert fit(q, "x", "DOCUMENT", "공장 망 단절 대응") is None  # a document is not the candidate's past
+
+
+def test_awkward_resume_phrases_are_smoothed_when_a_bank_question_is_fitted():
+    from app.ai.tasks.question_adapt import fit
+    from app.ai.textrules import tidy_particles
+    q = "피드백을 받고 일하는 방식을 바꿨던 경험을 말씀해 주세요."
+    assert tidy_particles("IBM Netizza 를 이관") == "IBM Netizza를 이관"
+    assert fit(q, "IBM Netizza 를 신규 솔루션으로 이관", "RESUME") == "IBM Netizza를 신규 솔루션으로 이관하실 때, " + q
+    assert fit(q, "정산 배치 개선 프로젝트", "RESUME") == "정산 배치 개선 프로젝트를 하실 때, " + q

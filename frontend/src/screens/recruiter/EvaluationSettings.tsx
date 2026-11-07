@@ -33,7 +33,14 @@ const RECOMMENDED: Record<string, { name: string; description: string; high: str
     { name: '업무 정확성', description: '업무를 빠짐없이 정확하게 처리하는가', high: '확인 절차와 실수를 줄인 사례를 설명한다', mid: '정확성을 언급하지만 사례가 약하다', low: '정확성에 대한 언급이 없다' },
     { name: '소통 능력', description: '이해관계자와 조율해 일을 진행하는가', high: '조율 과정과 결과를 사례로 설명한다', mid: '소통을 언급하지만 구체적이지 않다', low: '소통 경험이 드러나지 않는다' }],
 };
-const DEFAULT_PLAN: PlanSlot[] = AREAS.map(([area]) => ({ area, text: null }));
+// The product's default ten questions (backend DEFAULT_PLAN): 인성 2 (the first is the self-introduction), 지원 동기 1, 직무 3 (the first is
+// live coding in 개발·데이터·AI), 경험 3 (from the resume), 협업 1.
+const INTRO = '1분 정도로 간단하게 자기소개를 해 주십시오.';
+const DEFAULT_PLAN: PlanSlot[] = [
+  { area: 'PERSONALITY', text: INTRO }, { area: 'PERSONALITY', text: null }, { area: 'MOTIVATION', text: null },
+  { area: 'JOB_SKILL', text: null }, { area: 'JOB_SKILL', text: null }, { area: 'JOB_SKILL', text: null },
+  { area: 'PROJECT', text: null }, { area: 'PROJECT', text: null }, { area: 'PROJECT', text: null }, { area: 'COLLABORATION', text: null },
+];
 const MAX_SLOTS = 10;
 
 /** SC-R07 기업 관리 · 면접 질문 관리: areas, questions, weights and interview time of one posting. */

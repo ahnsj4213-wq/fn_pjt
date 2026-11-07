@@ -25,6 +25,7 @@ celery.conf.update(
     timezone="UTC",
     enable_utc=True,
     worker_hijack_root_logger=False,
+    worker_redirect_stdouts=False,     # the JSON log handler writes to stdout: a redirect would swallow every job log
     beat_schedule={
         "relay": {"task": "relay.tick", "schedule": 1.0, "options": {"queue": "relay", "expires": 5}},
         **{f"periodic.{name}": {"task": "periodic.run", "schedule": float(sec), "args": [name],

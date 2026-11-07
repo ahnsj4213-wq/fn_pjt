@@ -67,6 +67,7 @@ from app.recruiter.schedule import public_router as schedule_public_router  # no
 from app.recruiter.schedule import router as schedule_router  # noqa: E402
 from app.postings.router import public_router as postings_public_router  # noqa: E402
 from app.postings.router import recruiter_router as postings_recruiter_router  # noqa: E402
+from app.recruiter.knowledge import router as knowledge_router  # noqa: E402
 from app.recruiter.router import router as recruiter_router  # noqa: E402
 from app.resumes.router import router as resumes_router  # noqa: E402
 from app.retention.router import router as withdrawal_router  # noqa: E402
@@ -75,7 +76,7 @@ from app.recruiter.inquiries import candidate_router as inquiries_candidate_rout
 from app.recruiter.inquiries import router as inquiries_router  # noqa: E402
 from app.recruiter.templates import router as templates_router  # noqa: E402
 
-ROUTERS = [auth_router, postings_public_router, postings_recruiter_router, consent_router, resumes_router,
+ROUTERS = [knowledge_router, auth_router, postings_public_router, postings_recruiter_router, consent_router, resumes_router,
            candidate_applications_router, recruiter_router, interview_router, voice_router, system_router,
            coding_router, withdrawal_router, events_router, mypage_router, company_signup_router, operator_router, schedule_router, schedule_public_router, notifications_router, report_router,
            inquiries_router, inquiries_candidate_router, templates_router]

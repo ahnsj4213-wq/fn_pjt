@@ -58,3 +58,20 @@ async def test_resume_upload_goes_to_the_bucket(s3_endpoint, make_client):
         assert len(keys) == 1 and await st.get(keys[0]) == pdf
     finally:
         set_storage(None)
+
+
+async def test_files_the_root_worker_makes_belong_to_the_data_dirs_owner(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+
+    from app.core.storage import LocalStorage
+
+    owned = []
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(os, "chown", lambda path, uid, gid: owned.append((str(path), uid, gid)), raising=False)
+    store = LocalStorage(tmp_path)
+    real = type(store.root).stat
+    monkeypatch.setattr(type(store.root), "stat",
+                        lambda self, **kw: SimpleNamespace(st_uid=10010, st_gid=10010) if self == store.root else real(self, **kw))
+    await store.put("tts/q.pcm", b"x")
+    assert [o[0].rsplit(os.sep, 1)[-1] for o in owned] == ["tts", "q.pcm"] and all(o[1:] == (10010, 10010) for o in owned)

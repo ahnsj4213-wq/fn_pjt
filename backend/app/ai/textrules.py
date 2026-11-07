@@ -132,6 +132,11 @@ _STOP = frozenset({"경험", "부분", "생각", "말씀", "질문", "내용", "
 _TOKEN = re.compile(r"[0-9A-Za-z가-힣+#.]+")
 
 
+def shared_terms(a: str, b: str, limit: int = 12) -> list[str]:
+    """Words both texts use (a posting and a resume), technology names (latin letters) first."""
+    return sorted(content_tokens(a) & content_tokens(b), key=lambda t: (not t.isascii(), t))[:limit]
+
+
 def content_tokens(text: str) -> set[str]:
     out: set[str] = set()
     for tok in _TOKEN.findall(unicodedata.normalize("NFKC", text or "")):
@@ -154,7 +159,9 @@ def shares_content(a: str, b: str) -> bool:
 
 
 # ── fq-1 ───────────────────────────────────────────────────────────────────────
-_FORBIDDEN_Q = re.compile(r"나이|몇\s?살|결혼|자녀|출산|임신|가족|부모님|출신|고향|종교|건강|병력|장애|성별|키가|몸무게|정치|지지\s?정당")
+# "장애" alone is also the everyday word for a system failure ("DB 장애 대응"): only the personal meanings are forbidden.
+_FORBIDDEN_Q = re.compile(r"나이|몇\s?살|결혼|자녀|출산|임신|가족|부모님|출신|고향|종교|건강|병력|장애인|장애\s?(등급|판정|여부|유무)|"
+                          r"(신체|정신|지체|시각|청각)(적|\s)?\s?장애|성별|키가|몸무게|정치|지지\s?정당")
 _LIE = re.compile(r"거짓|사실이\s?아닌|틀렸|모순|속이")
 
 
@@ -169,3 +176,59 @@ def accuses_lie(text: str) -> bool:
 def looks_like_question(text: str) -> bool:
     t = (text or "").strip()
     return t.endswith(("?", "？")) or bool(re.search(r"(요|까|세요|십시오|주세요|니까)[.!]?$", t))
+
+
+# A resume sentence ends in a plain past form ("원인을 찾았다", "인덱스를 추가했다") or a noun ("응답 지연 단축"). Turned into the
+# polite "-셨는데" so the question sounds like the interviewer knows the work, not like it reads the resume aloud.
+_CONTRACTED = {"갔": "가", "났": "나", "냈": "내", "켰": "키", "웠": "우", "였": "이", "됐": "되", "쳤": "치", "렸": "리", "겼": "기",
+               "혔": "히", "셨": "시", "봤": "보", "줬": "주", "췄": "추", "뒀": "두", "썼": "쓰", "뤘": "루", "꿨": "꾸"}
+_ACTION_NOUNS = ("단축", "개발", "구축", "도입", "개선", "설계", "구현", "운영", "분석", "최적화", "자동화", "전환", "이관", "적용", "작성",
+                 "담당", "수행", "관리", "해결", "감소", "향상", "배포", "리팩터링", "리팩토링", "마이그레이션", "서빙", "연동", "통합", "주도",
+                 "기획", "측정", "모니터링", "확보", "절감", "정비", "표준화", "고도화", "검증", "제작", "참여", "진행", "달성", "수상", "취득")
+
+
+def _final(ch: str) -> int:
+    return (ord(ch) - 0xAC00) % 28 if "가" <= ch <= "힣" else -1
+
+
+_PARTICLE_GAP = re.compile(r"([A-Za-z0-9)\]])\s+(을|를|이|가|은|는|으로|로|와|과|의|에서|에)(?=\s|$)")
+_HAS_OBJECT = re.compile(r"\S(을|를|으로|로|에서|에게)\s")
+
+
+def tidy_particles(s: str) -> str:
+    """'IBM Netizza 를' -> 'IBM Netizza를': a particle written apart from the word it belongs to (common in resumes)."""
+    return _PARTICLE_GAP.sub(r"\1\2", s)
+
+
+def while_doing(clause: str) -> str | None:
+    """A resume phrase as the time of the work: '데이터를 신규 솔루션으로 이관' -> '데이터를 신규 솔루션으로 이관하실 때',
+    '물류 수요 예측 모델 개선' -> '물류 수요 예측 모델 개선 업무를 하실 때'. None for a phrase that names no work."""
+    s = tidy_particles(re.sub(r"[\s.…!]+$", "", clause))
+    if len(s) < 4:
+        return None
+    if s.endswith(_ACTION_NOUNS) and _HAS_OBJECT.search(s):
+        return f"{s}하실 때"  # the phrase already has its object: the noun becomes the verb
+    if s.endswith(("업무", "프로젝트", "작업")):
+        return f"{s}를 하실 때"
+    return f"{s} 업무를 하실 때"
+
+
+def polite_did(clause: str) -> str | None:
+    """'…원인을 찾았다' -> '…원인을 찾으셨는데'; None when the ending is not one this knows."""
+    s = tidy_particles(re.sub(r"[\s.…!]+$", "", clause))
+    s = re.sub(r"습니다$", "다", s)
+    s = re.sub(r"(했음|하였음|함)$", "했다", s)
+    if re.search(r"(했|하였)다$", s):
+        return re.sub(r"(했|하였)다$", "하셨는데", s)
+    m = re.search(r"(.)(았|었)다$", s)
+    if m and _final(m.group(1)) > 0:
+        stem = s[: m.start(2)]
+        if _final(stem[-1]) == 8:  # ㄹ: 만들었다 -> 만드셨는데
+            return stem[:-1] + chr(ord(stem[-1]) - 8) + "셨는데"
+        return stem + "으셨는데"
+    m = re.search(r"(.)다$", s)
+    if m and m.group(1) in _CONTRACTED:
+        return s[: m.start(1)] + _CONTRACTED[m.group(1)] + "셨는데"
+    if s.endswith(_ACTION_NOUNS):
+        return s + "하셨는데"
+    return None
