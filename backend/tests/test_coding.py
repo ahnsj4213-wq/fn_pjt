@@ -92,21 +92,13 @@ async def test_ac15_deadline_autosubmits_last_draft_even_when_disconnected(clien
                                                                           fake_runner, sandbox_up):
     app_id, cand = await to_coding(client, make_client, voice_ai)
     assert (await cand.put(url(app_id, "/coding/draft"), json={"code": SUM_SOLUTION, "revision": 1})).status_code == 200
-    # The browser goes away: no coding calls for 120 s -> INTERRUPTED (C7) ...
+    # The browser goes away: no coding calls for 120 s -> the attempt ends (C7, ADR-0024) and the last draft is submitted
+    # as it is (COD-05): nothing waits for the deadline any more.
     await q("UPDATE interviews SET last_heartbeat_at = now() - interval '3 minutes' WHERE application_id=:a RETURNING 1",
             a=app_id)
     await tasks.attempt_sweeper()
-    assert await q("SELECT attempt_status, interrupted_from FROM applications WHERE id=:a", a=app_id) == \
-        [("INTERRUPTED", "CODING")]
-    await tasks.coding_autosubmit()  # deadline not reached: nothing happens
-    assert await q("SELECT 1 FROM coding_submissions WHERE application_id=:a", a=app_id) == []
-    # ... and the server clock keeps running: at the deadline the last draft is submitted (COD-05, OQ-25).
-    await q("UPDATE coding_attempts SET deadline_at = now() - interval '5 seconds' WHERE application_id=:a RETURNING 1",
-            a=app_id)
-    await tasks.coding_autosubmit()
-    assert await q("SELECT attempt_status FROM applications WHERE id=:a", a=app_id) == [("SUBMITTED",)]
-    assert await q("SELECT kind, code FROM coding_submissions WHERE application_id=:a", a=app_id) == \
-        [("AUTO_TIMEOUT", SUM_SOLUTION)]
+    assert await q("SELECT attempt_status, interrupted_from FROM applications WHERE id=:a", a=app_id) == [("EXPIRED", None)]
+    assert await q("SELECT kind, code FROM coding_submissions WHERE application_id=:a", a=app_id) ==         [("AUTO_EXPIRED", SUM_SOLUTION)]
     await tasks.coding_autosubmit()  # idempotent
     assert len(await q("SELECT 1 FROM coding_submissions WHERE application_id=:a", a=app_id)) == 1
     await drain()

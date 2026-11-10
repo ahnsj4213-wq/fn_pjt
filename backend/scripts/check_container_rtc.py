@@ -1,6 +1,6 @@
 """Checks the WebRTC path into a containerized `app` (deploy/docker-compose.yml) without a browser.
 
-    python scripts/check_container_rtc.py [--base http://localhost:8080] [--ip 127.0.0.1]
+    python scripts/check_container_rtc.py [--base http://localhost:8080] [--ip 127.0.0.1] [--email a@b.c --password ...]
 
 Signs up a throwaway candidate, applies to the first open posting, opens a precheck WebRTC session through the web
 proxy, then keeps ONLY the answer's candidates on `--ip` (the announced address, AIHIRE_RTC_ANNOUNCE_IPS) before
@@ -31,14 +31,15 @@ def keep_only(sdp: str, ip: str) -> tuple[str, list[str]]:
     return "\r\n".join(lines), kept
 
 
-async def main(base: str, ip: str) -> int:
+async def main(base: str, ip: str, email: str | None = None, password: str = PASSWORD) -> int:
     async with httpx.AsyncClient(base_url=base, headers={"Origin": base}, timeout=30) as c:
-        email = f"rtc-check-{int(time.time())}@check.example"
-        r = await c.post("/api/auth/signup", json={"name": "점검", "email": email, "password": PASSWORD,
-                                                   "password_confirm": PASSWORD, "phone": "010-0000-0000",
-                                                   "birth_date": "1998-03-14", "gender": "F", "terms_agreed": True})
-        r.raise_for_status()
-        r = await c.post("/api/auth/login", json={"role": "CANDIDATE", "email": email, "password": PASSWORD})
+        if email is None:  # a throwaway account; --email reuses one (e.g. a test account in AIHIRE_TESTER_EMAILS)
+            email = f"rtc-check-{int(time.time())}@check.example"
+            r = await c.post("/api/auth/signup", json={"name": "점검", "email": email, "password": password,
+                                                       "password_confirm": password, "phone": "010-0000-0000",
+                                                       "birth_date": "1998-03-14", "gender": "F", "terms_agreed": True})
+            r.raise_for_status()
+        r = await c.post("/api/auth/login", json={"role": "CANDIDATE", "email": email, "password": password})
         r.raise_for_status()
         c.headers["X-CSRF-Token"] = r.json()["csrf_token"]
         postings = (await c.get("/api/postings")).json()
@@ -100,5 +101,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://localhost:8080")
     ap.add_argument("--ip", default="127.0.0.1")
+    ap.add_argument("--email", help="an existing candidate account instead of a new one")
+    ap.add_argument("--password", default=PASSWORD)
     a = ap.parse_args()
-    sys.exit(asyncio.run(main(a.base.rstrip("/"), a.ip)))
+    sys.exit(asyncio.run(main(a.base.rstrip("/"), a.ip, a.email, a.password)))

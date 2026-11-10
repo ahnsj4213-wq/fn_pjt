@@ -1,5 +1,5 @@
 """Candidate interview control (TRD 04 §5.1, TRD 06 §7). Commands come over HTTPS with CSRF; the voice runtime
-pushes events over the data channel. All state lives in the DB so refresh/reconnect resume works (INT-11)."""
+pushes events over the data channel. All state lives in the DB; leaving ends the attempt (ADR-0024: no resume, no retake)."""
 from datetime import timedelta
 from uuid import UUID
 
@@ -20,7 +20,7 @@ from app.core.db import get_db
 from app.core.errors import AppError, conflict
 from app.core.timeutil import utcnow
 from app.interview import graph as igraph
-from app.interview import infra, retake as retakes, slots, turns
+from app.interview import infra, slots, turns
 from app.jobs.queue import enqueue
 from app.core.storage import get_storage
 from app.models import (
@@ -68,7 +68,6 @@ async def interview_state(db: AsyncSession, app: Application) -> dict:
     live_coding = await db.scalar(select(func.count()).select_from(InterviewQuestion).where(
         InterviewQuestion.question_set_id == qset.id, InterviewQuestion.answer_mode == "CODE")) if qset else 0
     coding = await db.get(CodingAttempt, app.id)
-    slot_until = await db.scalar(text("SELECT lease_expires_at FROM interview_slots WHERE application_id=:a"), {"a": app.id})
     return {"attempt_status": app.attempt_status, "interrupted_from": app.interrupted_from,
             "mode": "TEXT" if iv is not None and iv.text_mode_since else "VOICE", "server_now": utcnow(),
             "total_main": qset.main_count if qset else None, "answered_main": app.answered_main_count,
@@ -76,8 +75,7 @@ async def interview_state(db: AsyncSession, app: Application) -> dict:
             "gaze_warnings": iv.gaze_warning_count if iv else 0,
             "next_after_interview": "CODING" if posting.coding_enabled and not live_coding else "DONE", "warnings": [],
             "live_code_graded": posting.coding_enabled,
-            "retake_allowed": retakes.retake_allowed(posting.id, app.attempt_status),
-            "turn": turn_view, "slot_grace_until": slot_until if app.attempt_status == "INTERRUPTED" else None,
+            "turn": turn_view, "slot_grace_until": None,
             "coding_deadline_at": coding.deadline_at if coding else None}
 
 
@@ -229,56 +227,13 @@ async def get_state(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), d
     return await interview_state(db, await _own(db, ctx, aid))
 
 
-@router.post("/interview/resume")
-async def resume(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: AsyncSession = Depends(get_db)) -> dict:
-    app = await _own(db, ctx, aid, lock=True)
-    if app.attempt_status in ("INTERVIEWING", "CODING"):
-        return await interview_state(db, app)
-    if app.attempt_status != "INTERRUPTED":
-        raise invalid_state(app)
-    posting = await db.get(JobPosting, app.posting_id)
-    if posting.status != "OPEN":  # OQ-27: after close, no resume
-        raise conflict("POSTING_CLOSED", "마감된 공고는 응시를 이어갈 수 없습니다.")
-    if app.interrupted_from == "INTERVIEWING" and not await slots.acquire(db, app.id):
-        await db.rollback()
-        raise conflict("CAPACITY_FULL", CAPACITY_FULL_MESSAGE)
-    app.attempt_status, app.interrupted_from = app.interrupted_from, None
-    await touch(db, app.id)
-    await db.commit()
-    return await interview_state(db, app)
-
-
-@router.post("/interview/retake")
-async def retake(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: AsyncSession = Depends(get_db)) -> dict:
-    """Test postings only: stop this attempt and go back to READY, so the next start composes new questions."""
-    from app.voice import registry
-
-    app = await _own(db, ctx, aid)
-    if str(app.posting_id) not in get_settings().retake_posting_id_set:
-        raise AppError(403, "RETAKE_NOT_ALLOWED", "이 공고는 다시 응시할 수 없습니다.")
-    await db.rollback()
-    session = registry.get(aid)
-    if session is not None:
-        await session.close("RETAKE")
-    app = await _own(db, ctx, aid, lock=True)
-    if not retakes.retake_allowed(app.posting_id, app.attempt_status):
-        raise invalid_state(app)
-    posting = await db.get(JobPosting, app.posting_id)
-    settings_id = posting.current_settings_id
-    keys = await retakes.reset_attempt(db, aid)
-    await db.commit()
-    await retakes.clean_up(aid, settings_id, keys)
-    return {"attempt_status": "READY", "posting_id": posting.id}
-
-
 @router.post("/interview/text-mode")
 async def text_mode(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: AsyncSession = Depends(get_db)) -> dict:
     """INT-18 (P1): the server decides (T12): re-ask cap reached, or no live voice connection for 20 s."""
     from app.voice.registry import last_seen_connected
 
     app = await _own(db, ctx, aid, lock=True)
-    if app.attempt_status not in ("INTERVIEWING", "INTERRUPTED") or (
-            app.attempt_status == "INTERRUPTED" and app.interrupted_from != "INTERVIEWING"):
+    if app.attempt_status != "INTERVIEWING":  # a lost connection has already ended the attempt (ADR-0024)
         raise invalid_state(app)
     iv = await db.get(Interview, app.id, with_for_update=True)
     q = await turns.next_question(db, app.id)
@@ -289,11 +244,6 @@ async def text_mode(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), d
     no_link = seen is None or (utcnow() - seen).total_seconds() >= 20
     if iv.text_mode_since is None and not (presentations >= turns.MAX_PRESENTATIONS or no_link):
         raise conflict("TEXT_MODE_NOT_ALLOWED", "음성 연결을 다시 시도해 주세요.")
-    if app.attempt_status == "INTERRUPTED":
-        if not await slots.acquire(db, app.id):
-            await db.rollback()
-            raise conflict("CAPACITY_FULL", CAPACITY_FULL_MESSAGE)
-        app.attempt_status, app.interrupted_from = "INTERVIEWING", None
     iv.text_mode_since = iv.text_mode_since or utcnow()
     await touch(db, app.id)
     await db.commit()

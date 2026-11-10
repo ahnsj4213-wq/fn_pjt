@@ -482,6 +482,7 @@ mark.neg { background: var(--bad-soft); color: var(--bad-ink); border-radius: 4p
 @media (max-width: 760px) { .qbody { grid-template-columns: 1fr; } }
 .stt p { margin: 4px 0 0; line-height: 1.75; background: var(--bg); border-radius: 8px; padding: 12px 14px; }
 .qby { display: grid; gap: 8px; align-content: start; }
+.cnotes { margin-top: 6px; } .cnotes p { margin: 2px 0; font-size: 12px; }
 .qby > div { display: grid; grid-template-columns: 84px minmax(0, 1fr) 28px; gap: 8px; align-items: center; font-size: 13px; }
 .qby b { text-align: right; font-variant-numeric: tabular-nums; }
 .qfb { grid-column: 1 / -1; display: grid; gap: 6px; } .qfb p { margin: 0; font-size: 14px; }

@@ -130,6 +130,24 @@ describe('결과 리포트 (SC-A08)', () => {
     expect(screen.getByText('이번 면접에서는 찾지 못했습니다.')).toBeTruthy();
   });
 
+  it('marks a score that is not an ordinary judgement with an evidence sentence and says why (ADR-0023)', async () => {
+    const noted = answer({ criteria: [
+      { key: 'EXPERTISE', label: '전문성', score: 80, note: '근거 미연결' },
+      { key: 'LOGIC', label: '논리성', score: 20, note: '근거 추출 실패' },
+      { key: 'ATTITUDE', label: '표현 및 태도', score: 40, note: null },
+    ] });
+    server.use(http.get('*/api/candidate/applications/a1/report', () => HttpResponse.json({
+      ...REPORT, questions: REPORT.questions.map((q, i) => (i === 0 ? { ...q, answer: noted } : q)),
+    })));
+    open();
+    await screen.findByRole('heading', { name: '백엔드 개발자 (신입)' });
+    expect(screen.getAllByText('80*').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('20*').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('근거 미연결').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/재평가하면 현재 기준으로 다시 매깁니다/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('40*')).toBeNull();
+  });
+
   it('opens the question a link points to', async () => {
     server.use(http.get('*/api/candidate/applications/a1/report', () => HttpResponse.json(REPORT)));
     open();

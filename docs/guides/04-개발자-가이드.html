@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>나를 위한 가이드 - AI 모의면접 플랫폼 코드 설명서</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  :root { --ink:#1f2433; --mute:#5b6275; --line:#d9dce6; --bg:#f5f6fb; --pri:#4a3fb5; --ok:#1f7a4d; --warn:#b4540a; --bad:#b42318; }
+  * { box-sizing: border-box; }
+  body { font-family: "Malgun Gothic","맑은 고딕",sans-serif; color: var(--ink); font-size: 10.5pt; line-height: 1.65; margin: 0; }
+  h1 { font-size: 24pt; margin: 0 0 4pt; color: var(--pri); }
+  h2 { font-size: 15pt; margin: 22pt 0 6pt; padding-bottom: 4pt; border-bottom: 2px solid var(--pri); break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 12pt 0 4pt; color: var(--pri); break-after: avoid; }
+  p { margin: 4pt 0 7pt; }
+  .cover { padding: 30mm 0 10mm; }
+  .cover .sub { font-size: 12pt; color: var(--mute); }
+  .cover .meta { margin-top: 14mm; font-size: 9.5pt; color: var(--mute); }
+  .box { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8pt 11pt; margin: 8pt 0; break-inside: avoid; }
+  .box.why { border-left: 5px solid var(--ok); }
+  .box.how { border-left: 5px solid var(--pri); }
+  .box.warn { border-left: 5px solid var(--warn); background: #fff7ee; }
+  .box.bad { border-left: 5px solid var(--bad); background: #fff1f0; }
+  .tag { display:inline-block; font-size: 8.5pt; font-weight: 700; padding: 1pt 7pt; border-radius: 10px; color:#fff; margin-right: 5pt; }
+  .t-how { background: var(--pri); } .t-why { background: var(--ok); } .t-warn { background: var(--warn); } .t-bad{ background: var(--bad); }
+  table { border-collapse: collapse; width: 100%; margin: 6pt 0 10pt; font-size: 9.5pt; break-inside: avoid; }
+  th, td { border: 1px solid var(--line); padding: 4pt 7pt; text-align: left; vertical-align: top; }
+  th { background: #ebedf8; }
+  code { font-family: Consolas, "D2Coding", monospace; background: #eef0f7; padding: 0 3pt; border-radius: 3px; font-size: 9pt; }
+  figure { margin: 8pt 0 12pt; break-inside: avoid; text-align: center; }
+  figcaption { font-size: 9pt; color: var(--mute); margin-top: 2pt; }
+  svg { max-width: 100%; height: auto; }
+  svg text { font-family: "Malgun Gothic","맑은 고딕",sans-serif; }
+  .toc li { margin: 2pt 0; }
+  .pb { break-before: page; }
+  ul, ol { margin: 4pt 0 8pt; padding-left: 18pt; }
+  .small { font-size: 9pt; color: var(--mute); }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>나를 위한 가이드</h1>
+  <div class="sub">AI 모의면접 플랫폼 — 이 코드가 <b>어떻게</b> 만들어졌고 <b>왜</b> 그렇게 만들었는지<br>(12살도 읽을 수 있게 풀어 쓴 설명서)</div>
+  <div class="meta">
+    기준: 2026-11-09 · 브랜치 <code>ai-hiring-platform</code> · 커밋 전 변경 포함<br>
+    작성 방식: 코드를 직접 읽고 썼습니다. 점수 계산 예시는 실제 <code>scoring.compute()</code>를 돌려 나온 값입니다.<br>
+    전체 테스트와 화면 실행은 이번에 다시 돌리지 않았습니다(맨 끝 "아직 확인 못 한 것" 참고).
+  </div>
+</div>
+
+<h2>0. 이 문서 읽는 법</h2>
+<p>각 부분은 같은 모양으로 쓰여 있습니다.</p>
+<div class="box how"><span class="tag t-how">어떻게</span>코드에서 실제로 어떻게 구현했는지 (파일 이름 포함)</div>
+<div class="box why"><span class="tag t-why">왜</span>왜 그렇게 만들었는지, 다른 방법은 왜 안 골랐는지</div>
+<div class="box warn"><span class="tag t-warn">주의</span>헷갈리거나 아직 확실하지 않은 부분</div>
+
+<ol class="toc">
+  <li>이 프로그램은 뭘 하나요? (한 장 요약)</li>
+  <li>큰 그림 — 식당으로 이해하기 (컨테이너 8개)</li>
+  <li>데이터 창고(DB)와 "한 번만 지원" 규칙</li>
+  <li>로그인과 보안 — 문 열쇠와 신분증</li>
+  <li>면접 진행 — 시계는 서버가 가진다</li>
+  <li>평가와 점수 — AI는 의견만, 계산은 프로그램이</li>
+  <li>근거 인용 검증 — "문장 번호"로 거짓말 막기</li>
+  <li>작업 큐 — 번호표를 받은 일은 잊어버리지 않는다</li>
+  <li>코딩테스트 — 유리방(샌드박스)</li>
+  <li>질문 만들기 — 신입에게 어려운 질문을 하지 않기</li>
+  <li>화면(프런트엔드) 구조</li>
+  <li>내가 꼭 알아야 할 불일치·위험·아직 확인 못 한 것</li>
+  <li>파일 지도와 용어 사전</li>
+</ol>
+
+<!-- ======================= 1 ======================= -->
+<h2 class="pb">1. 이 프로그램은 뭘 하나요?</h2>
+<p>회사에 지원하는 사람이 <b>AI 면접관</b>과 말로 모의면접을 하면, 프로그램이 점수와 피드백이 담긴 <b>리포트</b>를 만들어 줍니다. 기업 담당자는 그 리포트를 보고 <b>합격·보류·불합격을 직접</b> 정합니다. 모든 AI는 회사 안의 컴퓨터에서만 돌고, 외부 AI 서비스로 데이터를 보내지 않습니다.</p>
+
+<figure>
+<svg viewBox="0 0 720 150" width="720">
+  <defs><marker id="a1" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4a3fb5"/></marker></defs>
+  <g font-size="11" text-anchor="middle">
+    <rect x="4" y="20" width="84" height="46" rx="8" fill="#ebedf8" stroke="#4a3fb5"/><text x="46" y="40">공고 고르기</text><text x="46" y="55">+ 로그인</text>
+    <rect x="104" y="20" width="84" height="46" rx="8" fill="#ebedf8" stroke="#4a3fb5"/><text x="146" y="40">장비 점검</text><text x="146" y="55">카메라·마이크</text>
+    <rect x="204" y="20" width="84" height="46" rx="8" fill="#ebedf8" stroke="#4a3fb5"/><text x="246" y="40">동의 +</text><text x="246" y="55">이력서</text>
+    <rect x="304" y="20" width="84" height="46" rx="8" fill="#fff4de" stroke="#b4540a"/><text x="346" y="40">AI 음성</text><text x="346" y="55">면접</text>
+    <rect x="404" y="20" width="84" height="46" rx="8" fill="#fff4de" stroke="#b4540a"/><text x="446" y="40">코딩테스트</text><text x="446" y="55">(선택)</text>
+    <rect x="504" y="20" width="84" height="46" rx="8" fill="#e3f4ea" stroke="#1f7a4d"/><text x="546" y="40">AI 평가</text><text x="546" y="55">리포트</text>
+    <rect x="604" y="20" width="108" height="46" rx="8" fill="#e3f4ea" stroke="#1f7a4d"/><text x="658" y="40">담당자가</text><text x="658" y="55">합격 결정</text>
+  </g>
+  <g stroke="#4a3fb5" stroke-width="1.6" marker-end="url(#a1)">
+    <line x1="88" y1="43" x2="102" y2="43"/><line x1="188" y1="43" x2="202" y2="43"/><line x1="288" y1="43" x2="302" y2="43"/>
+    <line x1="388" y1="43" x2="402" y2="43"/><line x1="488" y1="43" x2="502" y2="43"/><line x1="588" y1="43" x2="602" y2="43"/>
+  </g>
+  <text x="360" y="100" font-size="11" text-anchor="middle" fill="#5b6275">파란색 = 지원자가 하는 일 · 주황색 = 면접 · 초록색 = 결과 처리</text>
+  <text x="360" y="120" font-size="11" text-anchor="middle" fill="#5b6275">사람은 세 종류: 지원자 / 기업 담당자 / 운영자</text>
+</svg>
+<figcaption>그림 1. 지원자의 여정</figcaption>
+</figure>
+
+<div class="box why"><span class="tag t-why">왜</span><b>AI가 합격을 정하지 않는 이유.</b> <code>CLAUDE.md</code> §1이 "AI는 합격·불합격을 결정하거나 추천하지 않는다"를 프로젝트 원칙으로 못 박았습니다(이유 설명은 거기에 따로 없고, 사람의 일자리가 걸린 결정이라 사람이 책임지게 한 것으로 이해하면 됩니다 — 이 문장은 제 해석입니다). AI는 "점수와 근거"만 만들고, 결정 버튼은 담당자만 누릅니다. (코드에는 점수로 계산한 "AI 예상 합격 참고값"이 담당자 화면에 있는데, 이건 모델이 정한 값이 아니라 프로그램이 <code>75점 이상 합격, 65~74 보류, 그 미만 불합격</code>으로 나눈 것입니다 — <code>recruiter/router.py</code>. 12번 절 "불일치" 참고.)</div>
+
+<!-- ======================= 2 ======================= -->
+<h2 class="pb">2. 큰 그림 — 식당으로 이해하기</h2>
+<p>이 프로그램은 컨테이너(작은 가상 컴퓨터) <b>8개</b>가 함께 일합니다 (<code>deploy/docker-compose.yml</code>, <code>docs/container-architecture.md</code>). 식당에 비유하면 쉽습니다.</p>
+
+<figure>
+<svg viewBox="0 0 740 330" width="740">
+  <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6275"/></marker></defs>
+  <g font-size="11" text-anchor="middle">
+    <rect x="10" y="120" width="90" height="60" rx="10" fill="#fff4de" stroke="#b4540a"/><text x="55" y="145">손님</text><text x="55" y="161" font-size="10">브라우저</text>
+    <rect x="130" y="120" width="100" height="60" rx="10" fill="#ebedf8" stroke="#4a3fb5"/><text x="180" y="142" font-weight="700">frontend</text><text x="180" y="158" font-size="10">홀(메뉴판·화면)</text>
+    <rect x="260" y="120" width="100" height="60" rx="10" fill="#ebedf8" stroke="#4a3fb5"/><text x="310" y="142" font-weight="700">api</text><text x="310" y="158" font-size="10">주방장(규칙·음성연결)</text>
+    <rect x="400" y="20" width="110" height="60" rx="10" fill="#e3f4ea" stroke="#1f7a4d"/><text x="455" y="42" font-weight="700">postgres</text><text x="455" y="58" font-size="10">창고 장부(DB)</text>
+    <rect x="400" y="100" width="110" height="60" rx="10" fill="#e3f4ea" stroke="#1f7a4d"/><text x="455" y="122" font-weight="700">redis</text><text x="455" y="138" font-size="10">주문 번호판</text>
+    <rect x="400" y="180" width="110" height="60" rx="10" fill="#ebedf8" stroke="#4a3fb5"/><text x="455" y="202" font-weight="700">worker</text><text x="455" y="218" font-size="10">뒷주방 직원(오래 걸리는 일)</text>
+    <rect x="560" y="60" width="120" height="60" rx="10" fill="#f3e8ff" stroke="#7a3fb5"/><text x="620" y="82" font-weight="700">llm-gpu</text><text x="620" y="98" font-size="10">빠른 요리사(면접 중 대화)</text>
+    <rect x="560" y="140" width="120" height="60" rx="10" fill="#f3e8ff" stroke="#7a3fb5"/><text x="620" y="162" font-weight="700">ai</text><text x="620" y="178" font-size="10">듣기·말하기·평가·검색</text>
+    <rect x="560" y="220" width="120" height="60" rx="10" fill="#ffe9e7" stroke="#b42318"/><text x="620" y="242" font-weight="700">샌드박스</text><text x="620" y="258" font-size="10">유리방 실험실(필요할 때만)</text>
+    <rect x="260" y="250" width="100" height="50" rx="10" fill="#f1f1f1" stroke="#999"/><text x="310" y="272" font-weight="700">mailer</text><text x="310" y="288" font-size="10">우편함(메일)</text>
+  </g>
+  <g stroke="#5b6275" stroke-width="1.4" marker-end="url(#a2)" fill="none">
+    <line x1="100" y1="150" x2="128" y2="150"/><line x1="230" y1="150" x2="258" y2="150"/>
+    <line x1="360" y1="135" x2="398" y2="60"/><line x1="360" y1="150" x2="398" y2="130"/>
+    <line x1="360" y1="165" x2="398" y2="205"/><line x1="510" y1="120" x2="558" y2="90"/>
+    <line x1="510" y1="130" x2="558" y2="165"/><line x1="510" y1="215" x2="558" y2="165"/><line x1="510" y1="225" x2="558" y2="245"/>
+    <line x1="455" y1="240" x2="360" y2="272"/>
+  </g>
+  <text x="370" y="320" font-size="10" text-anchor="middle" fill="#5b6275">외부 인터넷으로 나가는 길이 없는 "internal 망" 안에서만 서로 대화합니다</text>
+</svg>
+<figcaption>그림 2. 컨테이너 8개 + 필요할 때만 뜨는 샌드박스</figcaption>
+</figure>
+
+<table>
+<tr><th>컨테이너</th><th>식당 비유</th><th>하는 일 / 기술</th></tr>
+<tr><td>frontend</td><td>홀과 메뉴판</td><td>웹 화면. Next.js + React 19</td></tr>
+<tr><td>api</td><td>주방장</td><td>요청 처리, 로그인, 면접 진행, WebRTC(실시간 음성) 연결. FastAPI + aiortc</td></tr>
+<tr><td>worker</td><td>뒷주방 직원</td><td>오래 걸리는 일(평가·질문 만들기·채점)을 번호표 순서대로 처리. Celery</td></tr>
+<tr><td>postgres</td><td>창고 장부</td><td>모든 기록 저장. PostgreSQL 16 + pgvector(검색용)</td></tr>
+<tr><td>redis</td><td>주문 번호판</td><td>"일 왔어요!" 알림을 빠르게 전달. Redis 7</td></tr>
+<tr><td>llm-gpu</td><td>빠른 요리사</td><td>면접 중에 바로바로 답하는 언어모델(llama.cpp + Qwen3.5-4B, GPU)</td></tr>
+<tr><td>ai</td><td>특별 요리사들</td><td>음성→글자(STT), 글자→음성(TTS), 평가용 LLM, 임베딩</td></tr>
+<tr><td>mailer</td><td>우편함</td><td>메일 발송(개발용 Mailpit)</td></tr>
+<tr><td>(샌드박스)</td><td>유리방 실험실</td><td>지원자 코드를 돌릴 때마다 잠깐 만들었다가 지움</td></tr>
+</table>
+
+<div class="box why"><span class="tag t-why">왜</span>
+<b>왜 이렇게 쪼갰나?</b> (ADR·HANDOFF의 근거 + 제 해석) (1) 일이 오래 걸리는 평가가 면접 화면을 멈추지 않게 하려고 — 평가는 worker가 따로 합니다. (2) <b>AI와 코드 실행 컨테이너는 DB에 직접 접근하지 못하게</b> 해서, 이상한 일이 생겨도 개인정보가 새지 않게 하려고. (3) 외부 인터넷으로 나가는 길을 막아서 "이력서·답변이 외부 AI로 간다"는 일이 구조적으로 불가능하게 하려고. 이 결정은 <code>docs/adr/ADR-0001·0014·0015</code>에 기록되어 있습니다.</div>
+<div class="box warn"><span class="tag t-warn">주의</span>6GB GPU 한 장을 여러 일이 나눠 씁니다. 그래서 "면접 중 대화용" LLM(llm-gpu)과 "평가용"을 나누고, 평가는 느긋하게(BATCH 줄) 처리합니다. 실제 속도는 이 PC에서 잰 값이며 다른 장비에서는 다를 수 있습니다.</div>
+
+<!-- ======================= 3 ======================= -->
+<h2 class="pb">3. 데이터 창고(DB)와 "한 번만 지원" 규칙</h2>
+<div class="box how"><span class="tag t-how">어떻게</span>
+같은 사람이 같은 공고에 두 번 지원하지 못하게 하는 규칙을 <b>데이터베이스 자체에</b> 걸었습니다. <code>migrations/versions/20261027_0001_initial.py:210</code>: <code>UNIQUE (posting_id, candidate_id)</code>. "한 번에 하나만 진행 중인 발언(turn)", "코딩 최종 제출은 지원 건당 정확히 1개" 같은 규칙도 같은 방식입니다(<code>ux_turn_live</code>, <code>application_id uuid NOT NULL UNIQUE</code>).</div>
+<div class="box why"><span class="tag t-why">왜</span>
+화면에서 "이미 지원했어요"라고 막는 것만으로는 부족합니다. 두 번 빠르게 누르거나 일부러 요청을 보내면 뚫립니다. <b>창고 문에 자물쇠를 달면</b> 누가 어떻게 와도 두 번째는 들어갈 수 없습니다. 이 프로젝트의 철학은 "중요한 규칙은 프런트가 아니라 서버·DB가 지킨다"입니다.</div>
+
+<h3>지원 건(application)이 걸어가는 상태</h3>
+<figure>
+<svg viewBox="0 0 740 190" width="740">
+  <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6275"/></marker></defs>
+  <g font-size="11" text-anchor="middle">
+    <rect x="5" y="30" width="80" height="34" rx="17" fill="#ebedf8" stroke="#4a3fb5"/><text x="45" y="52">READY</text>
+    <rect x="115" y="30" width="100" height="34" rx="17" fill="#ebedf8" stroke="#4a3fb5"/><text x="165" y="52">PREPARING</text>
+    <rect x="245" y="30" width="110" height="34" rx="17" fill="#fff4de" stroke="#b4540a"/><text x="300" y="52">INTERVIEWING</text>
+    <rect x="385" y="30" width="80" height="34" rx="17" fill="#fff4de" stroke="#b4540a"/><text x="425" y="52">CODING</text>
+    <rect x="495" y="30" width="100" height="34" rx="17" fill="#e3f4ea" stroke="#1f7a4d"/><text x="545" y="52">SUBMITTED</text>
+    <rect x="245" y="120" width="120" height="34" rx="17" fill="#ffe9e7" stroke="#b42318"/><text x="305" y="142">INTERRUPTED</text>
+    <rect x="410" y="120" width="100" height="34" rx="17" fill="#ffe9e7" stroke="#b42318"/><text x="460" y="142">EXPIRED</text>
+  </g>
+  <g stroke="#5b6275" stroke-width="1.4" marker-end="url(#a3)" fill="none">
+    <line x1="85" y1="47" x2="113" y2="47"/><line x1="215" y1="47" x2="243" y2="47"/><line x1="355" y1="47" x2="383" y2="47"/><line x1="465" y1="47" x2="493" y2="47"/>
+    <path d="M300 64 L300 118"/><path d="M425 64 L340 118"/><line x1="365" y1="137" x2="408" y2="137"/>
+    <path d="M355 40 Q 420 5 495 36"/>
+  </g>
+  <text x="640" y="48" font-size="10" fill="#5b6275">(코딩 없는 공고는</text><text x="640" y="62" font-size="10" fill="#5b6275">바로 SUBMITTED)</text>
+  <text x="530" y="140" font-size="10" fill="#b42318">나가면 종료 (ADR-0024)</text>
+  <text x="5" y="185" font-size="10" fill="#5b6275">평가(eval_status)와 채용 결정(decision)은 이 상태와 "따로" 관리됩니다 — 평가가 실패해도 응시 기록은 안 지워집니다.</text>
+</svg>
+<figcaption>그림 3. 응시 상태. 중간에 나가면 INTERRUPTED를 거쳐 EXPIRED로 끝납니다 (<code>applications/lifecycle.py</code>의 <code>end_left</code>)</figcaption>
+</figure>
+<div class="box why"><span class="tag t-why">왜</span>"제출 상태", "평가 상태", "합격 결정"을 <b>세 개의 다른 칸</b>으로 나눴습니다. 만약 한 칸에 다 섞으면 "평가가 실패했다 = 응시가 없던 일" 같은 사고가 납니다. 지금은 평가가 실패해도 지원자는 다시 면접을 볼 필요가 없고, 담당자가 <b>다시 평가</b> 버튼만 누르면 됩니다.</div>
+
+<!-- ======================= 4 ======================= -->
+<h2 class="pb">4. 로그인과 보안 — 문 열쇠와 신분증</h2>
+<table>
+<tr><th>하는 일</th><th>어떻게 (파일)</th><th>왜</th></tr>
+<tr><td>비밀번호 보관</td><td>Argon2id로 "해시". 원래 비밀번호는 저장하지 않음 (<code>auth/passwords.py</code>)</td><td>믹서기에 갈아 버린 과일은 원래 과일로 되돌릴 수 없는 것처럼, 장부가 유출돼도 비밀번호를 알 수 없게. 일부러 느리고 메모리를 많이 쓰게 만들어 무차별 대입을 어렵게 함</td></tr>
+<tr><td>로그인 실패 제한</td><td>15분 동안 같은 이메일 5번, 같은 IP 30번 실패하면 잠금 (<code>auth/throttle.py</code>)</td><td>비밀번호를 계속 찍어 보는 공격 막기</td></tr>
+<tr><td>"없는 계정"과 "틀린 비번" 구분 안 함</td><td>없는 계정도 가짜 해시와 비교(<code>passwords.py</code> 설명). 같은 오류 문구를 쓰는지는 이번에 확인하지 않음</td><td>"이 이메일은 가입되어 있다"는 사실이 새면 안 되니까</td></tr>
+<tr><td>세션 쿠키</td><td><code>httponly</code> + <code>samesite="strict"</code>, 로그인할 때마다 새 토큰 발급, 2시간 동안 활동 없으면 만료 (<code>auth/router.py:194</code>, <code>sessions.py</code>, <code>constants.py:57</code>)</td><td>자바스크립트가 쿠키를 못 읽고(XSS 방어), 다른 사이트가 대신 요청을 못 보내고, 훔친 토큰으로 이어서 쓰는 것(세션 고정)을 막음</td></tr>
+<tr><td>CSRF 방어</td><td>요청에 <code>x-csrf-token</code> 헤더가 세션의 토큰과 같아야 하고, <code>Origin</code>도 검사 (<code>auth/deps.py</code>)</td><td>남이 만든 가짜 버튼으로 내 계정이 대신 행동하지 못하게</td></tr>
+<tr><td>역할·소유권 검사</td><td>서버의 <code>require_candidate / require_recruiter / require_operator</code>. 화면의 <code>RequireRole</code>은 편의일 뿐 (<code>app/routes.tsx</code>)</td><td><b>화면 검사는 문에 붙인 안내문, 서버 검사는 진짜 열쇠.</b> 주소를 직접 쳐도, 다른 사람 ID를 넣어도 서버가 막아야 함(IDOR 방지)</td></tr>
+</table>
+<div class="box warn"><span class="tag t-warn">주의</span>"모든 API가 소유권을 제대로 검사하는지"는 이번에 하나하나 다시 확인하지 않았습니다. 코드에 검사 장치가 있다는 것까지만 확인했고, 실제 보장은 테스트(<code>tests/test_auth.py</code> 등)를 돌려 봐야 합니다.</div>
+
+<!-- ======================= 5 ======================= -->
+<h2 class="pb">5. 면접 진행 — 시계는 서버가 가진다</h2>
+<div class="box how"><span class="tag t-how">어떻게</span>
+질문 음성이 <b>끝난 뒤</b>에야 서버가 <code>open_answer()</code>를 호출해 상태를 PRESENTING→ANSWERING으로 바꾸고, <b>그때 서버 시각으로</b> 마감 시각(<code>deadline_at = now + 제한시간</code>)을 정합니다 (<code>interview/turns.py:165~177</code>). 답변은 <code>finalize()</code> 한 곳에서 "정확히 한 번만" 확정됩니다. 버튼과 시간 만료가 동시에 와도 <code>on_conflict_do_nothing</code>과 행 잠금(<code>with_for_update</code>)으로 한쪽만 이깁니다.</div>
+<div class="box why"><span class="tag t-why">왜</span>
+브라우저의 시계는 지원자가 마음대로 바꿀 수 있습니다. 그래서 "몇 초 남았나"는 <b>서버만</b> 압니다. 화면의 카운트다운은 보여 주기용입니다. 또 질문 음성이 끝나기 전에는 마이크 입력을 받지 않아서, 질문을 듣는 도중 말한 내용이 답변에 섞이지 않습니다.</div>
+
+<figure>
+<svg viewBox="0 0 740 150" width="740">
+  <g font-size="11" text-anchor="middle">
+    <rect x="10" y="40" width="130" height="40" fill="#f3e8ff" stroke="#7a3fb5"/><text x="75" y="64">면접관이 질문 읽음</text>
+    <rect x="140" y="40" width="90" height="40" fill="#fff4de" stroke="#b4540a"/><text x="185" y="64">생각 10초</text>
+    <rect x="230" y="40" width="330" height="40" fill="#e3f4ea" stroke="#1f7a4d"/><text x="395" y="64">답변 (기본 60초 · 마이크 열림 · 실시간 자막)</text>
+    <rect x="560" y="40" width="170" height="40" fill="#ebedf8" stroke="#4a3fb5"/><text x="645" y="64">꼬리질문? (5초+45초)</text>
+    <line x1="430" y1="20" x2="430" y2="95" stroke="#b42318" stroke-dasharray="4 3"/><text x="430" y="14" fill="#b42318" font-size="10">2/3 지점: 면접관이 한 번 끼어듦</text>
+    <line x1="530" y1="95" x2="530" y2="40" stroke="#b42318" stroke-dasharray="4 3"/><text x="530" y="110" fill="#b42318" font-size="10">남은 10초: 경고</text>
+    <text x="395" y="135" fill="#5b6275" font-size="10">끝나는 방법은 두 가지뿐: [답변 완료] 버튼 또는 시간 만료 (조용히 있어도 저절로 끝나지 않음)</text>
+  </g>
+</svg>
+<figcaption>그림 4. 질문 하나의 시간 흐름 (기본값 기준)</figcaption>
+</figure>
+
+<table>
+<tr><th>값</th><th>어디서 정해지나</th><th>출처 파일</th></tr>
+<tr><td>본질문 생각 시간</td><td>5/10/20/30초 중 공고 설정 (기본 10)</td><td><code>core/constants.py</code> (THINK_SEC_CHOICES, DEFAULT_THINK_SEC)</td></tr>
+<tr><td>본질문 답변 시간</td><td>30/60/90/120초 중 공고 설정 (기본 60)</td><td><code>constants.py</code> (ANSWER_SEC_CHOICES, DEFAULT_ANSWER_SEC)</td></tr>
+<tr><td>꼬리질문</td><td>생각 5초 + 답변 45초. 질문당 최대 1개, 공고 전체 상한 0~4(기본 2)</td><td><code>constants.py</code> (FOLLOWUP_*, MAX_FOLLOWUPS_*, DEFAULT_FOLLOWUP_MAX)</td></tr>
+<tr><td>라이브 코딩 답변</td><td>180초</td><td><code>constants.py</code> (CODE_ANSWER_LIMIT_SEC)</td></tr>
+<tr><td>끼어들기</td><td>답변 시간의 2/3가 지났는데 아직 말 중이면 1번</td><td><code>constants.py</code> (INTERJECT_*)</td></tr>
+</table>
+<div class="box warn"><span class="tag t-warn">주의</span><code>CLAUDE.md</code>에는 "본질문 90초·꼬리질문 60초"라고 적혀 있지만 <b>코드는 기본 60초/45초</b>이고 공고마다 바꿀 수 있습니다. 문서와 코드가 다르니 어느 쪽이 기준인지 정해야 합니다(12번 참고).</div>
+
+<h3>중간에 나가면?</h3>
+<div class="box how"><span class="tag t-how">어떻게</span>창을 닫거나 새로고침하거나 음성 연결이 끊기거나 신호가 120초 없으면 응시가 <b>INTERRUPTED→EXPIRED</b>로 끝납니다. 이미 답한 문항은 평가하고, 코딩테스트 중이면 마지막 저장 코드를 자동 제출합니다. "이어하기·그만두기·다시 보기"는 <b>일부러 없앴습니다</b> (<code>ADR-0024</code>, 서버가 <code>409 ATTEMPT_ENDED</code> 등으로 강제).</div>
+<div class="box why"><span class="tag t-why">왜</span>사용자 지시(2026-11-09)가 직접적인 이유입니다. ADR-0024에는 지시 내용만 있고 이유 설명은 없습니다. (제 추측: 이어하기를 허용하면 질문을 보고 준비해서 다시 들어오는 편법이 가능해집니다.) 확실한 사실은, 서버가 강제하므로 화면을 우회해도 이어갈 수 없다는 점입니다.</div>
+
+<!-- ======================= 6 ======================= -->
+<h2 class="pb">6. 평가와 점수 — AI는 의견만, 계산은 프로그램이</h2>
+<div class="box why"><span class="tag t-why">왜</span>
+AI는 같은 질문에도 매번 조금 다르게 말하고, 가끔 계산을 틀립니다. 그래서 <b>AI는 "1~5점 중 몇 점인가"만</b> 말하고, 평균·가중치·총점 계산은 전부 프로그램(<code>evaluation/scoring.py</code>)이 합니다. 가중치 합이 100이 아니면 <code>ValueError("weights must sum to 100")</code>로 저장을 거부합니다.</div>
+
+<h3>계산 순서 (코드 그대로)</h3>
+<ol>
+<li>질문마다 4개 항목(전문성·논리성·표현 및 태도·전달력)에 AI가 1~5점. 꼬리질문이 있으면 본질문 점수와 <b>평균</b>.</li>
+<li>항목별로 모든 질문의 평균 × 20 → 100점 만점으로 바꿈.</li>
+<li>프로그램이 직접 잰 값(말 속도·발음·부정적 표현 횟수 등)이 있으면 그 항목 점수의 <b>30%</b>로 섞음 (<code>RULE_WEIGHT = 0.3</code>).</li>
+<li>항목 점수 × 가중치(%)를 모두 더해 총점. 코딩테스트가 있으면 코딩 점수 × 코딩 가중치도 더함.</li>
+<li>소수점 둘째 자리에서 <b>반올림(ROUND_HALF_UP)</b>해서 저장.</li>
+</ol>
+
+<h3>예시 — 실제 함수를 돌린 결과</h3>
+<p>세 질문의 점수(질문2에는 꼬리질문 있음)를 넣고 <code>scoring.compute()</code>를 실제로 실행했습니다.</p>
+<table>
+<tr><th>질문</th><th>전문성</th><th>논리성</th><th>표현·태도</th><th>전달력</th></tr>
+<tr><td>Q1</td><td>4</td><td>4</td><td>3</td><td>4</td></tr>
+<tr><td>Q2 본질문 / 꼬리질문</td><td>5 / 3 → <b>4</b></td><td>4 / 3 → <b>3.5</b></td><td>4 / 3 → <b>3.5</b></td><td>4 / 3 → <b>3.5</b></td></tr>
+<tr><td>Q3</td><td>3</td><td>3</td><td>3</td><td>4</td></tr>
+<tr><td><b>평균 × 20</b></td><td>(4+4+3)/3×20 = <b>73.33</b></td><td>(4+3.5+3)/3×20 = <b>70.00</b></td><td>(3+3.5+3)/3×20 = <b>63.33</b></td><td>(4+3.5+4)/3×20 = <b>76.67</b></td></tr>
+</table>
+
+<figure>
+<svg viewBox="0 0 700 250" width="700">
+  <text x="350" y="18" font-size="12" text-anchor="middle" font-weight="700">항목 점수 (100점 만점) — 위 예시의 실제 출력값</text>
+  <g font-size="11">
+    <text x="10" y="55">전문성</text><rect x="90" y="40" width="440" height="20" fill="#eef0f7"/><rect x="90" y="40" width="322.5" height="20" fill="#4a3fb5"/><text x="540" y="55">73.33</text>
+    <text x="10" y="95">논리성</text><rect x="90" y="80" width="440" height="20" fill="#eef0f7"/><rect x="90" y="80" width="308" height="20" fill="#4a3fb5"/><text x="540" y="95">70.00</text>
+    <text x="10" y="135">표현·태도</text><rect x="90" y="120" width="440" height="20" fill="#eef0f7"/><rect x="90" y="120" width="278.7" height="20" fill="#b4540a"/><text x="540" y="135">63.33</text>
+    <text x="10" y="175">전달력</text><rect x="90" y="160" width="440" height="20" fill="#eef0f7"/><rect x="90" y="160" width="337.3" height="20" fill="#4a3fb5"/><text x="540" y="175">76.67</text>
+    <line x1="90" y1="200" x2="530" y2="200" stroke="#999"/><text x="90" y="215" text-anchor="middle" fill="#5b6275">0</text><text x="530" y="215" text-anchor="middle" fill="#5b6275">100</text>
+    <text x="350" y="240" text-anchor="middle" fill="#1f2433">가중치 30/30/20/20 → 총점 71.00 · 코딩 80점(가중치 20%)을 더하고 나머지를 25/25/15/15로 나누면 72.83</text>
+  </g>
+</svg>
+<figcaption>그림 5. 점수 계산 결과. 직접 계산한 값과 <code>compute()</code> 출력이 일치했습니다.</figcaption>
+</figure>
+
+<h3>코딩 점수는 따로 계산</h3>
+<table>
+<tr><th>부분</th><th>비중</th><th>누가 정하나</th></tr>
+<tr><td>정확성</td><td>60%</td><td><b>테스트를 실제로 돌린 결과</b> (통과 수 ÷ 전체 × 100)</td></tr>
+<tr><td>효율성</td><td>20%</td><td>AI가 1~5점 판단 (단, 통과가 0이면 1점, 시간·메모리 한도에 걸리면 최대 2점으로 <b>프로그램이 덮어씀</b>)</td></tr>
+<tr><td>문제 해결 방식</td><td>10%</td><td>AI 1~5점</td></tr>
+<tr><td>코드 품질</td><td>10%</td><td>AI 1~5점</td></tr>
+</table>
+<div class="box why"><span class="tag t-why">왜</span>"정답인가"는 AI의 의견이 아니라 <b>실행해서 확인한 사실</b>이어야 해서 가장 큰 비중(60%)을 줬습니다 (<code>ADR-0017</code>, <code>scoring.py:16</code>).</div>
+
+<h3>평가 기준표(루브릭)는 어떻게 AI에게 전달되나</h3>
+<div class="box how"><span class="tag t-how">어떻게</span><code>ai/rubric.py</code>의 <code>ITEMS</code>에 항목(전문성·논리성·표현 및 태도·전달력)마다 <b>1~5점 기준 문장(levels)</b>과 <b>점수별 예시 답변(examples)</b>이 있습니다. <code>render()</code>가 이를 프롬프트로 만들어 AI에게 줍니다. 질문 유형(경험·행동·기술·설계·상황 대응)마다 "이 질문에서 보는 것" 문단이 따로 붙습니다(<code>QUESTION_KINDS</code>). 예시 답변은 질문 유형이 바뀌어도 그대로이고, 모두 "느려진 API" 한 장면입니다.</div>
+<div class="box warn"><span class="tag t-warn">주의</span>점수 판단 자체는 AI의 해석입니다. 같은 답변에도 ±1점 흔들릴 수 있고, 그래서 <code>ADR-0023</code>에서 "독립 판정의 중앙값"을 쓰도록 했습니다. 사람 채점과 비교한 정확도 측정은 이번에 찾지 못했습니다. 논리성의 세부 항목(주장 명확성·근거 제시·논리적 흐름)은 한 줄 정의만 있고 점수별 기준·예시가 없습니다(<code>rubric.py:139~144</code>).</div>
+
+<!-- ======================= 7 ======================= -->
+<h2 class="pb">7. 근거 인용 검증 — "문장 번호"로 거짓말 막기</h2>
+<p>리포트에는 "이 점수는 지원자가 이렇게 말해서"라는 <b>근거 문장</b>이 붙습니다. AI는 그럴듯한 문장을 지어내거나, 한두 글자 틀리게 베껴 쓸 수 있습니다.</p>
+
+<figure>
+<svg viewBox="0 0 740 200" width="740">
+  <g font-size="11">
+    <rect x="10" y="10" width="330" height="170" rx="10" fill="#f5f6fb" stroke="#d9dce6"/>
+    <text x="175" y="30" text-anchor="middle" font-weight="700">① 프로그램이 답변을 문장으로 자르고 번호를 붙임</text>
+    <text x="22" y="62">[1] 응답이 3초로 느려져 로그를 확인했습니다.</text>
+    <text x="22" y="86">[2] 주문 조회만 느려서 인덱스 누락을 의심했고,</text>
+    <text x="22" y="110">[3] 캐시도 검토했지만 인덱스를 추가했습니다.</text>
+    <text x="22" y="134">[4] 배포 후 0.3초로 돌아온 것을 확인했습니다.</text>
+    <text x="22" y="165" fill="#5b6275" font-size="10">(번호 목록만 AI에게 보여 줌)</text>
+    <rect x="380" y="10" width="350" height="170" rx="10" fill="#f5f6fb" stroke="#d9dce6"/>
+    <text x="555" y="30" text-anchor="middle" font-weight="700">② AI는 "번호"만 대답, 프로그램이 원문을 저장</text>
+    <text x="392" y="62">AI 답: 논리성 4점, sent: <tspan font-weight="700" fill="#b4540a">3</tspan></text>
+    <text x="392" y="90">프로그램: 3번 문장의 원문 위치(start~end)를</text>
+    <text x="392" y="108">저장 → "캐시도 검토했지만…"</text>
+    <text x="392" y="136" fill="#b42318">번호가 목록 밖(예: 9)이면 → 근거 아님</text>
+    <text x="392" y="160" fill="#1f7a4d">AI가 쓴 글자는 근거로 저장되지 않음</text>
+  </g>
+</svg>
+<figcaption>그림 6. 문장 번호 방식 (<code>evaluation/quotes.py</code>의 <code>sentences()</code> / <code>numbered()</code>, ADR-0023)</figcaption>
+</figure>
+<div class="box how"><span class="tag t-how">어떻게</span><code>sentences()</code>가 마침표·줄바꿈 기준으로 답변을 자르고(160자 넘는 문장은 쉼표에서 더 자름, 최대 40조각), <code>numbered()</code>가 <code>[1] …</code> 목록을 만듭니다. AI는 <b>번호 하나</b>만 돌려주고, 프로그램이 그 번호의 원문 구간(Span: 시작·끝 위치)을 저장합니다.</div>
+<div class="box why"><span class="tag t-why">왜</span>예전에는 AI가 문장을 직접 베껴 쓰게 하고 원문과 대조했습니다(<code>find_span()</code>, 띄어쓰기·따옴표 차이는 봐주되 숫자는 정확히: "3.5배"가 "35배"로 통과하지 않음). 그런데 실제 면접에서 <b>인용을 비워서 내용이 있는 답변이 1점</b> 받는 일이 일어났습니다(ADR-0023 배경). 번호 방식은 "베껴 쓰다 틀리는" 문제 자체를 없앱니다. AI는 존재하지 않는 문장을 만들 수도, 잘못 옮길 수도 없습니다.</div>
+<div class="box warn"><span class="tag t-warn">주의</span>근거를 찾지 못하면 리포트에 "근거 미연결 / 내용 부족 / 근거 추출 실패 / 답변 없음"으로 <b>구분해서</b> 표시합니다. 예전에는 근거 추출 실패만으로 최저점을 주던 것을 ADR-0023에서 바꿨습니다.</div>
+
+<!-- ======================= 8 ======================= -->
+<h2 class="pb">8. 작업 큐 — 번호표를 받은 일은 잊어버리지 않는다</h2>
+<p>평가·질문 만들기·코드 채점·메일 같은 일은 오래 걸려서 요청 중에 하지 않고 "작업"으로 DB에 적어 둔 뒤 worker가 가져가 처리합니다.</p>
+
+<figure>
+<svg viewBox="0 0 740 200" width="740">
+  <defs><marker id="a4" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6275"/></marker></defs>
+  <g font-size="11" text-anchor="middle">
+    <rect x="20" y="60" width="100" height="40" rx="20" fill="#ebedf8" stroke="#4a3fb5"/><text x="70" y="85">QUEUED(대기)</text>
+    <rect x="210" y="60" width="110" height="40" rx="20" fill="#fff4de" stroke="#b4540a"/><text x="265" y="85">RUNNING(처리 중)</text>
+    <rect x="420" y="20" width="110" height="40" rx="20" fill="#e3f4ea" stroke="#1f7a4d"/><text x="475" y="45">SUCCEEDED</text>
+    <rect x="420" y="130" width="110" height="40" rx="20" fill="#ffe9e7" stroke="#b42318"/><text x="475" y="155">실패 → 재시도</text>
+    <rect x="600" y="130" width="120" height="40" rx="20" fill="#ffe9e7" stroke="#b42318"/><text x="660" y="155">횟수 소진 → 보류</text>
+  </g>
+  <g stroke="#5b6275" stroke-width="1.4" marker-end="url(#a4)" fill="none">
+    <line x1="120" y1="80" x2="208" y2="80"/><path d="M320 72 L418 45"/><path d="M320 90 L418 148"/><line x1="530" y1="150" x2="598" y2="150"/>
+    <path d="M420 160 Q 200 190 90 102"/>
+  </g>
+  <text x="165" y="52" font-size="10" fill="#5b6275" text-anchor="middle">SKIP LOCKED로 가져감</text>
+  <text x="300" y="185" font-size="10" fill="#5b6275">(재시도: 다시 QUEUED)</text>
+</svg>
+<figcaption>그림 7. 작업의 일생 (<code>jobs/worker.py</code>, <code>jobs/queue.py</code>)</figcaption>
+</figure>
+
+<table>
+<tr><th>장치</th><th>어떻게</th><th>왜</th></tr>
+<tr><td>같은 트랜잭션에서 등록</td><td><code>enqueue(db, …)</code>는 호출한 쪽의 DB 트랜잭션 안에서 작업 행을 INSERT (<code>queue.py</code>). 예: 답변이 확정(<code>finalize</code>)되는 순간 <code>pre_evaluate</code> 작업도 같이 저장</td><td>"제출은 됐는데 평가 작업 등록은 안 됨"이라는 반쪽 상태가 생기지 않게 (둘 다 되거나 둘 다 안 되거나)</td></tr>
+<tr><td>중복 방지</td><td><code>dedupe_key</code>가 같은 살아 있는 작업이 있으면 <code>ON CONFLICT DO NOTHING</code></td><td>버튼을 두 번 눌러도 평가가 두 번 돌지 않게</td></tr>
+<tr><td>가져가기</td><td><code>FOR UPDATE SKIP LOCKED</code> (<code>worker.py:81</code>) — 다른 worker가 잡은 줄은 건너뜀</td><td>여러 worker가 같은 일을 동시에 집어 가지 않게</td></tr>
+<tr><td>임대(lease)</td><td>가져가면 60초짜리 임대, 15초마다 연장. 연장이 끊기면(worker 사망) 다시 가져갈 수 있음 (<code>worker.reap()</code>이 재시작 때 회수)</td><td>worker가 죽어도 일이 영원히 "처리 중"으로 남지 않게 → <b>재시작 후 복구</b></td></tr>
+<tr><td>펜싱 토큰</td><td>가져갈 때마다 새 번호(<code>lease_token</code>)를 줌. 완료는 "내 토큰이 맞을 때만" 반영 (<code>fenced_complete</code>)</td><td>늦게 깨어난 옛 worker가 새 worker의 결과를 덮어쓰는 사고 방지</td></tr>
+<tr><td>인프라 장애</td><td>모델 서버가 꺼져 있으면 worker의 "줄"이 일을 아예 가져가지 않고(probe), 횟수도 소모하지 않음 (<code>runtime.py</code>, AC-18)</td><td>서버가 꺼진 동안 일이 "실패"로 소진되면 억울하기 때문</td></tr>
+<tr><td>줄(lane) 분리</td><td>LLM / LLM_EVAL / RUNNER / CPU / NONE 별로 일꾼 수를 따로 둠 (<code>runtime.py:24</code>)</td><td>오래 걸리는 평가가 질문 만들기를 막지 않게</td></tr>
+</table>
+<div class="box why"><span class="tag t-why">왜 별도 큐 제품 대신 DB를 썼나?</span>코드 주석(<code>queue.py</code>)이 밝힌 이유는 "상태 변경과 후속 작업이 함께 커밋되게"입니다. 나머지는 제 해석입니다: 핵심 규칙(원자적 등록, 재시작 복구, 중복 방지)을 가장 간단하고 믿을 수 있게 지키려고 PostgreSQL을 "진실의 원천"으로 썼습니다. Redis는 "일 왔어요" 알림을 빨리 전하는 용도일 뿐이고, Redis가 꺼져도 DB에서 직접 가져가는 길이 있어서 일이 사라지지 않습니다 (<code>runtime.py _next_job</code>, ADR-0013).</div>
+
+<h3>일이 흘러가는 모습 (등록된 작업 종류)</h3>
+<table>
+<tr><th>종류</th><th>줄</th><th>우선순위(작을수록 먼저)</th><th>최대 시도</th></tr>
+<tr><td>compose_questions (질문 만들기)</td><td>LLM</td><td>10</td><td>3</td></tr>
+<tr><td>tts_pregen (질문 음성 미리 만들기)</td><td>CPU</td><td>15</td><td>3</td></tr>
+<tr><td>extract_resume (이력서 읽기)</td><td>LLM</td><td>20</td><td>2</td></tr>
+<tr><td>grade_coding (코드 채점)</td><td>RUNNER</td><td>20</td><td>3</td></tr>
+<tr><td>pre_evaluate (답변별 사전 평가)</td><td>LLM_EVAL</td><td>40</td><td>2</td></tr>
+<tr><td>evaluate_application (최종 평가)</td><td>LLM_EVAL</td><td>50</td><td>2</td></tr>
+</table>
+<p class="small">출처: <code>jobs/queue.py:11~22</code>. 그 밖에 send_email, purge_files 등이 더 있습니다.</p>
+
+<!-- ======================= 9 ======================= -->
+<h2 class="pb">9. 코딩테스트 — 유리방(샌드박스)</h2>
+<p>지원자가 쓴 코드는 <b>믿을 수 없는 코드</b>입니다. 컴퓨터를 망가뜨리거나 정답을 훔쳐볼 수도 있습니다. 그래서 코드를 돌릴 때마다 <b>새 유리방(컨테이너)</b>을 만들고, 끝나면 부숩니다.</p>
+
+<figure>
+<svg viewBox="0 0 720 230" width="720">
+  <rect x="10" y="10" width="700" height="210" rx="14" fill="#f5f6fb" stroke="#d9dce6"/>
+  <text x="360" y="30" text-anchor="middle" font-size="12" font-weight="700">worker(관리인)가 하는 일 — runner/sandbox.py</text>
+  <g font-size="11" text-anchor="middle">
+    <rect x="30" y="50" width="120" height="50" rx="8" fill="#ebedf8" stroke="#4a3fb5"/><text x="90" y="72">① 방 만들기</text><text x="90" y="88" font-size="10">docker create</text>
+    <rect x="170" y="50" width="130" height="50" rx="8" fill="#fff4de" stroke="#b4540a"/><text x="235" y="72">② 검사</text><text x="235" y="88" font-size="10">설정이 정확히 맞나?</text>
+    <rect x="320" y="50" width="120" height="50" rx="8" fill="#ebedf8" stroke="#4a3fb5"/><text x="380" y="72">③ 코드 실행</text><text x="380" y="88" font-size="10">입력만 전달</text>
+    <rect x="460" y="50" width="120" height="50" rx="8" fill="#ebedf8" stroke="#4a3fb5"/><text x="520" y="72">④ 출력 읽기</text><text x="520" y="88" font-size="10">크기 제한</text>
+    <rect x="600" y="50" width="100" height="50" rx="8" fill="#ffe9e7" stroke="#b42318"/><text x="650" y="72">⑤ 방 부수기</text><text x="650" y="88" font-size="10">rm -f</text>
+    <text x="360" y="130" fill="#b42318" font-size="11">②에서 하나라도 틀리면 시작하지 않음 (validate_inspect)</text>
+    <text x="360" y="160" fill="#1f2433" font-size="11">방 안: 인터넷 없음 · 읽기 전용 · 권한 전부 제거 · 일반 사용자(10001) · 메모리·CPU·프로세스 수·파일 크기 제한</text>
+    <text x="360" y="182" fill="#1f2433" font-size="11">정답 출력(기대값)은 이 방에 아예 들어가지 않음 → 비교는 worker가 밖에서 함</text>
+    <text x="360" y="204" fill="#5b6275" font-size="10">시간이 지나면 강제 종료(TIMEOUT), 출력이 너무 길면 OUTPUT_LIMIT, 메모리 넘으면 MEMORY_LIMIT</text>
+  </g>
+</svg>
+<figcaption>그림 8. 코드 한 건(테스트케이스 하나)을 돌리는 과정</figcaption>
+</figure>
+
+<table>
+<tr><th>잠금 장치 (docker create 옵션)</th><th>막는 것</th></tr>
+<tr><td><code>--network none</code></td><td>인터넷·내부 서버로 연결 (정보 빼돌리기)</td></tr>
+<tr><td><code>--read-only</code> + <code>--tmpfs</code></td><td>디스크에 파일 쓰기 (쓸 수 있는 곳은 임시 메모리 영역뿐)</td></tr>
+<tr><td><code>--cap-drop ALL</code>, <code>no-new-privileges</code></td><td>관리자 권한 얻기</td></tr>
+<tr><td><code>--user 10001</code></td><td>root로 실행</td></tr>
+<tr><td><code>--pids-limit</code></td><td>프로세스를 무한 복제(fork 폭탄)</td></tr>
+<tr><td><code>--memory</code> = <code>--memory-swap</code>, <code>--cpus</code>, <code>ulimit</code> (nofile/fsize/core/cpu)</td><td>메모리·CPU·파일 크기 독점</td></tr>
+<tr><td><code>--ipc none</code>, <code>--log-driver none</code></td><td>프로세스 간 몰래 통신, 로그로 정보 유출</td></tr>
+</table>
+<div class="box why"><span class="tag t-why">왜</span>
+<b>"만든 설정이 정말 적용됐는지"를 다시 검사</b>합니다(<code>validate_inspect</code>). 컨테이너만 쓴다고 자동으로 안전한 게 아니기 때문입니다. 비공개 테스트케이스와 정답은 지원자 화면·API·로그·AI 프롬프트 어디에도 나오지 않고, 실행(공개 예제로만)과 최종 제출(공개+비공개 채점)을 구분합니다.</div>
+<div class="box warn"><span class="tag t-warn">주의 (중요)</span>
+<code>HANDOFF.md</code>에 따르면 개발 PC(Windows + Docker Desktop, runtime <code>runc</code>)에서 자체 점검 SBX-01~14는 통과했지만 이는 <b>"개발 검증"</b>일 뿐입니다. 운영 Linux에서는 gVisor(<code>runsc</code>)로 다시 통과해야 합니다. 이번에 다시 돌려 확인하지는 않았습니다. 그 전에는 임의 코드 실행을 외부에 열면 안 됩니다.</div>
+
+<!-- ======================= 10 ======================= -->
+<h2 class="pb">10. 질문 만들기 — 신입에게 어려운 질문을 하지 않기</h2>
+<div class="box how"><span class="tag t-how">어떻게</span><code>questions/level.py</code>가 이력서의 <b>일한 기간</b>을 더해(인턴·알바·교육은 제외) 수준을 정합니다. 1년 미만 NEW, 1~5년 JUNIOR, 5년 이상 SENIOR (<code>career_level</code>, 65행). 공고가 "신입"만 원하면 SENIOR를 JUNIOR로 낮춥니다. 그다음 <code>difficulty_plan()</code>이 "기초 : 실무 적용 : 심화" 비율로 질문 난이도를 나눕니다 (<code>MIX</code>, 24행).</div>
+
+<figure>
+<svg viewBox="0 0 640 190" width="640">
+  <text x="320" y="16" font-size="12" text-anchor="middle" font-weight="700">수준별 질문 난이도 비율 (%) — level.py의 MIX</text>
+  <g font-size="11">
+    <text x="10" y="55">신입(NEW)</text>
+    <rect x="100" y="40" width="250" height="24" fill="#1f7a4d"/><text x="225" y="57" fill="#fff" text-anchor="middle">기초 50</text>
+    <rect x="350" y="40" width="200" height="24" fill="#4a3fb5"/><text x="450" y="57" fill="#fff" text-anchor="middle">실무 적용 40</text>
+    <rect x="550" y="40" width="50" height="24" fill="#b4540a"/><text x="575" y="57" fill="#fff" text-anchor="middle">심화10</text>
+    <text x="10" y="105">주니어(JUNIOR)</text>
+    <rect x="100" y="90" width="150" height="24" fill="#1f7a4d"/><text x="175" y="107" fill="#fff" text-anchor="middle">기초 30</text>
+    <rect x="250" y="90" width="250" height="24" fill="#4a3fb5"/><text x="375" y="107" fill="#fff" text-anchor="middle">실무 적용 50</text>
+    <rect x="500" y="90" width="100" height="24" fill="#b4540a"/><text x="550" y="107" fill="#fff" text-anchor="middle">심화 20</text>
+    <text x="10" y="155">경력(SENIOR)</text>
+    <rect x="100" y="140" width="50" height="24" fill="#1f7a4d"/><text x="125" y="157" fill="#fff" text-anchor="middle">기초10</text>
+    <rect x="150" y="140" width="250" height="24" fill="#4a3fb5"/><text x="275" y="157" fill="#fff" text-anchor="middle">실무 적용 50</text>
+    <rect x="400" y="140" width="200" height="24" fill="#b4540a"/><text x="500" y="157" fill="#fff" text-anchor="middle">심화 40</text>
+  </g>
+</svg>
+<figcaption>그림 9. 지원자 수준에 따른 질문 난이도 (코드의 <code>MIX</code> 값 0.5/0.4/0.1 등을 %로 표시)</figcaption>
+</figure>
+<div class="box why"><span class="tag t-why">왜</span>실제 면접 기록에서 신입에게 Kafka·Redis·Prometheus를 함께 엮은 설계 질문이 나갔고, 지원 동기 칸에서 시스템 아키텍처를 묻는 일이 있었습니다(<code>ADR-0025</code> 배경). 그래서 (1) 수준을 코드가 계산하고, (2) 질문이 나오면 코드가 다시 검사합니다 — 기술이 3개 이상 섞였거나, 신입에게 심화 복잡도면 거절 (<code>problems()</code>, <code>fits_level()</code>). AI에게 "신입에게 쉽게 물어봐"라고만 부탁하지 않고 <b>프로그램이 직접 확인</b>하는 것이 핵심입니다.</div>
+
+<h3>질문을 언제 만드나? (upfront vs live)</h3>
+<div class="box how"><span class="tag t-how">어떻게</span><code>core/config.py:55</code>의 <code>question_mode</code> 기본값은 <b>"upfront"</b>(면접 시작 전에 10개를 미리 확정)입니다. "live"(질문을 면접 중에 즉석에서 만들기)는 설정으로 남겨 두었습니다.</div>
+<div class="box why"><span class="tag t-why">왜</span><code>ADR-0025</code>에 따르면 6GB GPU에서 질문 하나를 만들 때 프롬프트 처리만 약 6초, 검증에 실패해 재시도하면 두 배가 걸려서 질문 사이 대기가 <b>10~40초</b>가 되었습니다. 미리 만들어 두면 면접 중 끊김이 없고, PRD 원래 규칙(면접 전에 본질문 확정, 응시 시점의 불변 스냅샷)과도 맞습니다. 이 수치는 문서에 적힌 측정값이며 이번에 다시 재지는 않았습니다.</div>
+
+<!-- ======================= 11 ======================= -->
+<h2 class="pb">11. 화면(프런트엔드) 구조</h2>
+<table>
+<tr><th>주제</th><th>어떻게</th><th>왜</th></tr>
+<tr><td>화면 라우팅</td><td><code>app/routes.tsx</code>에 한 표로 정리. 누구나 / 로그인 필요(<code>RequireAuth</code>) / 역할 필요(<code>RequireRole</code>) 3겹</td><td>어느 주소에 누가 들어오는지 한눈에 보려고</td></tr>
+<tr><td>기업 화면 분리 로딩</td><td>기업 담당자 화면은 <code>lazy(() => import(...))</code>로 따로 내려받음</td><td>지원자 브라우저는 기업 화면 코드를 아예 받지 않음 (필요 없는 코드를 안 보냄)</td></tr>
+<tr><td>면접 진행 상태 기계</td><td><code>candidate/interview/machine.ts</code> — 순수 함수(reducer)로 "연결중→생각→답변→정리…" 상태를 계산</td><td>화면 없이도 테스트할 수 있고, 상태가 꼬이지 않음 (<code>machine.test.ts</code>)</td></tr>
+<tr><td>장비 점검</td><td><code>apply/Check.tsx</code> — 카메라·마이크·스피커가 모두 "정상"이어야 버튼 활성화, 실패 이유를 사람 말로 번역(<code>deviceProblem</code>)</td><td>"왜 안 되는지" 알려 줘야 지원자가 스스로 고칠 수 있어서</td></tr>
+<tr><td>카메라</td><td>본인 화면 표시용으로만 사용. 서버로 보내거나 저장하는 코드 없음</td><td>개인정보 최소화 원칙(영상 저장 금지)</td></tr>
+<tr><td>면접 완료 → 리포트</td><td><code>Done.tsx</code>가 5초마다 평가 상태를 물어봄(polling), DONE이 되면 멈춤</td><td>평가는 worker가 따로 하므로 "다 됐나?"를 주기적으로 확인</td></tr>
+<tr><td>접근성</td><td><code>role="alert"</code>, <code>aria-live</code>, 라벨 등 사용</td><td>스크린리더 사용자도 쓸 수 있게</td></tr>
+</table>
+
+<!-- ======================= 12 ======================= -->
+<h2 class="pb">12. 내가 꼭 알아야 할 불일치·위험·아직 확인 못 한 것</h2>
+<p>아래는 이번에 코드를 읽으며 <b>직접 확인한 불일치</b>와 <b>확인하지 못한 것</b>입니다. 문서를 믿기 전에 한 번 보세요.</p>
+
+<h3>(가) 문서와 코드가 다른 곳</h3>
+<table>
+<tr><th>#</th><th>내용</th><th>어디</th></tr>
+<tr><td>1</td><td>평가 버전: ADR-0023은 <code>evaluate_answer@2.0.0 / rubric-v4</code>, <b>코드는 <code>2.1.0 / rubric-v5</code></b></td><td><code>ai/tasks/evaluate.py:107</code>, <code>ai/rubric.py:25</code></td></tr>
+<tr><td>2</td><td><code>postings/schemas.py:13</code>에 <code>RUBRIC_VERSION = "rubric-v3"</code>가 따로 남아 있음. 의도된 것인지(공고 설정용?) 낡은 값인지 확인 못 함</td><td><code>postings/schemas.py:13</code></td></tr>
+<tr><td>3</td><td><code>CLAUDE.md</code>: 본질문 90초 / 꼬리질문 60초. <b>코드: 기본 60초 / 45초</b>(공고별로 30~120초 선택)</td><td><code>core/constants.py</code></td></tr>
+<tr><td>4</td><td><code>CLAUDE.md</code> §0은 "단일 관리자, 멀티테넌시 제외". <b>코드는 기업(company) 계정·운영자 인증 절차가 구현</b>되어 있음</td><td><code>auth/company_signup.py</code>, <code>screens/operator/</code></td></tr>
+<tr><td>5</td><td><code>CLAUDE.md</code> §1: "AI는 합격·불합격을 추천하지 않는다". 코드에는 담당자 화면에 "AI 예상 합격(합격 추천/불합격 추천)" 표시가 있음. 모델이 아닌 점수 구간(75/65)으로 계산하지만 문구는 "추천". 화면정의서 결정이라는 메모(memory)가 있으나 <b>CLAUDE.md와 충돌</b>하므로 최종 판단이 필요</td><td><code>recruiter/router.py:94</code>, <code>Applications.tsx:8</code></td></tr>
+<tr><td>6</td><td>지원 현황 화면 주석은 "점수는 절대 보이지 않는다(SEC-04)"인데, 지원자 리포트 API는 총점·등급·항목 점수를 돌려줌</td><td><code>MyApplications.tsx:21</code> vs <code>applications/report.py</code> (ReportOut의 total, grade, criteria)</td></tr>
+<tr><td>7</td><td>문서 일부는 옛 상태: <code>HANDOFF.md</code>는 2026-10-28 기준(예: 재연결 1·2·4초 후 텍스트 모드는 ADR-0024에서 삭제됨)</td><td><code>HANDOFF.md</code></td></tr>
+</table>
+
+<h3>(나) 이번에 하지 않은 것 (미검증)</h3>
+<ul>
+<li><b>테스트 실행 안 함</b>: 백엔드 pytest, 프런트 vitest, runner 테스트 모두 이번에 돌리지 않았습니다. 메모리 상의 "568 통과"는 이전 기록이며 제가 확인한 값이 아닙니다.</li>
+<li><b>화면 실행·캡처 안 함</b>: 가이드의 화면 설명은 소스 코드의 문구를 읽고 쓴 것입니다.</li>
+<li><b>GPU 성능·다중 사용자 부하·외부망 WebRTC(TURN)</b>: 실측하지 않았습니다.</li>
+<li><b>샌드박스 운영 검증(gVisor)</b>: 개발 PC 검증만 있습니다.</li>
+<li><b>소유권(IDOR) 전수 점검</b>: 모든 API를 하나씩 보지 않았습니다.</li>
+<li><b>ADR-0024·0025·0023 서술을 코드와 줄 단위로 대조하지 않음</b>: 이 가이드에서 코드로 직접 확인한 것은 점수 계산, 인용 문장 번호화, 작업 큐, 샌드박스 옵션, 로그인·세션, 시간 상수, 질문 수준 비율, 답변 확정 로직입니다.</li>
+</ul>
+<div class="box bad"><span class="tag t-bad">위험</span>작업 폴더에 <b>커밋 전 변경이 74개 파일</b>(수정 60·삭제 1·신규 13)입니다. 새 ADR 3개, 마이그레이션 0033, 테스트 6개가 포함됩니다. 커밋하기 전에는 이 변경이 어디에도 안전하게 저장되어 있지 않습니다. 커밋은 "커밋"이라고 말씀하실 때만 하도록 설정되어 있습니다.</div>
+
+<!-- ======================= 13 ======================= -->
+<h2 class="pb">13. 파일 지도와 용어 사전</h2>
+<h3>어디를 보면 되나</h3>
+<table>
+<tr><th>알고 싶은 것</th><th>파일</th></tr>
+<tr><td>점수 계산</td><td><code>backend/app/evaluation/scoring.py</code></td></tr>
+<tr><td>인용(근거) 검증·문장 번호</td><td><code>backend/app/evaluation/quotes.py</code></td></tr>
+<tr><td>평가 흐름 전체</td><td><code>backend/app/evaluation/pipeline.py</code>, <code>backend/app/ai/tasks/evaluate.py</code></td></tr>
+<tr><td>평가 기준표·프롬프트</td><td><code>backend/app/ai/rubric.py</code></td></tr>
+<tr><td>면접 진행(시간·답변 확정)</td><td><code>backend/app/interview/turns.py</code>, <code>interview/router.py</code></td></tr>
+<tr><td>실시간 음성(WebRTC)</td><td><code>backend/app/voice/session.py</code></td></tr>
+<tr><td>작업 큐</td><td><code>backend/app/jobs/queue.py</code>(등록), <code>worker.py</code>(가져가기), <code>runtime.py</code>(줄·정기작업)</td></tr>
+<tr><td>코딩 채점·샌드박스</td><td><code>backend/app/coding/</code>, <code>runner/runner/sandbox.py</code></td></tr>
+<tr><td>질문 만들기·수준</td><td><code>backend/app/questions/compose.py</code>, <code>level.py</code></td></tr>
+<tr><td>로그인·세션</td><td><code>backend/app/auth/</code></td></tr>
+<tr><td>화면</td><td><code>frontend/src/screens/{candidate,recruiter,operator,common}/</code>, 라우트 <code>frontend/src/app/routes.tsx</code></td></tr>
+<tr><td>결정 기록(왜 이렇게?)</td><td><code>docs/adr/ADR-0001 ~ 0025</code></td></tr>
+<tr><td>요구사항 ↔ 구현 ↔ 테스트 표</td><td><code>docs/requirements-traceability.md</code></td></tr>
+</table>
+
+<h3>용어 사전</h3>
+<table>
+<tr><th>말</th><th>쉬운 설명</th></tr>
+<tr><td>API</td><td>화면이 서버에게 "이거 해 줘" 하고 보내는 주문서의 약속된 형식</td></tr>
+<tr><td>DB 제약(UNIQUE)</td><td>창고 장부에 건 자물쇠. 규칙을 어기는 기록은 아예 적히지 않음</td></tr>
+<tr><td>해시(Argon2id)</td><td>되돌릴 수 없게 갈아 버린 비밀번호</td></tr>
+<tr><td>CSRF</td><td>남이 만든 가짜 버튼으로 내 이름으로 행동하게 만드는 공격</td></tr>
+<tr><td>IDOR</td><td>주소의 번호만 바꿔서 남의 자료를 보는 공격</td></tr>
+<tr><td>WebRTC</td><td>브라우저와 서버가 실시간으로 소리를 주고받는 기술(전화 같은 것)</td></tr>
+<tr><td>STT / TTS</td><td>음성→글자 / 글자→음성</td></tr>
+<tr><td>LLM</td><td>글을 이해하고 쓰는 AI (여기서는 사내 서버에서 도는 Qwen3.5-4B)</td></tr>
+<tr><td>임베딩</td><td>글을 숫자 좌표로 바꿔서 "비슷한 글" 찾기에 쓰는 기술</td></tr>
+<tr><td>루브릭</td><td>점수 기준표 ("5점은 이런 답, 3점은 이런 답")</td></tr>
+<tr><td>트랜잭션</td><td>"모두 성공하거나 모두 취소"되는 묶음 작업</td></tr>
+<tr><td>멱등(idempotent)</td><td>같은 일을 두 번 해도 결과가 한 번 한 것과 같음</td></tr>
+<tr><td>lease(임대) / fencing</td><td>"이 일은 내가 60초 맡을게요" / 늦게 온 옛 담당자가 결과를 덮어쓰지 못하게 하는 번호표</td></tr>
+<tr><td>샌드박스</td><td>모래상자·유리방. 위험한 코드를 가두고 돌리는 격리 환경</td></tr>
+<tr><td>ADR</td><td>"왜 이렇게 정했나"를 적어 둔 결정 기록 문서</td></tr>
+<tr><td>upfront / live</td><td>질문을 면접 전에 미리 / 면접 중에 즉석에서 만들기</td></tr>
+<tr><td>연습 모드</td><td>지원자가 "결과 공유"에 동의하지 않은 응시. 기업에는 보이지 않음</td></tr>
+</table>
+
+<p class="small" style="margin-top:14pt">이 문서는 <code>docs/guides/04-개발자-가이드.html</code>에서 만들어진 PDF입니다. 지원자·기업 담당자·운영자 가이드는 같은 폴더의 <code>01~03</code> 문서를 보세요.</p>
+</body>
+</html>

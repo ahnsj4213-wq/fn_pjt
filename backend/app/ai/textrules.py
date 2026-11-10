@@ -232,3 +232,31 @@ def polite_did(clause: str) -> str | None:
     if s.endswith(_ACTION_NOUNS):
         return s + "하셨는데"
     return None
+
+
+# ── qc-1 (2026-11-10) ──────────────────────────────────────────────────────────
+# Korean clarity of a generated question, read by code. The 4B model sometimes mixes Chinese into a Korean question (a real case:
+# "用什么" inside the sentence) and stacks conditions ("~라면, ~할 때 ~한다면 …"): neither can be read aloud to a candidate.
+CLARITY_RULE_VERSION = "qc-1"  # not in RULE_VERSIONS: the evaluation manifest does not use it
+# Hiragana/Katakana, CJK ideographs (with extension A and compatibility), Cyrillic, Thai
+_FOREIGN_SCRIPT = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u0400-\u04ff\u0e00-\u0e7f]")
+_CONDITION = re.compile(r"경우(?:라면|에는|에)?|다면|라면")
+_WHEN = re.compile(r"([가-힣])\s*때(?![가-힣]{2})")  # "…할 때", "몰릴 때에": a verb in its ㄹ form, then 때
+
+
+def conditions(text: str) -> int:
+    """How many conditions ("~라면", "~다면", "~경우", "~ㄹ 때") one sentence stacks."""
+    t = text or ""
+    return len(_CONDITION.findall(t)) + sum(1 for m in _WHEN.finditer(t) if _final(m.group(1)) == 8)
+
+
+def clarity_problems(text: str) -> list[str]:
+    """FOREIGN_SCRIPT: Chinese, Japanese, Cyrillic or Thai characters in the question (Latin technology names are fine).
+    NESTED: two questions in one (two question marks), or two or more conditions stacked in one sentence."""
+    t = (text or "").strip()
+    out: list[str] = []
+    if _FOREIGN_SCRIPT.search(t):
+        out.append("FOREIGN_SCRIPT")
+    if t.count("?") + t.count("？") >= 2 or conditions(t) >= 2:
+        out.append("NESTED")
+    return out

@@ -73,8 +73,37 @@ def read_sections(text: str) -> Sections:
             body.append(line)
         if kind in parts and line not in repeated:
             parts[kind].append(line)
+    if not "".join(parts["intro"]).strip():  # no cover-letter heading: the paragraph above the first section is one
+        lead = _lead_paragraph(lines)
+        if lead:
+            parts["intro"] = lines[lead[0]:lead[1]]
+            body = [x for i, x in enumerate(lines) if not lead[0] <= i < lead[1] and _kind(x) != "intro"]
     intro = "\n".join(parts["intro"]).strip()[:INTRO_MAX]
     return Sections("\n".join(body), intro or None, "\n".join(parts["career"]), "\n".join(parts["projects"]))
+
+
+_SENTENCE_END = re.compile(r"(다|요|니다)[.!]?\s*$|[.!?]\s*$")
+LEAD_LINE_MIN = 30  # a prose line, not a name, a phone number or "경력 8년 3개월"
+
+
+def _lead_paragraph(lines: list[str]) -> tuple[int, int] | None:
+    """(first, end) of the prose at the top of a resume, before any section heading: the self-introduction many resumes open with.
+    It starts at the first long line and ends where a finished sentence is followed by a short line (a section's first row).
+    Two finished sentences at least, or it is not prose. The lines are kept as they are (verbatim)."""
+    stop = next((i for i, x in enumerate(lines) if _kind(x)), len(lines))
+    first = next((i for i in range(stop) if len(lines[i].strip()) >= LEAD_LINE_MIN), None)
+    if first is None:
+        return None
+    end = first + 1
+    while end < stop:
+        line, before = lines[end].strip(), lines[end - 1].strip()
+        if _SENTENCE_END.search(before) and len(line) < LEAD_LINE_MIN // 2:
+            break
+        end += 1
+    while end > first and not _SENTENCE_END.search(lines[end - 1].strip()):
+        end -= 1  # end on a finished sentence, never in the middle of a table row
+    text = " ".join(x.strip() for x in lines[first:end])
+    return (first, end) if len(re.findall(r"(다|요)[.!]", text)) >= 2 else None
 
 
 def _clean(span: str, row: dict, key: str) -> str:

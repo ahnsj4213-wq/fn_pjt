@@ -150,10 +150,8 @@ async def test_the_sweeper_purges_checkpoints_of_attempts_that_are_over(client, 
     await tasks.attempt_sweeper()
     assert await _checkpoint_rows(app_id) > 0  # still interviewing: kept
     await q("UPDATE applications SET attempt_status='INTERRUPTED', interrupted_from='INTERVIEWING' WHERE id=:a RETURNING 1", a=app_id)
-    await tasks.attempt_sweeper()
-    assert await _checkpoint_rows(app_id) > 0  # interrupted attempts resume from their checkpoint: kept
-    await q("UPDATE applications SET attempt_status='EXPIRED', interrupted_from=NULL, expired_at=now() WHERE id=:a RETURNING 1", a=app_id)
-    await tasks.attempt_sweeper()
+    await tasks.attempt_sweeper()  # ADR-0024: an interrupted attempt is over (nothing resumes): ended and purged
+    assert await q("SELECT attempt_status FROM applications WHERE id=:a", a=app_id) == [("EXPIRED",)]
     assert await _checkpoint_rows(app_id) == 0
 
 

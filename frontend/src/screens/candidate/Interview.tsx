@@ -3,8 +3,8 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { fetchMyApplication } from '@/api/candidate';
 import {
-  enterTextMode, fetchInterviewState, finishTurn, nextTextQuestion, replayQuestion, reportProctor, resumeInterview, retakeInterview,
-  sendTextAnswer, startAnswer, startInterview, type InterviewState,
+  enterTextMode, fetchInterviewState, finishTurn, nextTextQuestion, replayQuestion, reportProctor, sendTextAnswer, startAnswer,
+  startInterview, type InterviewState,
 } from '@/api/candidate/interview';
 import { useSession } from '@/app/session';
 import { useGaze } from '@/media/gaze';
@@ -22,7 +22,7 @@ import { Interviewer } from './interview/Interviewer';
 import { initialUi, micOn, progressOf, reduce } from './interview/machine';
 import { CodeTool, type ToolHandle } from './interview/tools';
 
-const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000]; // then fall back to text mode (INT-18)
+const CONNECT_TRIES = 3; // voice that never connects -> text mode (INT-18); a connection lost later ends the interview (ADR-0024)
 const QUESTIONS_WAIT_LIMIT = 60; // ~3 minutes at retry_after_sec=3
 const GAZE_WARN_MS = 1_500; // SC-A06: a warning after 1.5 s of looking away
 const GAZE_SUSPECT = 3;
@@ -39,7 +39,9 @@ const fmtLimit = (sec: number) => (sec >= 120 && sec % 60 === 0 ? `${sec / 60}�
  * SC-A06 AI 면접. Voice mode mirrors data-channel events through the pure reducer in interview/machine.ts; every
  * deadline, the think time and the mic gate belong to the server (TRD 06). Text mode is the fallback the server
  * allows after repeated connection failures. The camera is only shown to the candidate and for the looking-away
- * check in this browser; video is never sent or stored.
+ * check in this browser; video is never sent or stored. Leaving the interview ends it (ADR-0024, 2026-11-09): there is no
+ * stop button, no resuming and no retaking; a voice connection lost mid-interview ends it too, and the server evaluates
+ * the questions answered so far.
  */
 export function Interview() {
   const { aid = '' } = useParams();
@@ -52,8 +54,7 @@ export function Interview() {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [textState, setTextState] = useState<InterviewState | null>(null);
-  const [gateLabel, setGateLabel] = useState('면접 이어서 하기');
-  const canRetake = useRef(false);
+  const connectFails = useRef(0);
   const [followupMax, setFollowupMax] = useState<number | null>(null);
   const [liveGraded, setLiveGraded] = useState(false);
   const [warnings, setWarnings] = useState(0);
@@ -108,12 +109,19 @@ export function Interview() {
     return s;
   };
 
+  /** The interview is over because the candidate left or the connection was lost: the done screen says so. */
+  const ended = () => {
+    if (!live.current) return;
+    toast('연결이 끊겨 면접이 종료되었습니다. 답변한 질문까지 평가됩니다');
+    afterInterview('SUBMITTED');
+  };
+
   const connect = async () => {
     dispatch({ type: 'connecting' });
     link.current?.close();
     link.current = null;
     try {
-      const st = await resumeInterview(aid); // INTERRUPTED -> back to INTERVIEWING (or CODING) with a slot
+      const st = await fetchInterviewState(aid);
       if (!route(st)) return;
       const s = await openMedia();
       if (!s || s.getAudioTracks().length === 0) {
@@ -124,8 +132,14 @@ export function Interview() {
       audioOnly.getAudioTracks().forEach((t) => { t.enabled = false; }); // off until answer_opened (C11)
       const l = await VoiceLink.open({
         aid, purpose: 'INTERVIEW', stream: audioOnly,
-        onEvent: (ev) => dispatch({ type: 'event', ev }),
-        onState: (x) => { if (x === 'lost' && live.current) dispatch({ type: 'lost' }); },
+        onEvent: (ev) => {
+          // The server stopped hearing the microphone while the connection is up: say so, the interview goes on.
+          if (ev.type === 'error' && ev.code === 'MIC_SILENT') {
+            setNotice('마이크 소리가 서버에 전달되지 않고 있습니다. 마이크 연결과 음소거 상태를 확인해 주십시오.');
+          }
+          dispatch({ type: 'event', ev });
+        },
+        onState: (x) => { if (x === 'lost') ended(); }, // the server has ended the attempt (ADR-0024)
       });
       if (!live.current) { l.close(); return; }
       const sink = (l.audio as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId;
@@ -135,11 +149,22 @@ export function Interview() {
       dispatch({ type: 'connected', followups: st.followups_used, mainCount: st.total_main });
     } catch (e) {
       if (!live.current) return;
+      if (e instanceof ApiError && e.code === 'ATTEMPT_ENDED') { ended(); return; }
       if (e instanceof ApiError && e.status !== 503 && e.code !== TIMEOUT_ERROR && e.code !== NETWORK_ERROR) {
         dispatch({ type: 'error', message: describeError(e).message });
-      } else {
-        dispatch({ type: 'lost' });
+        return;
       }
+      // Voice could not connect before any question was asked: try again, then text mode (INT-18, the server decides).
+      connectFails.current += 1;
+      if (connectFails.current >= CONNECT_TRIES) {
+        enterTextMode(aid).then((st) => {
+          setNotice('음성 연결이 되지 않아 글로 답변하는 방식으로 진행합니다.');
+          setTextState(st);
+          dispatch({ type: 'text_mode' });
+        }).catch(() => dispatch({ type: 'media_error', message: '면접 서버에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주십시오.' }));
+        return;
+      }
+      dispatch({ type: 'media_error', message: '면접 서버에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주십시오.' });
     }
   };
 
@@ -165,10 +190,7 @@ export function Interview() {
     }
     if (!live.current) return;
     if (startedHere) void connect();
-    else {
-      setGateLabel('면접 시작');
-      dispatch({ type: 'gate' });
-    }
+    else dispatch({ type: 'gate' });
   };
 
   // Entry: route on the current state; connect at once only when we came straight from [면접 시작] (user gesture
@@ -178,11 +200,9 @@ export function Interview() {
     fetchInterviewState(aid).then((st) => {
       setFollowupMax(st.followup_max);
       setLiveGraded(!!st.live_code_graded);
-      canRetake.current = !!st.retake_allowed;
       setWarnings(st.gaze_warnings);
       if (st.attempt_status === 'INTERRUPTED') {
-        if (st.interrupted_from === 'CODING') setGateLabel('코딩테스트 이어서 하기');
-        dispatch({ type: 'gate' });
+        afterInterview('SUBMITTED'); // left in the middle: ended (ADR-0024; the server closes it within a minute)
       } else if (st.attempt_status === 'PREPARING') {
         void startWhenReady();
       } else if (route(st)) {
@@ -198,26 +218,6 @@ export function Interview() {
       stream.current = null;
     };
   }, [aid]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Reconnect with backoff; after the last try ask the server for text mode (it decides, T12).
-  useEffect(() => {
-    if (ui.phase !== 'RECONNECTING') return;
-    link.current?.close();
-    link.current = null;
-    if (ui.attempts > RECONNECT_DELAYS_MS.length) {
-      enterTextMode(aid).then((st) => {
-        setNotice('음성 연결이 계속 끊겨 글로 답변하는 방식으로 이어서 진행합니다.');
-        setTextState(st);
-        dispatch({ type: 'text_mode' });
-      }).catch(() => {
-        setNotice('음성 연결이 끊겼습니다. 네트워크를 확인한 뒤 다시 연결해 주십시오.');
-        dispatch({ type: 'reconnect_failed' });
-      });
-      return;
-    }
-    const t = setTimeout(() => void connect(), RECONNECT_DELAYS_MS[ui.attempts - 1]);
-    return () => clearTimeout(t);
-  }, [ui.phase, ui.attempts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { link.current?.setMic(micOn(ui)); }, [ui.phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -250,6 +250,14 @@ export function Interview() {
   const inVoice = voicePhases.includes(ui.phase);
   const inSession = !['BOOT', 'RESUME_GATE', 'SUPERSEDED', 'MEDIA_ERROR', 'COMPLETED', 'ERROR'].includes(ui.phase);
   useHeartbeat(aid, inSession);
+
+  // Closing or reloading the window ends the interview (ADR-0024): the browser asks once before it goes.
+  useEffect(() => {
+    if (!inVoice && ui.phase !== 'TEXT') return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [inVoice, ui.phase]);
   useTicker(inVoice);
 
   // The camera can drop mid-interview (unplugged, taken by another app, USB power saving). A muted or ended track is
@@ -343,30 +351,15 @@ export function Interview() {
     finishTurn(aid, turn.id).catch(() => undefined); // STALE_TURN: the server already moved on
   };
 
-  const quit = () => {
-    link.current?.close();
-    link.current = null;
-    if (canRetake.current) { // test posting: the next start composes new questions from the first one
-      retakeInterview(aid).then(
-        (r) => { toast('면접을 중단했습니다. 처음 질문부터 다시 만들 수 있습니다'); navigate(`/postings/${encodeURIComponent(r.posting_id)}/apply`); },
-        (e) => dispatch({ type: 'error', message: describeError(e).message }),
-      );
-      return;
-    }
-    toast('면접을 중단했습니다');
-    navigate(app.data ? `/postings/${encodeURIComponent(app.data.posting.id)}` : '/me/applications');
-  };
-
   const onGate = () => {
     setNotice(null);
-    void connect(); // resume first; route() moves on to coding when the attempt was interrupted there
+    void connect();
   };
 
   const p = app.data?.posting;
   const head = (
     <div className="run-head">
       <span className="co">{p?.title ?? ''}<small>{p ? `${p.company_name} 모의면접` : ''}</small></span>
-      <button className="btn" type="button" onClick={quit}>면접 그만두기</button>
     </div>
   );
 
@@ -383,9 +376,9 @@ export function Interview() {
         )}
         {ui.phase === 'RESUME_GATE' && (
           <div className="stub" style={{ margin: 0 }}>
-            <p>{turn || ui.attempts ? '면접이 중단된 상태입니다. 준비되면 이어서 진행해 주십시오. 끊긴 질문은 처음부터 다시 나옵니다.'
-              : '준비되면 면접을 시작해 주십시오. 면접관이 바로 첫 질문을 읽습니다.'}</p>
-            <button className="btn btn-primary btn-lg" type="button" onClick={onGate} data-testid="resume-interview">{gateLabel}</button>
+            <p>준비되면 면접을 시작해 주십시오. 면접관이 바로 첫 질문을 읽습니다.</p>
+            <p className="hint">면접 도중 창을 닫거나 다른 페이지로 이동하면 면접이 그대로 종료되며 다시 이어서 하거나 다시 볼 수 없습니다.</p>
+            <button className="btn btn-primary btn-lg" type="button" onClick={onGate} data-testid="start-interview">면접 시작</button>
           </div>
         )}
         {(ui.phase === 'CONNECTING' || ui.phase === 'RECONNECTING') && (

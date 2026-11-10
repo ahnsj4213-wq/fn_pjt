@@ -251,11 +251,12 @@ async def test_disconnect_while_answering_interrupts_without_saving(client, make
     await asyncio.sleep(0.5)
     await c.pc.close()  # the browser goes away mid-answer
     for _ in range(100):
-        if (await q("SELECT attempt_status FROM applications WHERE id=:a", a=app_id))[0][0] == "INTERRUPTED":
+        if (await q("SELECT attempt_status FROM applications WHERE id=:a", a=app_id))[0][0] == "EXPIRED":
             break
         await asyncio.sleep(0.1)
-    assert await q("SELECT attempt_status, interrupted_from FROM applications WHERE id=:a", a=app_id) == \
-        [("INTERRUPTED", "INTERVIEWING")]
+    # ADR-0024: leaving ends the attempt; the four answered questions are evaluated
+    assert await q("SELECT attempt_status, interrupted_from, eval_status FROM applications WHERE id=:a", a=app_id) == \
+        [("EXPIRED", None, "PENDING")]
     assert await q("SELECT state, end_reason FROM interview_turns WHERE id=:t", t=q_ev["turn_id"]) == \
         [("ABANDONED", "DISCONNECT")]
     assert await q("SELECT 1 FROM interview_answers a JOIN interview_questions q ON q.id=a.question_id "

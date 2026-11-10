@@ -15,8 +15,8 @@ from tests.test_interview import url
 def test_graph_is_the_designed_chain():
     g = Q.build().compile().get_graph()
     nodes = {n for n in g.nodes} - {"__start__", "__end__"}
-    assert nodes == {"plan", "personality", "collaboration", "project", "motivation", "job_skill", "adapt", "verify", "write"}
-    chain = ["__start__", "plan", "personality", "collaboration", "project", "motivation", "job_skill", "adapt", "verify", "write", "__end__"]
+    assert nodes == {"plan", "project", "motivation", "job_skill", "write"}  # code-only steps run inside plan and write
+    chain = ["__start__", "plan", "project", "motivation", "job_skill", "write", "__end__"]
     edges = {(e.source, e.target) for e in g.edges}
     assert all((a, b) in edges for a, b in zip(chain, chain[1:]))
 

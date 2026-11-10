@@ -9,6 +9,7 @@ import pytest
 from aiortc import RTCSessionDescription
 
 from app.core.constants import CAPACITY_FULL_MESSAGE
+from app.questions import live
 from app.voice import registry
 from tests.helpers import candidate
 from tests.test_handlers import drain, q, setup_app
@@ -28,6 +29,12 @@ async def connect_http(cand, c: Client, purpose: str) -> dict:
     assert r.status_code == 200, r.text
     await c.pc.setRemoteDescription(RTCSessionDescription(sdp=r.json()["sdp"], type="answer"))
     return r.json()
+
+
+async def offer_sdp(app_id: str) -> tuple[Client, str]:
+    c = Client(app_id)
+    await c.pc.setLocalDescription(await c.pc.createOffer())
+    return c, c.pc.localDescription.sdp
 
 
 async def prepared(client, make_client, **posting) -> tuple[str, object]:
@@ -194,10 +201,10 @@ async def test_ac11_timeout_finalizes_with_warning_and_silence_is_no_answer(clie
     await c.pc.close()
 
 
-# ── AC-13 / C3 ─────────────────────────────────────────────────────────────────
-async def test_ac13_reconnect_resumes_at_the_cut_question_and_rejects_stale_turns(client, make_client, voice_ai):
+# ── AC-13 (changed by ADR-0024): leaving ends the attempt ───────────────────────
+async def test_ac13_a_lost_connection_ends_the_interview_and_keeps_what_was_answered(client, make_client, voice_ai):
     app_id, cand = await started(client, make_client)
-    voice_ai.stt_texts.extend(["첫 번째 질문에 대한 확정된 답변입니다", "다시 연결한 뒤의 두 번째 답변입니다"])
+    voice_ai.stt_texts.extend(["첫 번째 질문에 대한 확정된 답변입니다"])
     c = Client(app_id)
     await connect_http(cand, c, "INTERVIEW")
     q1 = await c.expect("question")
@@ -207,38 +214,51 @@ async def test_ac13_reconnect_resumes_at_the_cut_question_and_rejects_stale_turn
     r = await cand.post(url(app_id, f"/interview/turns/{q1['turn_id']}/done"))
     assert r.status_code == 202 and r.json()["state"] == "FINALIZING"
     assert (await c.expect("answer_finalized"))["text"] == "첫 번째 질문에 대한 확정된 답변입니다"
-    r = await cand.post(url(app_id, f"/interview/turns/{q1['turn_id']}/done"))
-    assert r.status_code == 202 and r.json()["state"] == "CLOSED"  # idempotent for a finished turn
 
     q2 = await c.expect("question")
-    assert q2["main_no"] == 2
     await c.expect("answer_opened")
-    await c.pc.close()  # connection lost while answering Q2
+    await c.pc.close()  # the candidate leaves while answering Q2
     for _ in range(100):
-        if (await cand.get(url(app_id, "/interview/state"))).json()["attempt_status"] == "INTERRUPTED":
+        if (await cand.get(url(app_id, "/interview/state"))).json()["attempt_status"] == "EXPIRED":
             break
         await asyncio.sleep(0.1)
     st = (await cand.get(url(app_id, "/interview/state"))).json()
-    assert st["attempt_status"] == "INTERRUPTED" and st["slot_grace_until"] is not None
+    assert st["attempt_status"] == "EXPIRED" and st["answered_main"] == 1
+    rows = await q("SELECT eval_status, expired_at IS NOT NULL FROM applications WHERE id=:a", a=app_id)
+    assert rows == [("PENDING", True)]  # Q1 is evaluated; Q2's partial answer is discarded (OQ-21)
+    assert await q("SELECT state FROM interview_turns WHERE id=:t", t=q2["turn_id"]) == [("ABANDONED",)]
+    assert await q("SELECT count(*) FROM interview_slots WHERE application_id=:a", a=app_id) == [(0,)]
 
-    r = await cand.post(url(app_id, "/interview/resume"))
-    assert r.status_code == 200 and r.json()["attempt_status"] == "INTERVIEWING"
-    c2 = Client(app_id)
-    await connect_http(cand, c2, "INTERVIEW")
-    assert (await c2.expect("hello"))["resume"] == {"main_no": 2, "is_followup": False}
-    q2b = await c2.expect("question")
-    assert q2b["main_no"] == 2 and q2b["presentation_no"] == 2 and q2b["turn_id"] != q2["turn_id"]
-    await c2.expect("answer_opened")
-    # The [답변 완료] queued while offline arrives now with the old turn id: it must not close the new turn (C3).
-    r = await cand.post(url(app_id, f"/interview/turns/{q2['turn_id']}/done"))
-    assert r.status_code == 409 and r.json()["error"]["code"] == "STALE_TURN"
-    await speak(c2, 0.8)
-    await c2.expect("caption_segment")
-    assert (await cand.post(url(app_id, f"/interview/turns/{q2b['turn_id']}/done"))).status_code == 202
-    assert (await c2.expect("answer_finalized"))["text"] == "다시 연결한 뒤의 두 번째 답변입니다"
-    rows = await q("SELECT q.seq, a.transcript, a.reask_count FROM interview_answers a JOIN interview_questions q "
-                   "ON q.id=a.question_id WHERE a.application_id=:a ORDER BY q.seq", a=app_id)
-    assert rows == [(1, "첫 번째 질문에 대한 확정된 답변입니다", 0), (2, "다시 연결한 뒤의 두 번째 답변입니다", 1)]
+    # Nothing to come back to: no resume or retake endpoint, and a new voice connection is refused.
+    assert (await cand.post(url(app_id, "/interview/resume"))).status_code in (404, 405)
+    assert (await cand.post(url(app_id, "/interview/retake"))).status_code in (404, 405)
+    c2, sdp = await offer_sdp(app_id)
+    r = await cand.post(url(app_id, "/rtc/offer"), json={"purpose": "INTERVIEW", "type": "offer", "sdp": sdp})
+    assert r.status_code == 409
+    await c2.pc.close()
+
+
+async def test_a_return_after_questions_were_asked_ends_the_attempt(client, make_client, voice_ai):
+    """The window was reloaded or opened again after leaving, before the server noticed: the attempt ends there."""
+    from app.voice import registry as reg
+
+    app_id, cand = await started(client, make_client)
+    c = Client(app_id)
+    await connect_http(cand, c, "INTERVIEW")
+    await c.expect("question")
+    # A second window while the first is live is turned away; the live interview goes on.
+    c2, sdp = await offer_sdp(app_id)
+    r = await cand.post(url(app_id, "/rtc/offer"), json={"purpose": "INTERVIEW", "type": "offer", "sdp": sdp})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "ALREADY_CONNECTED"
+    assert (await cand.get(url(app_id, "/interview/state"))).json()["attempt_status"] == "INTERVIEWING"
+    # The server-side session is gone without noticing (process restart): a new connection is a return -> ended.
+    from uuid import UUID
+
+    reg.get(UUID(app_id)).closed = True
+    r = await cand.post(url(app_id, "/rtc/offer"), json={"purpose": "INTERVIEW", "type": "offer", "sdp": sdp})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "ATTEMPT_ENDED"
+    assert (await cand.get(url(app_id, "/interview/state"))).json()["attempt_status"] == "EXPIRED"
+    await c.pc.close()
     await c2.pc.close()
 
 
@@ -295,43 +315,6 @@ async def test_failing_to_cache_the_interjection_keeps_the_voice_session(monkeyp
     assert await vs.VoiceSession._interject_audio(SimpleNamespace(app_id="a")) == b"audio"
 
 
-async def test_stopping_a_test_posting_interview_starts_over_with_new_questions(client, make_client, voice_ai, monkeypatch):
-    from app.core.config import get_settings
-
-    app_id, cand = await started(client, make_client)
-    pid = (await q("SELECT posting_id FROM applications WHERE id=:a", a=app_id))[0][0]
-    old_set = (await q("SELECT question_set_id FROM interviews WHERE application_id=:a", a=app_id))[0][0]
-
-    # Every other posting keeps the one-attempt rule.
-    r = await cand.post(url(app_id, "/interview/retake"))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "RETAKE_NOT_ALLOWED"
-    assert (await cand.get(url(app_id, "/interview/state"))).json()["retake_allowed"] is False
-
-    monkeypatch.setattr(get_settings(), "retake_posting_ids", str(pid))
-    assert (await cand.get(url(app_id, "/interview/state"))).json()["retake_allowed"] is True
-    stranger = make_client()
-    await candidate(stranger)
-    assert (await stranger.post(url(app_id, "/interview/retake"))).status_code == 404
-
-    r = await cand.post(url(app_id, "/interview/retake"))
-    assert r.status_code == 200 and r.json()["attempt_status"] == "READY", r.text
-    row = (await q("SELECT attempt_status, answered_main_count, resume_snapshot IS NOT NULL FROM applications WHERE id=:a", a=app_id))[0]
-    assert tuple(row) == ("READY", 0, True)
-    assert (await q("SELECT count(*) FROM interview_questions WHERE application_id=:a", a=app_id))[0][0] == 0
-
-    # The next attempt runs the normal path and composes a new set.
-    r = await cand.post(url(app_id, "/interview/prepare"))
-    assert r.status_code == 200, r.text
-    await drain()
-    await mark_prechecked(app_id)
-    r = await cand.post(url(app_id, "/interview/start"))
-    assert r.status_code == 200 and r.json()["answered_main"] == 0, r.text
-    assert (await q("SELECT question_set_id FROM interviews WHERE application_id=:a", a=app_id))[0][0] != old_set
-    # A submitted-style state cannot be reset: READY has nothing to retake.
-    await cand.post(url(app_id, "/interview/retake"))
-    assert (await cand.post(url(app_id, "/interview/retake"))).status_code == 409
-
-
 async def test_live_coding_turn_is_not_listened_to_and_gets_no_followup(client, make_client, voice_ai):
     from uuid import UUID
 
@@ -380,8 +363,9 @@ async def test_live_composition_writes_one_question_first_and_each_next_from_the
             break
         t = st["turn"]
         mains.append(t["main_no"])
-        # the rows grow with the interview: never a question ahead of the one being asked
-        assert await q("SELECT max(seq) FROM interview_questions WHERE application_id=:a AND role='MAIN'", a=app_id) == [(t["main_no"],)]
+        # composed ahead (2026-11-10): while this question is answered the next one is written, from the answers before it
+        await asyncio.gather(*list(live._running))
+        assert await q("SELECT max(seq) FROM interview_questions WHERE application_id=:a AND role='MAIN'", a=app_id) == [(min(t["main_no"] + 1, 5),)]
         answer = f"정산 배치를 파티션 단위로 나눠 병렬화한 경험이 {n}번째로 떠오릅니다. 처리 시간을 크게 줄였습니다."
         r = await cand.post(url(app_id, f"/interview/turns/{t['turn_id']}/text-answer"), json={"text": answer})
         assert r.status_code == 202, r.text
@@ -391,6 +375,9 @@ async def test_live_composition_writes_one_question_first_and_each_next_from_the
     rows = await q("SELECT seq, slot_type FROM interview_questions WHERE application_id=:a AND role='MAIN' ORDER BY seq", a=app_id)
     assert [s for s, _ in rows] == [1, 2, 3, 4, 5] and [a for _, a in rows] == [p["area"] for p in plan]  # the plan's areas, in order
     assert any("정산 배치를 파티션 단위로" in x for x in seen_queries)  # the answers steered the document search
+    # each question composed once, its voice queued as soon as it was written
+    tts = await q("SELECT count(*) FROM jobs WHERE application_id=:a AND kind='tts_pregen' AND dedupe_key LIKE 'tts:%:%'", a=app_id)
+    assert tts == [(4,)]
 
 
 async def test_live_composition_falls_back_to_the_bank_when_generation_fails(client, make_client, voice_ai, monkeypatch):
@@ -401,7 +388,7 @@ async def test_live_composition_falls_back_to_the_bank_when_generation_fails(cli
 
     async def broken(*a, **k):
         raise RuntimeError("model gave up")
-    for name in ("_fill_resume", "_fill_generated_kind", "_fill_bank_only"):
+    for name in ("_fill_resume", "_fill_generated_kind", "_fill_common"):
         monkeypatch.setattr(C, name, broken)
     voice_ai.followup = "SKIP"
     assert (await cand.post(url(app_id, "/interview/text-mode"))).status_code == 200
@@ -414,4 +401,4 @@ async def test_live_composition_falls_back_to_the_bank_when_generation_fails(cli
     st = (await cand.get(url(app_id, "/interview/state"))).json()
     assert st["attempt_status"] == "SUBMITTED" and st["answered_main"] == 5
     sources = await q("SELECT source FROM interview_questions WHERE application_id=:a AND role='MAIN' AND seq > 1", a=app_id)
-    assert {s for (s,) in sources} == {"BANK_FALLBACK"}
+    assert {s for (s,) in sources} == {"TEMPLATE"}

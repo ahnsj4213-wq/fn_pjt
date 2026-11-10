@@ -1,0 +1,167 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>핵심 테이블 설계서</title><style>
+@page { size: A4; margin: 14mm 12mm; }
+:root { --ink:#0f172a; --sub:#475569; --line:#cbd5e1; --acc:#1d4ed8; }
+* { box-sizing: border-box; }
+body { font-family: 'Malgun Gothic','Apple SD Gothic Neo',sans-serif; color:var(--ink); font-size:11.5px; line-height:1.6; margin:0; background:#fff; }
+h1 { font-size:24px; margin:0 0 4px; } h2 { font-size:17px; margin:24px 0 8px; padding-bottom:4px; border-bottom:2px solid var(--acc); break-after:avoid; }
+h3 { font-size:13.5px; margin:14px 0 4px; break-after:avoid; }
+p { margin:5px 0; } .sub { color:var(--sub); }
+table { border-collapse:collapse; width:100%; margin:8px 0; font-size:10.5px; break-inside:auto; }
+th,td { border:1px solid var(--line); padding:3px 6px; vertical-align:top; text-align:left; } th { background:#eff6ff; }
+tr { break-inside:avoid; }
+figure { margin:10px 0; break-inside:avoid; } figure svg { width:100%; height:auto; border:1px solid var(--line); border-radius:8px; }
+figcaption { font-size:10.5px; color:var(--sub); margin-top:3px; }
+.box { border-left:4px solid var(--acc); background:#f1f5f9; padding:6px 10px; margin:8px 0; border-radius:0 6px 6px 0; break-inside:avoid; }
+.warn { border-left-color:#b45309; background:#fffbeb; } .ok { border-left-color:#15803d; background:#f0fdf4; }
+.tag { display:inline-block; font-size:9.5px; padding:0 5px; border-radius:8px; background:#e2e8f0; margin-right:3px; }
+code { background:#f1f5f9; padding:0 3px; border-radius:3px; font-size:10.5px; }
+.legend span { display:inline-block; padding:1px 8px; margin:2px 4px 2px 0; border:1px solid #334155; border-radius:6px; font-size:10px; }
+.pb { break-before:page; }
+
+.card { break-inside:avoid; border:1px solid var(--line); border-radius:8px; padding:6px 10px 8px; margin:10px 0; }
+.card h3 { margin:2px 0 4px; } table.k th { width:11%; white-space:nowrap; } table.k td { font-size:10.5px; }
+</style></head><body>
+<h1>핵심 테이블 설계서 (10개)</h1>
+<p class="sub">AI 채용 플랫폼 · 작성 2026-11-10 · 전체 테이블 50개 중 중심이 되는 10개만 설명합니다. 근거는 마이그레이션(<code>backend/migrations/versions/*.py</code>), <code>backend/app/models.py</code>, <code>docs/trd/03-data-model.md</code>이며, 실행 중인 DB에 접속해 확인한 것은 아닙니다.</p>
+
+<h2>1. 한눈에 보기</h2>
+<p>이 시스템은 <b>공고 → 지원 → 면접 → 평가 → 결과</b> 한 줄로 흐르고, 그 흐름의 가운데에 <b>지원 건(<code>applications</code>)</b>이 있습니다. 나머지 40개 테이블은 이 10개 중 하나에 매달린 보조 기록입니다(3절).</p>
+<figure><svg viewBox="0 0 770 120" xmlns="http://www.w3.org/2000/svg" role="img">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker></defs>
+<rect x="10" y="30" width="138" height="56" rx="8" fill="#dcfce7" stroke="#334155" stroke-width="1.4"/><text x="79" y="54" text-anchor="middle" font-size="12.5" font-weight="700">공고</text><text x="79" y="72" text-anchor="middle" font-size="10.5" fill="#334155">job_postings</text><line x1="148" y1="58" x2="160" y2="58" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/><rect x="162" y="30" width="138" height="56" rx="8" fill="#fee2e2" stroke="#334155" stroke-width="1.4"/><text x="231" y="54" text-anchor="middle" font-size="12.5" font-weight="700">지원</text><text x="231" y="72" text-anchor="middle" font-size="10.5" fill="#334155">applications</text><line x1="300" y1="58" x2="312" y2="58" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/><rect x="314" y="30" width="138" height="56" rx="8" fill="#cffafe" stroke="#334155" stroke-width="1.4"/><text x="383" y="54" text-anchor="middle" font-size="12.5" font-weight="700">면접</text><text x="383" y="72" text-anchor="middle" font-size="10.5" fill="#334155">interview_answers</text><line x1="452" y1="58" x2="464" y2="58" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/><rect x="466" y="30" width="138" height="56" rx="8" fill="#fce7f3" stroke="#334155" stroke-width="1.4"/><text x="535" y="54" text-anchor="middle" font-size="12.5" font-weight="700">평가</text><text x="535" y="72" text-anchor="middle" font-size="10.5" fill="#334155">evaluation_runs</text><line x1="604" y1="58" x2="616" y2="58" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/><rect x="618" y="30" width="138" height="56" rx="8" fill="#fce7f3" stroke="#334155" stroke-width="1.4"/><text x="687" y="54" text-anchor="middle" font-size="12.5" font-weight="700">결과</text><text x="687" y="72" text-anchor="middle" font-size="10.5" fill="#334155">recruiter_reports</text></svg><figcaption>그림 1. 데이터가 흐르는 순서와 각 단계의 대표 테이블.</figcaption></figure>
+<figure><svg viewBox="0 0 770 490" xmlns="http://www.w3.org/2000/svg" role="img">
+<line x1="210" y1="42" x2="290" y2="42" stroke="#64748b" stroke-width="1.6"/>
+<text x="221" y="46" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="279" y="46" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<text x="250" y="38" text-anchor="middle" font-size="10" fill="#475569" paint-order="stroke" stroke="#fff" stroke-width="3">담당자</text>
+<line x1="115" y1="64" x2="115" y2="130" stroke="#64748b" stroke-width="1.6"/>
+<text x="115" y="79" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="115" y="123" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<line x1="116" y1="174" x2="119" y2="240" stroke="#64748b" stroke-width="1.6"/>
+<text x="116" y="189" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="119" y="233" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<line x1="387" y1="64" x2="398" y2="185" stroke="#64748b" stroke-width="1.6"/>
+<text x="388" y="79" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="397" y="178" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<text x="392" y="120" text-anchor="middle" font-size="10" fill="#475569" paint-order="stroke" stroke="#fff" stroke-width="3">지원자</text>
+<line x1="210" y1="170" x2="290" y2="186" stroke="#64748b" stroke-width="1.6"/>
+<text x="221" y="176" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="279" y="188" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<text x="250" y="174" text-anchor="middle" font-size="10" fill="#475569" paint-order="stroke" stroke="#fff" stroke-width="3">공고당 1회</text>
+<line x1="220" y1="242" x2="290" y2="229" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4"/>
+<text x="231" y="244" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="279" y="235" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<text x="255" y="231" text-anchor="middle" font-size="10" fill="#475569" paint-order="stroke" stroke="#fff" stroke-width="3">적용된 설정</text>
+<line x1="496" y1="185" x2="544" y2="174" stroke="#64748b" stroke-width="1.6"/>
+<text x="507" y="187" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="533" y="180" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<line x1="640" y1="174" x2="640" y2="250" stroke="#64748b" stroke-width="1.6"/>
+<text x="640" y="189" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="640" y="243" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<line x1="400" y1="229" x2="400" y2="320" stroke="#64748b" stroke-width="1.6"/>
+<text x="400" y="244" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="400" y="313" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<line x1="565" y1="294" x2="475" y2="320" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4"/>
+<text x="554" y="301" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="486" y="321" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<text x="520" y="303" text-anchor="middle" font-size="10" fill="#475569" paint-order="stroke" stroke="#fff" stroke-width="3">답변별 점수</text>
+<line x1="400" y1="364" x2="400" y2="420" stroke="#64748b" stroke-width="1.6"/>
+<text x="400" y="379" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">1</text>
+<text x="400" y="413" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">N</text>
+<rect x="20" y="20" width="190" height="44" rx="7" fill="#dbeafe" stroke="#334155" stroke-width="1.4"/>
+<text x="115.0" y="39" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">companies</text>
+<text x="115.0" y="55" text-anchor="middle" font-size="10.5" fill="#334155">회사</text>
+<rect x="290" y="20" width="190" height="44" rx="7" fill="#dbeafe" stroke="#334155" stroke-width="1.4"/>
+<text x="385.0" y="39" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">users</text>
+<text x="385.0" y="55" text-anchor="middle" font-size="10.5" fill="#334155">지원자·담당자·운영자</text>
+<rect x="20" y="130" width="190" height="44" rx="7" fill="#dcfce7" stroke="#334155" stroke-width="1.4"/>
+<text x="115.0" y="149" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">job_postings</text>
+<text x="115.0" y="165" text-anchor="middle" font-size="10.5" fill="#334155">공고</text>
+<rect x="20" y="240" width="200" height="44" rx="7" fill="#dcfce7" stroke="#334155" stroke-width="1.4"/>
+<text x="120.0" y="259" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">posting_eval_settings</text>
+<text x="120.0" y="275" text-anchor="middle" font-size="10.5" fill="#334155">가중치·질문 설정 (버전)</text>
+<rect x="290" y="185" width="220" height="44" rx="7" fill="#fee2e2" stroke="#334155" stroke-width="1.4"/>
+<text x="400.0" y="204" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">applications</text>
+<text x="400.0" y="220" text-anchor="middle" font-size="10.5" fill="#334155">지원 건 = 허브</text>
+<rect x="540" y="130" width="200" height="44" rx="7" fill="#ede9fe" stroke="#334155" stroke-width="1.4"/>
+<text x="640.0" y="149" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">interview_questions</text>
+<text x="640.0" y="165" text-anchor="middle" font-size="10.5" fill="#334155">출제 질문 스냅샷</text>
+<rect x="540" y="250" width="200" height="44" rx="7" fill="#cffafe" stroke="#334155" stroke-width="1.4"/>
+<text x="640.0" y="269" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">interview_answers</text>
+<text x="640.0" y="285" text-anchor="middle" font-size="10.5" fill="#334155">확정 답변 (불변)</text>
+<rect x="290" y="320" width="220" height="44" rx="7" fill="#fce7f3" stroke="#334155" stroke-width="1.4"/>
+<text x="400.0" y="339" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">evaluation_runs</text>
+<text x="400.0" y="355" text-anchor="middle" font-size="10.5" fill="#334155">평가 1회 (버전 기록)</text>
+<rect x="290" y="420" width="220" height="44" rx="7" fill="#fce7f3" stroke="#334155" stroke-width="1.4"/>
+<text x="400.0" y="439" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">recruiter_reports</text>
+<text x="400.0" y="455" text-anchor="middle" font-size="10.5" fill="#334155">담당자용 리포트</text>
+<rect x="540" y="400" width="200" height="44" rx="7" fill="#f3f4f6" stroke="#334155" stroke-width="1.4"/>
+<text x="640.0" y="419" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">jobs</text>
+<text x="640.0" y="435" text-anchor="middle" font-size="10.5" fill="#334155">작업 큐 (FK 없음)</text>
+</svg><figcaption>그림 2. 핵심 10개의 관계. 선은 "1개(1)가 여러 개(N)를 가진다"는 뜻이고, 점선은 비어 있을 수 있는 연결입니다. <code>jobs</code>만 지원 건과 외래키로 이어져 있지 않습니다. 선은 마이그레이션 SQL의 <code>REFERENCES</code>에서 확인했습니다(그림이 복잡해지지 않게 일부 선은 생략).</figcaption></figure>
+
+<h2 class="pb">2. 10개 테이블</h2>
+<p class="sub"><b>어떻게</b>(칼럼·연결)와 <b>왜</b>(이유)를 함께 적었습니다. "확인"은 코드·마이그레이션에서 직접 본 것이고, "해석"은 이유가 문서에 없어 제가 추론한 것입니다.</p>
+<div class="card"><h3>1. <code>companies</code> — 회사</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>name</code>, <code>intro</code>, <code>biz_no</code>, <code>verification</code>(승인 대기·승인·반려), <code>suspended_at</code></td></tr><tr><th>연결</th><td><code>users</code>, <code>job_postings</code>, <code>company_knowledge</code>, <code>notifications</code> 등이 가리킴</td></tr>
+<tr><th>왜 이렇게</th><td>공고와 담당자를 회사 단위로 묶는 뿌리입니다. 승인 전 회사는 공고를 게시하지 못하게 <code>verification</code> 하나로 막습니다.</td></tr><tr><th>제약·주의</th><td>정지(<code>suspended_at</code>)하면 공고가 내려갑니다. 회사 격리의 기준이 되는 값이라 거의 모든 회사 소유 테이블이 <code>company_id</code>를 복사해 갖습니다.</td></tr></table><p class="sub">확인: <code>models.py</code>, 마이그레이션 FK</p></div><div class="card"><h3>2. <code>users</code> — 사용자 (한 테이블, 역할로 구분)</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>role</code>(지원자·담당자·운영자), <code>company_id</code>(담당자만), <code>email</code>, <code>password_hash</code>(Argon2id), <code>status</code>, <code>withdrawn_at</code></td></tr><tr><th>연결</th><td><code>companies</code>를 가리키고, 세션·동의·이력서·지원 건이 이 테이블을 가리킴</td></tr>
+<tr><th>왜 이렇게</th><td>세 종류의 사람을 테이블 3개로 나누지 않고 <code>role</code> 하나로 구분합니다. 로그인·세션·권한 검사 코드를 한 벌만 쓰게 하려는 것으로 보입니다(해석).</td></tr><tr><th>제약·주의</th><td>담당자는 <code>company_id</code>가 반드시 있어야 하는 CHECK가 있습니다(문서 03). <b>불일치</b>: 문서 03은 생년월일·성별 칼럼이 없다고 하지만 <code>models.py</code>에는 <code>birth_date</code>, <code>gender</code>가 있습니다("AI 입력에는 복사하지 않음" 주석).</td></tr></table><p class="sub">확인: <code>models.py</code> · 문서 03</p></div><div class="card"><h3>3. <code>job_postings</code> — 공고</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>status</code>(작성 중·게시·마감), <code>title</code>, <code>job_family</code>, <code>duties</code>·<code>requirements</code>·<code>preferred</code>, <code>deadline_at</code>, <code>coding_*</code> 6개, <code>current_settings_id</code>, <code>settings_locked_at</code>, <code>hidden_at</code>, <code>deleted_at</code>, <code>row_version</code></td></tr><tr><th>연결</th><td><code>companies</code> 아래에 있고, 지원 건·설정·회사 자료·동의 기록이 이 테이블을 가리킴</td></tr>
+<tr><th>왜 이렇게</th><td>게시 전에는 비어 있어도 되지만 게시 이후에는 제목·직무·마감이 필수인 CHECK로 "초안과 게시본"을 한 테이블에서 다룹니다. 삭제·숨김은 행을 지우지 않고 시각 칼럼(<code>deleted_at</code>, <code>hidden_at</code>)으로 표시합니다.</td></tr><tr><th>제약·주의</th><td>첫 면접이 시작되면 <code>settings_locked_at</code>이 찍히고, 트리거(<code>t_posting_coding_lock</code>)가 코딩 설정과 현재 설정 변경을 막습니다. <code>row_version</code>으로 동시 수정을 감지합니다.</td></tr></table><p class="sub">확인: <code>models.py</code> · 문서 03 §5</p></div><div class="card"><h3>4. <code>posting_eval_settings</code> — 평가·질문 설정 (버전별)</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>version</code>, <code>w_expertise</code>·<code>w_logic</code>·<code>w_attitude</code>·<code>w_delivery</code>·<code>w_coding</code>, <code>custom_items</code>, <code>question_plan</code>, <code>think_sec</code>, <code>answer_sec</code>, <code>followup_max</code>, <code>rubric_version</code></td></tr><tr><th>연결</th><td><code>job_postings</code>의 자식. 지원 건·평가 run이 "어느 버전을 썼는지" 가리킴</td></tr>
+<tr><th>왜 이렇게</th><td>설정을 수정하지 않고 <b>새 버전 행을 추가</b>합니다. 이미 응시한 사람의 점수가 어떤 가중치로 나왔는지 나중에도 설명할 수 있어야 하기 때문입니다(<code>CLAUDE.md</code> §6 "가중치 버전 기록").</td></tr><tr><th>제약·주의</th><td>수정·삭제 금지 트리거(<code>t_settings_immutable</code>)와 "가중치 합 = 100" CHECK가 있습니다(문서 03). 공고가 잠긴 뒤에는 새 행 추가도 막힙니다(<code>t_settings_locked</code>).</td></tr></table><p class="sub">확인: 마이그레이션 트리거 · <code>models.py</code></p></div><div class="card"><h3>5. <code>applications</code> — 지원 건 — 시스템의 허브</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>attempt_status</code>·<code>eval_status</code>·<code>decision_status</code>(상태 3개), <code>resume_snapshot</code>, <code>resume_snapshot_text</code>, <code>consent_record_id</code>, <code>eval_settings_id</code>, 시각 칼럼 10개, <code>share_result</code>, <code>*_purged_at</code></td></tr><tr><th>연결</th><td>지원자(<code>users</code>)·공고·동의 기록·설정 버전·이력서 PDF를 가리키고, 질문·면접·코딩·평가·결과 테이블 대부분이 이 테이블을 가리킴</td></tr>
+<tr><th>왜 이렇게</th><td><b>① 허브</b>: 한 사람이 한 공고에 지원한 사건 하나를 기준으로 모든 기록을 묶어, 보관 삭제·권한 확인·결과 공개를 지원 건 단위로 합니다. <b>② 상태 3분리</b>: 응시·평가·결정을 따로 둬서 평가가 실패해도 응시 기록이 남게 합니다(<code>CLAUDE.md</code> §6). <b>③ 이력서 사본</b>: 지원 시점 이력서를 JSON으로 복사해, 나중에 지원자가 고쳐도 질문 근거가 변하지 않게 합니다.</td></tr><tr><th>제약·주의</th><td><code>t_guard_application</code> 트리거가 허용되지 않은 상태 이동을 DB에서 막습니다. 한 공고에 한 번만 지원(<code>UNIQUE(posting_id, candidate_id)</code>, 문서 03 기준).</td></tr></table><p class="sub">확인: <code>models.py</code> · 마이그레이션 트리거 · 문서 03</p></div><div class="card"><h3>6. <code>interview_questions</code> — 출제된 질문 (스냅샷)</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>seq</code>, <code>role</code>(본질문 MAIN·꼬리 FOLLOWUP), <code>parent_id</code>, <code>slot_type</code>, <code>source</code>, <code>text</code>, <code>grounding</code>(JSON), <code>answer_limit_sec</code>, <code>prompt_version</code></td></tr><tr><th>연결</th><td><code>question_sets</code>·<code>applications</code>의 자식. 꼬리질문은 <code>parent_id</code>로 자기 테이블의 본질문을 가리킴</td></tr>
+<tr><th>왜 이렇게</th><td>질문 은행이 아니라 <b>이 지원자에게 실제로 한 질문의 사본</b>입니다. 은행이나 공고가 나중에 바뀌어도 "그때 무슨 질문을 했고 어떤 근거로 만들었는지(<code>grounding</code>)"가 남습니다. 본질문·꼬리질문을 한 테이블에 두고 <code>role</code>로 구분합니다.</td></tr><tr><th>제약·주의</th><td>수정·삭제 금지 트리거(<code>t_iq_immutable</code>). 보관 삭제만 예외입니다. <code>source</code>의 허용 값이 마이그레이션 0034(이번 변경, <b>아직 DB에 적용하지 않음</b>)에서 <code>TEMPLATE</code>이 추가됩니다.</td></tr></table><p class="sub">확인: <code>models.py</code> · 마이그레이션</p></div><div class="card"><h3>7. <code>interview_answers</code> — 확정된 답변 (불변)</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>transcript</code>(지원자가 본 자막), <code>eval_text</code>(평가 기준 텍스트), <code>audio_key</code>, <code>end_reason</code>(버튼·시간 만료), <code>is_no_answer</code>, <code>stt_failed</code>, <code>code_text</code></td></tr><tr><th>연결</th><td><code>interview_turns</code>(제시 1회)·<code>interview_questions</code>·<code>applications</code>를 가리키고, 평가 점수 행이 이 테이블을 가리킴</td></tr>
+<tr><th>왜 이렇게</th><td>턴(진행 중, 바뀜)과 답변(확정, 안 바뀜)을 나눴습니다. <b>확정된 것만</b> 답변 테이블에 넣어, "평가의 근거가 되는 원문"이 이후에 바뀌지 않게 합니다. 자막(<code>transcript</code>)과 평가용 텍스트(<code>eval_text</code>)를 따로 두는 이유는 문서 03에 "비식별화본, 평가·인용 기준"으로 적혀 있습니다.</td></tr><tr><th>제약·주의</th><td>수정·삭제 금지 트리거(<code>t_answers_immutable</code>). 문항당 확정 답변 1개(<code>UNIQUE(question_id)</code>, 문서 03 기준).</td></tr></table><p class="sub">확인: <code>models.py</code> · 트리거 · 문서 03</p></div><div class="card"><h3>8. <code>evaluation_runs</code> — 평가 1회</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>run_no</code>, <code>status</code>, <code>model_name</code>, <code>model_digest</code>, <code>prompt_version</code>, <code>rubric_version</code>, <code>scoring_version</code>, <code>eval_settings_id</code>, <code>job_id</code>, <code>lease_token</code></td></tr><tr><th>연결</th><td><code>applications</code>의 자식. 자식으로 <code>answer_evaluations</code>(답변×항목 점수·근거)와 리포트 2종</td></tr>
+<tr><th>왜 이렇게</th><td>다시 평가하면 기존 행을 고치지 않고 <b>run을 하나 더 만듭니다</b>. 어떤 모델·프롬프트·루브릭·가중치로 계산했는지가 run마다 남아 점수를 재현·비교할 수 있습니다(<code>CLAUDE.md</code> §6).</td></tr><tr><th>제약·주의</th><td>점수 행(<code>answer_evaluations</code>)은 수정 금지 트리거가 걸려 있습니다. 평가 실패는 run의 <code>status</code>로 남고 응시 기록을 지우지 않습니다.</td></tr></table><p class="sub">확인: <code>models.py</code> · 트리거</p></div><div class="card"><h3>9. <code>recruiter_reports</code> — 담당자용 리포트 (지원자용은 <code>candidate_feedback</code>)</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>total_score</code>, <code>score_*</code>(항목별), <code>question_scores</code>(JSON), <code>weights</code>(적용 가중치 사본), <code>summary</code>, <code>strengths</code>, <code>improvements</code>, <code>insufficient_count</code></td></tr><tr><th>연결</th><td><code>evaluation_runs</code>·<code>applications</code>의 자식(지원 건당 1개)</td></tr>
+<tr><th>왜 이렇게</th><td>점수는 <b>서버 코드가 계산해서 저장</b>한 결과입니다(LLM이 총점을 정하지 않음). 가중치 사본을 같이 저장해 나중에 설정이 바뀌어도 그때 점수가 설명됩니다. 지원자에게 보이는 <code>candidate_feedback</code>은 별도 테이블이고, 총점 칼럼이 없습니다(<code>models.py</code> 비교).</td></tr><tr><th>제약·주의</th><td>공개 범위를 테이블로 분리해, 지원자 API가 내부 정보를 실수로 내보낼 가능성을 줄이려는 구조입니다(해석).</td></tr></table><p class="sub">확인: <code>models.py</code> · 해석: 분리 이유</p></div><div class="card"><h3>10. <code>jobs</code> — 영속 작업 큐</h3>
+<table class="k"><tr><th>핵심 칼럼</th><td><code>kind</code>, <code>payload</code>(ID만), <code>application_id</code>, <code>dedupe_key</code>, <code>resource</code>(LLM·RUNNER·CPU·NONE), <code>state</code>, <code>attempts</code>, <code>lease_owner</code>·<code>lease_token</code>·<code>lease_expires_at</code>, <code>depends_on</code></td></tr><tr><th>연결</th><td><b>자기 자신(<code>depends_on</code>)만</b> 외래키로 가리킴. <code>application_id</code>에는 FK가 없음</td></tr>
+<tr><th>왜 이렇게</th><td>평가·질문 생성·음성 합성 같은 오래 걸리는 일을 DB 행으로 둡니다. 호출한 쪽의 트랜잭션에서 등록해 "제출 저장과 작업 등록을 원자적으로" 하고(<code>CLAUDE.md</code> §6), 재시작해도 남아 있게 합니다. <code>dedupe_key</code>로 중복 등록을, 임대(60초)와 <code>lease_token</code>으로 중복 실행을 막습니다.</td></tr><tr><th>제약·주의</th><td>FK가 없는 이유는 문서에 적혀 있지 않습니다. 큐 행이 지원 건 삭제와 엮이지 않게 한 것으로 보입니다(해석). 문서 03의 ERD는 <code>applications → jobs</code> 선을 그리지만 SQL에는 그 FK가 없어서 <b>불일치</b>입니다.</td></tr></table><p class="sub">확인: <code>models.py</code> · 마이그레이션 · 해석: FK 없는 이유</p></div>
+
+<h2 class="pb">3. 나머지 40개는 어디에 매달려 있나</h2>
+<table><tr><th style="width:14%">영역</th><th style="width:7%">개수</th><th>테이블 (핵심 10개 제외)</th></tr><tr><td>계정</td><td>4</td><td><code>sessions</code>, <code>password_reset_tokens</code>, <code>signup_codes</code>, <code>auth_throttle</code></td></tr>
+<tr><td>공고</td><td>3</td><td><code>posting_templates</code>, <code>coding_problems</code>, <code>coding_testcases</code></td></tr>
+<tr><td>동의·이력서</td><td>4</td><td><code>consent_documents</code>, <code>consent_records</code>, <code>resume_files</code>, <code>resumes</code></td></tr>
+<tr><td>지원</td><td>2</td><td><code>state_transitions</code>, <code>application_state_events</code></td></tr>
+<tr><td>질문</td><td>5</td><td><code>question_bank</code>, <code>question_examples</code>, <code>company_knowledge</code>, <code>question_sets</code>, <code>question_tts_assets</code></td></tr>
+<tr><td>면접</td><td>5</td><td><code>interviews</code>, <code>interview_slots</code>, <code>interview_turns</code>, <code>followup_decisions</code>, <code>proctor_events</code></td></tr>
+<tr><td>코딩</td><td>4</td><td><code>coding_attempts</code>, <code>coding_runs</code>, <code>coding_submissions</code>, <code>coding_test_results</code></td></tr>
+<tr><td>평가</td><td>5</td><td><code>answer_evaluations</code>, <code>answer_pre_evaluations</code>, <code>candidate_feedback</code>, <code>decision_history</code>, <code>recruiter_notes</code></td></tr>
+<tr><td>소통</td><td>5</td><td><code>interview_schedules</code>, <code>recruiter_mails</code>, <code>notifications</code>, <code>inquiry_threads</code>, <code>inquiry_messages</code></td></tr>
+<tr><td>운영</td><td>3</td><td><code>audit_logs</code>, <code>periodic_tasks</code>, <code>file_deletions</code></td></tr></table>
+<p>예: 면접 진행(<code>interviews</code>, <code>interview_turns</code>, <code>followup_decisions</code>)은 <code>interview_questions</code>·<code>interview_answers</code> 곁에서 진행 상태를 기록하고, 코딩 응시 4개(<code>coding_*</code>)는 <code>applications</code>에 매달려 있으며, <code>candidate_feedback</code>은 <code>recruiter_reports</code>와 짝입니다.</p>
+
+<h2>4. 구조를 더 단순화할 수 있나</h2>
+<p>가능하지만 이득이 작습니다(제 판단). 테이블을 합치려면 마이그레이션·트리거·CHECK·복합 FK·테스트를 같이 고쳐야 합니다.</p>
+<ul>
+<li><b>가장 현실적</b>: <code>question_bank</code>와 <code>question_examples</code> 병합(둘 다 "질문 + 임베딩"). 이번에 질문을 은행에서 뽑지 않게 바꿔 은행의 역할이 줄었습니다.</li>
+<li><b>유지 권장</b>: 불변 테이블(<code>interview_answers</code> 등)과 진행 테이블(<code>interview_turns</code>)의 분리, 담당자용·지원자용 리포트 분리, <code>state_transitions</code>(트리거가 읽는 참조표).</li>
+<li><b>더 안전한 정리</b>: 테이블 수보다 넓은 테이블의 칼럼입니다. <code>job_postings</code>의 <code>coding_*</code> 6개, <code>applications</code>의 시각 칼럼 10개. 다만 CHECK·트리거와 엮여 있어 같이 고쳐야 합니다.</li>
+</ul>
+
+<h2>5. 관계선이 없는 테이블은 왜 그런가</h2>
+<table><tr><th style="width:22%">테이블</th><th>이유</th><th style="width:13%">근거</th></tr>
+<tr><td><code>auth_throttle</code></td><td>키가 이메일 해시와 IP입니다. 가입 안 한 이메일의 실패도 세야 해서 <code>users</code>를 가리킬 수 없습니다.</td><td>확인 + 해석</td></tr>
+<tr><td><code>signup_codes</code></td><td>가입 <b>전</b>에 코드를 보내므로 아직 사용자 행이 없습니다.</td><td>확인</td></tr>
+<tr><td><code>audit_logs</code></td><td>대상이 <code>target_type</code> + <code>target_id</code>(텍스트)로 여러 종류를 가리키는 구조이고, 삭제 불가라 FK를 걸면 데이터 삭제에 걸림돌이 됩니다.</td><td>확인(구조) + 해석(이유)</td></tr>
+<tr><td><code>jobs</code></td><td>자기 자신만 참조합니다(앞의 10번 카드).</td><td>확인 + 해석</td></tr>
+<tr><td><code>state_transitions</code></td><td>허용되는 상태 이동 값을 담은 참조표입니다. 트리거가 읽습니다.</td><td>확인</td></tr>
+<tr><td><code>periodic_tasks</code>, <code>file_deletions</code></td><td>운영용 일정표와 파일 삭제 대기열입니다. 지울 파일이 가리키던 행은 이미 사라졌으므로 FK가 있으면 안 됩니다.</td><td>문서 + 해석</td></tr>
+<tr><td><code>question_examples</code></td><td>회사·지원 건과 무관한 전역 참고 질문입니다.</td><td>확인</td></tr>
+</table>
+<p class="sub">참고: <code>models.py</code>에는 외래키 선언이 거의 없고 실제 관계는 마이그레이션 SQL에 있어서, 모델만 보면 관계가 없는 테이블이 더 많아 보입니다.</p>
+
+<h2>6. 확인하지 못한 것</h2>
+<ul>
+<li>실행 중인 DB에 접속해 보지 않았습니다. 마이그레이션 0001~0034와 문서·모델을 읽은 결과이며, 이후 마이그레이션에서 바뀐 CHECK 세부는 현재와 다를 수 있습니다.</li>
+<li>FK 연결 대상은 SQL을 정규식으로 읽어 확인했습니다. 칼럼명과 개수는 정확하지 않을 수 있습니다.</li>
+<li><code>UNIQUE</code> 제약과 "합 = 100" CHECK는 문서 03을 근거로 썼고 SQL 줄 단위로 대조하지 않았습니다.</li>
+<li><code>CLAUDE.md</code> §0은 멀티테넌시를 제외한다고 하지만 스키마에는 회사 격리용 <code>company_id</code>와 복합 FK가 있습니다. 코드가 구현된 대로 적었습니다.</li>
+</ul>
+</body></html>

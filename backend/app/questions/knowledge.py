@@ -94,22 +94,25 @@ async def search(db: AsyncSession, ai: AIClient, model: str, *, company_id: uuid
 
 
 async def search_many(db: AsyncSession, ai: AIClient, model: str, *, company_id: uuid.UUID, posting_id: uuid.UUID, queries: list[str],
-                      k: int, floor: float, kind: str = "", exclude_docs: list = (), shared: bool = False) -> list[Chunk]:
+                      k: int, floor: float, kind: str = "", exclude_docs: list = (), shared: bool = False,
+                      vectors: list[list[float]] | None = None) -> list[Chunk]:
     """One search per query in the same company and posting scope as `search`, merged by reciprocal rank fusion together with a ranking
     by words the queries share with the chunk (a technology name embeds poorly). One chunk per document title first, so a question
     set does not rest on one project. Embeddings down -> none.
 
     shared=True searches the documents of every OTHER company instead (single administrator, no tenants: CLAUDE.md §0). They show how
-    the job is done elsewhere and are marked `shared`, so T2 asks about them as a situation, never as this company's work."""
+    the job is done elsewhere and are marked `shared`, so T2 asks about them as a situation, never as this company's work.
+
+    `vectors`: the queries' embeddings when the caller has them already (the corrective RAG loop searches the same queries up to
+    four times: own documents, again with used ones, other companies', the second round); one per query, same order."""
     if company_id is None or posting_id is None:
         raise ValueError("knowledge search needs a company and a posting")
     queries = [q[:SEARCH_CHARS] for q in queries if q.strip()]
     if k <= 0 or not queries:
         return []
-    try:
-        vectors = await ai.embed(queries)
-    except AIUnavailable:
-        log_event(log, "rag_skipped", kind=f"KNOWLEDGE:{kind}", reason="embed_unavailable")
+    if vectors is None:
+        vectors = await embed_queries(ai, queries, kind)
+    if not vectors or len(vectors) != len(queries):
         return []
     found: dict[uuid.UUID, Chunk] = {}
     score: dict[uuid.UUID, float] = {}
@@ -142,6 +145,18 @@ async def search_many(db: AsyncSession, ai: AIClient, model: str, *, company_id:
     else:
         log_event(log, "rag_skipped", kind=f"KNOWLEDGE:{kind}", company_id=str(company_id), reason="no_company_knowledge")
     return out
+
+
+async def embed_queries(ai: AIClient, queries: list[str], kind: str = "") -> list[list[float]] | None:
+    """The search embeddings of `queries` (cut as search_many cuts them); None when the embedding model is down."""
+    queries = [q[:SEARCH_CHARS] for q in queries if q.strip()]
+    if not queries:
+        return []
+    try:
+        return await ai.embed(queries)
+    except AIUnavailable:
+        log_event(log, "rag_skipped", kind=f"KNOWLEDGE:{kind}", reason="embed_unavailable")
+        return None
 
 
 async def search_company(db: AsyncSession, ai: AIClient, model: str, *, company_id: uuid.UUID, query: str, k: int, floor: float) -> list[Chunk]:

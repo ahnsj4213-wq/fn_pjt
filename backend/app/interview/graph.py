@@ -28,12 +28,14 @@ from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
+from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.core.db import session_scope
 from app.core.logging import log_event
 from app.interview import turns
 from app.interview.checkpoint import get_checkpointer
-from app.models import Application
+from app.models import Application, InterviewAnswer
 from app.questions import live
 
 log = logging.getLogger("app.interview")
@@ -120,6 +122,8 @@ async def present(state: State) -> dict:
             return {"turn": None, "route": None, "result": "TEXT_MODE_REQUIRED"}
     if view is None:
         return {"turn": None, "route": "DONE", "result": None}
+    if not view.is_followup and get_settings().question_mode == "live":
+        live.prefetch(app_id)  # the next main question is composed while this one is answered
     return {"turn": view_to_dict(view), "route": None, "signal": None, "answer_id": None, "result": None}
 
 
@@ -143,8 +147,12 @@ async def transcribe(state: State, config) -> dict:
     async with session_scope() as db:
         answer = await turns.finalize(db, turn_id, end_reason=reason, transcript=cap.transcript, stt_failed=cap.stt_failed,
                                       audio_key=cap.audio_key, audio_ms=cap.audio_ms, stt_model=cap.stt_model)
+        # Confirmed already (this step ran again after a crash between finalize and the checkpoint): the stored answer still
+        # gets its follow-up decision, which is itself decided once (turns.decide_followup).
+        answer_id = answer.id if answer is not None else await db.scalar(
+            select(InterviewAnswer.id).where(InterviewAnswer.turn_id == turn_id))
     await io.finalized(turn_id, answer, reason, cap)
-    return {"answer_id": str(answer.id) if answer is not None else None}
+    return {"answer_id": str(answer_id) if answer_id is not None else None}
 
 
 async def decide_followup(state: State) -> dict:

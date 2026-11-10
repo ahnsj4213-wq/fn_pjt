@@ -30,7 +30,7 @@ export function Postings() {
 
   const total = (families.data ?? []).reduce((n, f) => n + f.count, 0);
   const label = family ? `${families.data?.find((f) => f.code === family)?.label ?? ''} 공고` : '채용 중인 공고';
-  const items = list.data ?? [];
+  const items = (list.data ?? []).filter((p) => !p.has_applied); // a posting already applied to lives in 지원 현황, not here
   const closing = items.filter((p) => p.deadline_date).sort((a, b) => a.deadline_date!.localeCompare(b.deadline_date!)).slice(0, TOP_DEADLINES);
   const onSearch = (e: FormEvent) => {
     e.preventDefault();

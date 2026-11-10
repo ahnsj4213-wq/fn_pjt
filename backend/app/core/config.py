@@ -34,12 +34,13 @@ def is_private_endpoint(url: str) -> bool:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AIHIRE_", env_file=".env", extra="ignore")
 
-    # Test postings whose stopped interview starts over with new questions. Empty = one attempt everywhere (INT-01).
-    retake_posting_ids: str = ""
+    # Test candidate accounts (comma-separated e-mails) that may apply to the same posting again: the earlier
+    # application of that account is deleted first. Empty = one application per posting for everyone (JOB-02).
+    tester_emails: str = ""
 
     @property
-    def retake_posting_id_set(self) -> set[str]:
-        return {x.strip() for x in self.retake_posting_ids.split(",") if x.strip()}
+    def tester_email_set(self) -> set[str]:
+        return {x.strip().lower() for x in self.tester_emails.split(",") if x.strip()}
 
     env: str = Field("dev", pattern="^(dev|test|prod)$")
     database_url: str = "postgresql+asyncpg://aihire:aihire_dev_only@127.0.0.1:55432/aihire"
@@ -56,9 +57,10 @@ class Settings(BaseSettings):
     slot_lease_seconds: int = 120  # T10: INTERRUPTED grace
     answer_grace_seconds: float = 1.0  # T9
     interject_enabled: bool = False  # the interviewer cutting into a long answer; out of scope (PRD SCOPE-9.2)
-    # live = only the first main question before the interview, each later one composed from the previous answers when it is
-    # reached (ADR-0022, changes QST-02); upfront = all main questions composed before the interview (the PRD's original rule).
-    question_mode: str = Field("live", pattern="^(live|upfront)$")
+    # upfront = all main questions composed, checked and voiced (tts_pregen) before the interview: moving to the next main
+    # question needs no model call (ADR-0025, the default again). live = only the first main question before the interview,
+    # each later one composed when it is reached (ADR-0022): 10~40 s of composition inside the interview on a 6 GB GPU.
+    question_mode: str = Field("live", pattern="^(live|upfront)$")  # live: first question before, the rest during the interview (ADR-0022, 2026-11-10)
     live_compose_timeout_seconds: float = 45.0  # a slower composition takes the question bank instead
     tts_playout_guard_seconds: float = 0.3
 
@@ -80,6 +82,9 @@ class Settings(BaseSettings):
     rag_knowledge_min_similarity: float = Field(0.5, ge=0, le=1)  # measured: ADR-0020
 
     # EVL-02 / OQ-09
+    # T5 runs this many independent judgements per answer and keeps, per criterion, the median one (ADR-0023): the same answer
+    # scored three times by the 4B model on llama.cpp spread up to 3 points on one criterion, even at temperature 0.
+    eval_samples: int = Field(3, ge=1, le=5)
     short_answer_min_chars: int = 15
     quote_min_chars: int = 8
 
@@ -166,6 +171,8 @@ class Settings(BaseSettings):
 
         validate_announce_ips(self.rtc_announce_ips)
         if self.env == "prod":
+            if self.tester_email_set:
+                raise ValueError("tester_emails is for dev/test only: it deletes the tester's earlier applications")
             if self.ai_mode == "fake":
                 raise ValueError("ai_mode=fake is for container checks only")
             if not self.cookie_secure:

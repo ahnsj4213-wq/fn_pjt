@@ -265,11 +265,11 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | `POST …/interview/leave-prepare` | PREPARING(READY면 200) | → `{attempt_status: "READY"}` | 409 `INVALID_STATE` |
 | `GET …/interview/guide` | 모든 상태 | → `{main_count: 10, main_answer_sec: 60, followup_answer_sec: 45, followup_max_total: 4, warning_sec: 10, coding{enabled, time_limit_min, language}}`(INT-03) | 404 |
 | `POST …/precheck/media` | PREPARING | `{mic_ok, camera_ok, speaker_ok?}`(지원자 신고) → 204. 마이크·카메라 모두 true면 `precheck_media_ok_at` | 409 `INVALID_STATE` |
-| `POST …/rtc/offer` | `PRECHECK`: PREPARING, 슬롯 불필요, 서버 전체 점검 연결 4 이하. `INTERVIEW`: INTERVIEWING + 이 지원 건의 유효 슬롯(C4) | `{purpose: "PRECHECK"\|"INTERVIEW", sdp, type: "offer"}` → `{sdp, type: "answer", rtc_session_id}`. 비트리클, 서버 `iceServers=[]`, 지원 건당 연결 1개(새 연결이 이전 연결을 닫음), 오디오만(INT-08). 점검 통과(`precheck_webrtc_ok_at`)는 음성 런타임이 발화 인식 뒤 기록 | 409 `INVALID_STATE`(`current`), 429 `PRECHECK_BUSY`, 422 `SDP_INVALID` |
+| `POST …/rtc/offer` | `PRECHECK`: PREPARING, 슬롯 불필요, 서버 전체 점검 연결 4 이하. `INTERVIEW`: INTERVIEWING + 이 지원 건의 유효 슬롯(C4), 응시당 연결 한 번(ADR-0024: 살아 있는 연결이 있으면 409 `ALREADY_CONNECTED`, 이미 질문이 나간 응시의 새 연결은 응시를 종료하고 409 `ATTEMPT_ENDED`) | `{purpose: "PRECHECK"\|"INTERVIEW", sdp, type: "offer"}` → `{sdp, type: "answer", rtc_session_id}`. 비트리클, 서버 `iceServers=[]`, 지원 건당 연결 1개(새 연결이 이전 연결을 닫음), 오디오만(INT-08). 점검 통과(`precheck_webrtc_ok_at`)는 음성 런타임이 발화 인식 뒤 기록 | 409 `INVALID_STATE`(`current`), 429 `PRECHECK_BUSY`, 422 `SDP_INVALID` |
 | `POST …/interview/start` | PREPARING | → `InterviewState`(5.2). TRD 03 6절의 시작 트랜잭션. 점검 기록은 30분 이내만 인정. TTS DOWN이면 `warnings: ["TTS_UNAVAILABLE"]` | 409 `PRECHECK_REQUIRED`, 409 `QUESTIONS_NOT_READY`(`retry_after_sec`), 409 `CAPACITY_FULL`(그 뒤 READY), 409 `POSTING_CLOSED`, 503 `AI_UNAVAILABLE`, 503 `CODE_EXECUTION_UNAVAILABLE`(코딩 공고, T13), 409 `INVALID_STATE` |
 | `GET …/interview/state` | 모든 상태 | → `InterviewState`. 재진입·이벤트 누락 복구의 기준(INT-11) | 404 |
-| `POST …/interview/resume` | INTERRUPTED(이미 INTERVIEWING·CODING이면 200, 멱등) | → `InterviewState`. 음성 재개는 슬롯 재확보(유예 중이면 자기 슬롯), 코딩 재개는 슬롯 불필요. 끊긴 문항은 처음부터 다시(OQ-21). 클라이언트 순서는 **resume → offer** | 409 `CAPACITY_FULL`·`POSTING_CLOSED`·`INVALID_STATE` |
-| `POST …/interview/text-mode` | INTERVIEWING 또는 INTERRUPTED(면접 중 끊김) | → `InterviewState`(`mode: "TEXT"`). **서버 판정**(T12): 현재 문항 제시가 상한 3회에 도달한 뒤 다시 끊겼거나, 서버가 20초 이상 살아 있는 연결을 못 본 경우에만 허용. `text_mode_since` 기록 | 409 `TEXT_MODE_NOT_ALLOWED`, 409 `CAPACITY_FULL` |
+| ~~`POST …/interview/resume`~~ | 삭제(ADR-0024) | 면접 도중 나가면 응시가 끝나므로 이어 갈 상태가 없다 | 404 |
+| `POST …/interview/text-mode` | INTERVIEWING(ADR-0024: 끊긴 응시는 이미 종료) | → `InterviewState`(`mode: "TEXT"`). **서버 판정**(T12): 현재 문항 제시가 상한 3회에 도달한 뒤 다시 끊겼거나, 서버가 20초 이상 살아 있는 연결을 못 본 경우에만 허용. `text_mode_since` 기록 | 409 `TEXT_MODE_NOT_ALLOWED`, 409 `CAPACITY_FULL` |
 | `POST …/interview/turns/{turn_id}/done` | INTERVIEWING | [답변 완료] → 202 `{turn_id, state: "FINALIZING"}`. 같은 턴이 이미 FINALIZING·CLOSED면 200 `{turn_id, state, end_reason}`(멱등). 마감 + 유예 1.0초(T9) 뒤 도착하면 시간 만료로 확정 | 409 `STALE_TURN` |
 | `POST …/interview/turns/{turn_id}/text-answer` | 텍스트 모드, 턴 ANSWERING | `{text}`(2,000자 이하, 빈 문자열은 '답변 없음') → 202 `{turn_id, state}`. 마감은 음성과 같은 60·45초(D 이견 7, 팀 확인) | 409 `STALE_TURN`·`TURN_CLOSED`, 422 |
 | `POST …/heartbeat` | PREPARING, 텍스트 모드 INTERVIEWING, CODING | → 204(30초 주기, C7). 음성 INTERVIEWING은 런타임이 갱신 | 409 `INVALID_STATE` |
@@ -427,9 +427,9 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | CP-9 | `postings/router.py` 게시 | 감사 로그가 없다(마감·삭제는 있음) | `POSTING_PUBLISH` 감사 추가 | ADM-10(P2) 공고 이력을 감사 로그로 대신할 수 있게(추적표 비고) |
 | CP-10 | `consent/router.py` | `answers`에 빠진 항목이 있으면 `fields` 없이 422 | `fields: [{loc: ["body", "answers", code], type: "missing"}]` | 1.2 형식 통일 |
 
-## 테스트 공고 재응시 (개발·검증 전용)
+## 테스트 공고 재응시 (삭제)
 
-`POST /api/candidate/applications/{aid}/interview/retake` — 지원자 본인만, `AIHIRE_RETAKE_POSTING_IDS`에 등록된 공고만(그 외 403 `RETAKE_NOT_ALLOWED`). 미제출 응시(`INTERVIEWING`·`INTERRUPTED`·`CODING`)의 기록을 지우고 `READY`로 되돌린다(그 외 상태 409 `INVALID_STATE`). 지원 id·동의·이력서 스냅샷은 유지한다. 설정이 비어 있으면(운영 기본값) 모든 공고에 1회 응시 규칙이 그대로 적용된다.
+`POST …/interview/retake`와 `AIHIRE_RETAKE_POSTING_IDS`는 삭제했다(ADR-0024: 면접 다시 보기 없음).
 
 ## 회사 지식베이스 (ADR-0020)
 

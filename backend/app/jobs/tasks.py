@@ -83,15 +83,16 @@ async def coding_autosubmit() -> None:
 
 @periodic("attempt_sweeper")
 async def attempt_sweeper() -> None:
-    """Liveness (TRD 06 §11, C7): INTERVIEWING / CODING without any signal for 120 s -> INTERRUPTED (voice keeps it
-    fresh every 15 s, text mode and coding through their calls); PREPARING idle for 30 min -> READY (B)."""
+    """Liveness (TRD 06 §11, C7): INTERVIEWING / CODING without any signal for 120 s -> ended (ADR-0024: leaving ends the
+    attempt; voice keeps it fresh every 15 s, text mode and coding through their calls). Attempts left INTERRUPTED by an
+    earlier version end the same way. PREPARING idle for 30 min -> READY (B)."""
     from app.interview import turns
 
     async with session_scope() as db:
         stale = (await db.execute(text(
             "SELECT a.id FROM applications a JOIN interviews i ON i.application_id = a.id "
-            "WHERE a.attempt_status IN ('INTERVIEWING', 'CODING') "
-            "AND COALESCE(i.last_heartbeat_at, a.interview_started_at) < now() - interval '120 seconds'"))).scalars().all()
+            "WHERE a.attempt_status = 'INTERRUPTED' OR (a.attempt_status IN ('INTERVIEWING', 'CODING') "
+            "AND COALESCE(i.last_heartbeat_at, a.interview_started_at) < now() - interval '120 seconds')"))).scalars().all()
         await db.execute(text(
             "UPDATE applications a SET attempt_status = 'READY' FROM interviews i WHERE i.application_id = a.id "
             "AND a.attempt_status = 'PREPARING' AND COALESCE(i.last_heartbeat_at, a.applied_at) < now() - interval '30 minutes'"))

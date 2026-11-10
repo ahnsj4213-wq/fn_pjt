@@ -12,14 +12,14 @@ const STOPPED = new Set(['INTERRUPTED', 'EXPIRED']);
 /** 면접 column: 완료, '중단 (질문 3/5)', or where the attempt stands. */
 function interviewText(a: CandidateApplication): string {
   if (a.attempt_status === 'SUBMITTED') return '완료';
-  if (STOPPED.has(a.attempt_status)) return `중단 (질문 ${a.answered_main_count}/${a.main_count ?? '-'})`;
+  if (STOPPED.has(a.attempt_status)) return `중도 종료 (질문 ${a.answered_main_count}/${a.main_count ?? '-'})`;
   if (a.attempt_status === 'INTERVIEWING' || a.attempt_status === 'CODING') return '진행 중';
   return '응시 전';
 }
 
 /**
  * SC-A09 마이페이지 · 지원 현황 (RPT-01~03, INT-12): applications, progress and the report. Scores are never shown
- * (SEC-04). '다시 지원' continues a stopped attempt while the posting is open (INT-12: one attempt per application).
+ * (SEC-04). An attempt left in the middle has ended: nothing to continue or retake (ADR-0024, INT-12).
  */
 export function MyApplications() {
   const navigate = useNavigate();
@@ -37,19 +37,12 @@ export function MyApplications() {
         </span>
       );
     }
-    if (STOPPED.has(a.attempt_status)) {
-      return (
-        <button className="btn" type="button" disabled={!a.can_start}
-          title={a.can_start ? undefined : '마감되었거나 다시 응시할 수 없는 지원입니다'}
-          onClick={() => navigate(`/applications/${enc(a.id)}/interview`)}>다시 지원</button>
-      );
+    if (STOPPED.has(a.attempt_status)) { // ADR-0024: left in the middle -> ended; answered questions are evaluated
+      return a.answered_main_count > 0
+        ? <button className="btn" type="button" onClick={() => navigate(`/me/applications/${enc(a.id)}/report`)}>리포트 보기</button>
+        : null;
     }
-    if (a.attempt_status === 'CODING') {
-      return <button className="btn" type="button" onClick={() => navigate(`/applications/${enc(a.id)}/coding`)}>코딩테스트 이어서 하기</button>;
-    }
-    if (a.attempt_status === 'INTERVIEWING') {
-      return <button className="btn" type="button" onClick={() => navigate(`/applications/${enc(a.id)}/interview`)}>면접 이어서 하기</button>;
-    }
+    if (a.attempt_status === 'INTERVIEWING' || a.attempt_status === 'CODING') return null; // no resuming (ADR-0024)
     return a.can_start
       ? <button className="btn" type="button" onClick={() => navigate(`/postings/${enc(a.posting.id)}/apply`)}>AI 면접 보기</button>
       : null;

@@ -17,6 +17,8 @@ ALLOWED_FIELDS = frozenset({
     "task", "trace_id", "prompt_tokens", "completion_tokens", "queue_ms", "llm_calls", "preempted",
     # question search: which reference questions were used, by id; their text and the query stay out
     "kind", "hits", "top_similarity", "example_ids",
+    # stage timings (ADR-0025): which step took how long; never the question or answer text
+    "stage", "area", "source", "level", "difficulty",
 })
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 _PHONE = re.compile(r"01[016789]-?\d{3,4}-?\d{4}")

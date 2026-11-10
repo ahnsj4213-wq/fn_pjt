@@ -69,6 +69,18 @@ def test_no_heading_means_no_intro_and_model_descriptions_stay():
     assert apply_sections(fields(career=[row]), s)["career"][0]["description"] == "개발자로 일했습니다."
 
 
+def test_the_paragraph_above_the_first_section_is_the_intro_word_for_word():
+    """A resume that opens with a self-introduction and no heading (2026-11-09: the form kept the previous file's cover letter)."""
+    lead = ("저는 약 8년간 대형 고객사 프로젝트를 수행하며 데이터베이스 운영, 성능 튜닝, 데이터 이\n관을 여러 번 경험해 왔습니다.\n"
+            "최근까지 PostgreSQL 기반 대용량 분산처리 DB(Greenplum) 환경을 유지\n보수하며,\n쿼리 성능 개선을 수행하고 있습니다.")
+    text = f"안 성 준\n+821000000000\nfake@example.com\n{lead}\n경력 8년 3개월\n시앤지원\n2017.12 - 2026.02 DB Engineer\n학력\n가상대학교\n"
+    s = read_sections(text)
+    assert s.intro == lead  # the lines as they are, nothing added or rewritten
+    assert "8년간" not in s.body and "시앤지원" in s.body and "경력 8년 3개월" in s.body
+    # one sentence at the top is not a self-introduction
+    assert read_sections("홍길동\n대형 고객사 프로젝트에서 데이터베이스 운영을 맡아 일했습니다.\n경력\n가상테크\n").intro is None
+
+
 def test_a_sentence_mentioning_a_section_is_not_a_heading():
     assert read_sections("자기소개서\n저의 경력은 다음과 같습니다.\n").intro == "저의 경력은 다음과 같습니다."
 

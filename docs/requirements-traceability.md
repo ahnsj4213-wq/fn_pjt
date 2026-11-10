@@ -56,7 +56,7 @@
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
 | QST-01 | 질문은행(직무·유형별), 덜 쓴 질문부터, 부족하면 AI 생성 후 은행에 추가, 유사 질문 중복 저장 금지 | P0 | questions | `app/questions/bank.py` | T-QST-01 | 미착수 | 유사도는 로컬 임베딩 (ADR-0005). 생성 시 RAG 예시 3개(`app/questions/rag.py`, `tests/test_question_rag.py`) **ADR-0020: 동기·직무는 회사 자료 기반 생성 우선, 은행은 대체 경로로 순서 변경.** `app/questions/knowledge.py`, `tests/test_company_knowledge.py` |
-| QST-02 | 면접 시작 전 본질문 10개 구성 (6.1) | P0 | questions / 준비 단계 작업 | `app/questions/compose.py` | T-QST-02 | 미착수 | 인성2·이력서2·기업2·직무4, 순서 고정 **2026-11-07 변경(ADR-0022, 사용자 결정): 시작 전에는 첫 질문만, 이후는 면접 중 답변을 반영해 한 문항씩 생성. `AIHIRE_QUESTION_MODE=upfront`로 원래 방식** |
+| QST-02 | 면접 시작 전 본질문 10개 구성 (6.1) | P0 | questions / 준비 단계 작업 | `app/questions/compose.py` | T-QST-02 | 미착수 | 인성2·이력서2·기업2·직무4, 순서 고정 **2026-11-07 변경(ADR-0022, 사용자 결정): 시작 전에는 첫 질문만, 이후는 면접 중 답변을 반영해 한 문항씩 생성. `AIHIRE_QUESTION_MODE=upfront`로 원래 방식** **2026-11-09 ADR-0025: 기본값을 upfront로 되돌림(본질문·TTS를 면접 전 준비, 면접 중 LLM은 꼬리질문만). 지원자 수준별 난이도 배분과 질문 품질 코드 검사 추가 (`app/questions/level.py`, tests/test_question_level.py)** |
 | QST-03 | 이력서 질문은 이력서에 실제 적힌 경험·프로젝트만 근거, 근거 없으면 버리고 은행 질문으로 | P0 | questions | `app/questions/resume_q.py` | T-QST-03, AC-07 | 미착수 | 근거 문장을 스냅샷 원문과 코드로 대조 ADR-0020: 근거를 `grounding.sources`(RESUME_SNAPSHOT)로 추적, 공고·회사 자료와 겹치는 항목 우선 |
 | QST-04 | 공고별 커스텀 질문(1개), 비우면 자동 채움 | P1 | postings / 평가 설정 API | `app/postings` | T-QST-04 | 미착수 | ADM-05(P0)가 커스텀 질문 설정을 포함 → 우선순위 불일치 OQ-02 |
 | QST-05 | 답변에 따른 꼬리질문 (6.2) | P0 | interview | `app/interview/followup.py` | T-QST-05, AC-12 | 미착수 | ADR-0020: 앞선 답변·회사 자료를 입력에 추가, 근거를 `grounding.sources`로 추적 |
@@ -78,14 +78,14 @@
 | INT-08 | 본인 카메라 화면 표시, 녹화·저장 안 함 | P0 | 프런트 | `pages/candidate/Interview` | T-INT-08 | 미착수 | 비디오 트랙은 서버로 보내지 않음 (로컬 미리보기만) |
 | INT-09 | 답변 음성·STT 텍스트 문항마다 즉시 저장, STT 실패 시 '답변 없음'으로 저장 후 진행 | P0 | interview | `app/interview/runtime.py` | T-INT-09 | 미착수 | |
 | INT-10 | "잘 모르겠습니다" 등 내용 없는 답변은 반복하지 않고 다음 질문 | P0 | interview | `app/interview/followup.py` | T-INT-10 | 미착수 | 규칙 기반 판정 → 꼬리질문 생략 |
-| INT-11 | 끊김·새로고침 후 재진입 시 끊긴 문항부터, 저장 답변 유지 | P0 | interview / `GET .../interview/state` | `app/interview/runtime.py` | T-INT-11, AC-13 | 미착수 | 진행 중이던 문항은 처음부터 다시 답변 (ADR) |
+| INT-11 | 끊김·새로고침 후 재진입 시 끊긴 문항부터, 저장 답변 유지 | P0 | interview / `GET .../interview/state` | `app/applications/lifecycle.py` `end_left`, `app/voice/router.py` | T-INT-11, AC-13 | 구현 | **ADR-0024(사용자 지시)로 변경**: 재진입 없음. 도중에 나가면 종료, 저장 답변은 유지·평가 |
 | INT-12 | 지원 건당 1회 응시 | P0 | interview | DB 상태 전이 + 유일 제약 | T-INT-12 | 미착수 | SUBMITTED·EXPIRED에서 재응시 불가 |
 | INT-13 | 동시 응시 상한, 초과 시 지정 문구로 시작 거부, 마이페이지에서 나중에 시작 | P0 | interview / `POST .../interview/start` | `app/interview/slots.py` | T-INT-13, AC-14 | 미착수 | 문구: "이미 많은 면접자들이 면접 중입니다. 추후 다시 요청해주세요." |
 | INT-14 | 시작 전 AI 서버(LLM·STT·TTS) 상태 확인, 불가 시 시작 차단 | P0 | `GET /api/system/ai-health` | `app/ai/health.py` | T-INT-14 | 미착수 | TTS 실패는 INT-04로 텍스트 진행 가능 → TTS 장애 시 차단 여부 OQ-08 |
 | INT-15 | 실시간 자막, 종료 후 확정 텍스트로 교체 | P0 | interview / WebRTC 데이터채널 | `app/voice/stt_stream.py` | T-INT-15, AC-10 | 미착수 | 목표: 말 끊긴 뒤 2초 내 (8.2) |
 | INT-16 | 화면 이탈 경고, 횟수·시간 기록, 리포트 표시, 종료 안 함 | P2 | interview / `POST .../proctor-events` | `app/interview` | T-INT-16 | 구현 | 2026-10-30: 탭 이탈(LEAVE/RETURN)과 SC-A06 시선 이탈(브라우저 얼굴 감지, 1.5초 이탈 시 경고 1회, `GAZE_AWAY` 기록, 3회 이상 의심 표시) 구현. 종료하지 않음. 실제 카메라로 얼굴 판정 정확도는 미측정(가짜 카메라로 '얼굴 없음→이탈' 동작만 확인) |
 | INT-17 | 점검 단계에서 서버와 WebRTC 실제 연결 + 짧은 발화 인식 확인, 실패 시 시작 차단 | P0 | interview / `POST .../precheck/webrtc` | `app/voice/`, `pages/candidate/Precheck` | T-INT-17, AC-08 | 구현 (시작 조건에서 제외) | **2026-10-30 화면정의서 SC-A04 우선(사용자 결정 "화면정의서 기준 대로")**: 점검 화면은 카메라·마이크·스피커만 확인한다. 서버 WebRTC 발화 확인은 선택 기능으로 남고 시작을 막지 않는다. 음성 연결은 면접 세션이 연결될 때 확인한다. PRD 원문과 다름 |
-| INT-18 | WebRTC 자동 재연결, 실패 시 텍스트 입력 답변, 리포트에 표시 | P1 | interview | `app/interview`, 프런트 | T-INT-18 | 미착수 | |
+| INT-18 | WebRTC 자동 재연결, 실패 시 텍스트 입력 답변, 리포트에 표시 | P1 | interview | `app/interview`, 프런트 | T-INT-18 | 구현 | ADR-0024: 면접 도중 자동 재연결은 없음(끊기면 종료). 시작 시 연결 3회 실패·제시 한도 도달 시 텍스트 모드만 유지 |
 
 ### 5.6 코딩테스트 (COD)
 
@@ -105,8 +105,8 @@
 
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
-| EVL-01 | 문항마다 루브릭 항목별 1~5점, 답변 원문 인용, 코멘트 | P0 | evaluation | `app/evaluation/judge.py` | T-EVL-01, AC-16 | 미착수 | |
-| EVL-02 | 인용을 코드로 원문 대조, 불일치 시 1회 재생성, 재실패 시 '근거 부족', 무응답·매우 짧은 답변은 LLM 전 규칙으로 '근거 부족' | P0 | evaluation | `app/evaluation/quotes.py` | T-EVL-02, AC-16 | 미착수 | "매우 짧은" 기준값은 OQ-09 |
+| EVL-01 | 문항마다 루브릭 항목별 1~5점, 답변 원문 인용, 코멘트 | P0 | evaluation | `app/evaluation/judge.py` | T-EVL-01, AC-16 | 구현 | ADR-0023(2026-11-09): rubric-v4, 질문 유형별 논리성·전문성 요소, 점수별 예시, 근거는 문장 번호(`app/ai/tasks/evaluate.py`·`app/ai/rubric.py`), 3회 독립 판정 중앙값(`pipeline.median_judgement`). 테스트 `test_eval_reliability.py`, 실모델 보정 `scripts/eval_calibration.py` |
+| EVL-02 | 인용을 코드로 원문 대조, 불일치 시 1회 재생성, 재실패 시 '근거 부족', 무응답·매우 짧은 답변은 LLM 전 규칙으로 '근거 부족' | P0 | evaluation | `app/evaluation/quotes.py` | T-EVL-02, AC-16 | 구현 | "매우 짧은" 기준값은 OQ-09 **변경(ADR-0023, 사용자 결정 2026-11-09)**: 인용 대신 문장 번호 → 코드가 원문 범위 저장. 번호 없음+3점 이상은 1회 재요청 후 `UNLINKED`(모델 점수 유지, 1점 처리 안 함), 번호 없음+1~2점은 `INSUFFICIENT/LOW_CONTENT`. 무응답·짧은 답변 규칙은 그대로 |
 | EVL-03 | LLM 출력 JSON 형식 검사, 형식·범위 오류 시 재요청 | P0 | evaluation | `app/evaluation/judge.py` | T-EVL-03 | 미착수 | |
 | EVL-04 | 항목 점수·총점은 서버 코드가 계산·저장 (6.4) | P0 | evaluation | `app/evaluation/scoring.py` | T-EVL-04, AC-17 | 미착수 | Decimal 계산 |
 | EVL-05 | 답변 확정 시 문항 선평가 | P1 | evaluation | worker | T-EVL-05 | 미착수 | |
@@ -159,8 +159,8 @@
 |---|---|---|---|---|---|---|
 | RULE-6.1 | 본질문 10개: 인성2·이력서2·기업2·직무4, 순서 인성→이력서→기업→직무, 커스텀 1개는 직무 1개 대체, 담당자 변경 불가 | P0 | `app/questions/compose.py` | T-RULE-6.1 | 미착수 | |
 | RULE-6.2 | 꼬리질문 본질문당 최대 1·전체 최대 4, 생성 조건, 발화·이력서 문장 근거, 5초 내 미결정 시 건너뜀(→ 30초로 변경, ADR-0019), 45초, 점수 평균, 꼬리 전 중단 시 본답변만 평가·감점 없음 | P0 | `app/interview/followup.py`, `app/evaluation/scoring.py` | T-RULE-6.2 | 미착수 | |
-| RULE-6.3 | 고정 루브릭 4항목, 1~5점 기준 문장, 텍스트만 평가, 태도·음성 지표 없음 | P0 | `app/evaluation/rubric.py` | T-RULE-6.3 | 미착수 | 기준 문장은 TRD에서 정함 (05-ai-pipeline) |
-| RULE-6.4 | 점수 계산: 문항 점수(꼬리 평균), 항목 점수 = 10문항 평균×20, 코딩 = 통과/전체×100, 총점 = Σ(항목×가중치/100), 근거 부족 1점, 답변 없음 전 항목 1점, 기본 가중치, 첫 응시 후 잠금, 버전 기록 | P0 | `app/evaluation/scoring.py` | T-RULE-6.4, AC-17 | 미착수 | 반올림 규칙은 TRD에서 정함 (OQ-10) |
+| RULE-6.3 | 고정 루브릭 4항목, 1~5점 기준 문장, 텍스트만 평가, 태도·음성 지표 없음 | P0 | `app/evaluation/rubric.py` | T-RULE-6.3 | 구현 | 기준 문장은 TRD에서 정함 (05-ai-pipeline) rubric-v4(ADR-0023): 4항목·1~5점 유지, 기준 문장·예시·질문 유형별 요소 |
+| RULE-6.4 | 점수 계산: 문항 점수(꼬리 평균), 항목 점수 = 10문항 평균×20, 코딩 = 통과/전체×100, 총점 = Σ(항목×가중치/100), 근거 부족 1점, 답변 없음 전 항목 1점, 기본 가중치, 첫 응시 후 잠금, 버전 기록 | P0 | `app/evaluation/scoring.py` | T-RULE-6.4, AC-17 | 미착수 | 반올림 규칙은 TRD에서 정함 (OQ-10) ADR-0023: '근거 부족 1점'은 규칙 결과(TOO_SHORT)에만 적용. 근거 문장 연결 실패는 1점이 아니라 `UNLINKED`(모델 점수), 내용 부족은 모델의 1~2점 |
 | RULE-6.5 | 코딩 점수 = 최종 제출 코드 공개+비공개 통과율, [실행] 미반영, 자동 제출도 동일, 미작성·컴파일 실패 0점, LLM 코멘트 미반영 | P0 | `app/coding/grading.py` | T-RULE-6.5 | 미착수 | |
 | RULE-6.6 | 결과 공개 범위 표 (지원자/담당자) | P0 | `app/reports/public.py` | T-RULE-6.6, AC-19 | 미착수 | |
 | STATE-7.1 | 응시 상태 READY/PREPARING/INTERVIEWING/CODING/INTERRUPTED/SUBMITTED/EXPIRED와 전이 | P0 | `app/applications/states.py`, DB CHECK | T-STATE-7.1 | 미착수 | |
@@ -192,10 +192,10 @@
 | AC-10 | 실시간 자막, [답변 완료]로 확정, 침묵만으로 종료 안 됨 | INT-05, INT-15 | WebRTC 통합(합성 음성) | 서버 자동 시험 통과(2026-10-28, tests/test_voice.py, test_interview.py (자막·[답변 완료]·침묵으로 종료 안 됨)), UI 미구현 |
 | AC-11 | 60/45초 만료 시 확정, 10초 경고, 무발화 '답변 없음' | INT-06 | 서버 단위(가짜 시계) + UI | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (가짜 시계: 만료 확정·10초 경고·무발화)), UI 미구현 |
 | AC-12 | 진행률 "3 / 10", 꼬리질문 본질문당 1·전체 4 이하 | INT-07, 6.2 | 단위 + UI | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (본질문당 1·전체 4, 텍스트 모드)), UI 미구현 |
-| AC-13 | 새로고침·끊김 후 끊긴 문항부터, 저장 답변 유지 | INT-11 | API 통합 | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (끊김→재개→같은 문항 재출제, 옛 turn_id 409)), UI 미구현 |
+| AC-13 | 새로고침·끊김 후 끊긴 문항부터, 저장 답변 유지 | INT-11 | API 통합 | **ADR-0024로 변경**: 끊김·새로고침 → 응시 종료(EXPIRED), 답한 문항 평가, 재연결 409. 서버 자동 시험 통과(2026-11-09, tests/test_interview.py) |
 | AC-14 | 동시 응시 상한 초과 시 안내 문구, 시작 안 됨 | INT-13 | API 통합(동시성) | 서버 자동 시험 통과(2026-10-28, tests/test_interview.py (동시 시작 3건 중 1건 거부, 고정 문구)), UI 미구현 |
 | AC-15 | 코딩테스트는 켠 공고만 면접 뒤, [실행]은 정상/비정상만, 비공개 테스트 비노출, 시간 종료 자동 제출 | COD-01, 03, 05, 06 | API 통합 + 샌드박스 통합 | 서버 자동 시험 통과(2026-10-28, tests/test_coding.py; 실제 Docker 샌드박스는 `python -m runner --selftest`로 장비에서 확인); UI E2E 정상 경로 통과(2026-10-28, frontend/e2e/candidate-flow.spec.ts — [실행]은 정상 작동·출력만, 정답 여부 문구 없음, 최종 제출) |
-| AC-16 | 모든 점수에 원문 인용, 원문에 없는 인용은 '근거 부족' | EVL-01, 02 | 단위(인용 검증) + 가짜 LLM 통합 | 미착수 |
+| AC-16 | 모든 점수에 원문 인용, 원문에 없는 인용은 '근거 부족' | EVL-01, 02 | 단위(인용 검증) + 가짜 LLM 통합 | 미착수 ADR-0023: 근거는 답변 문장(코드가 자른 원문 범위)이라 원문에 없는 인용이 생길 수 없음. 근거 없는 점수는 화면에 '근거 미연결'·'내용 부족'으로 표시 |
 | AC-17 | 총점 = 6.4 공식 직접 계산값 | EVL-04 | 단위(계산) + 통합 | 미착수 |
 | AC-18 | 평가 서버 멈춘 채 제출해도 평가 건 유지, 재기동 후 평가 완료, 재응시 요구 없음 | 8.3, 7.2 | 통합(워커 중지·재기동) | 미착수 |
 | AC-19 | 결정 전 점수 비공개, 결정 후 항목별 점수·강점·개선점만, 응답에 총점·인용·메모·가중치 없음 | 6.6, SEC-04 | API 통합(응답 필드 검사) | 미착수 |

@@ -1,15 +1,11 @@
-"""Evaluation pipeline (TRD 05 §10, ADR-0006 §5~7, EVL-01~08).
+"""Evaluation steps (TRD 05 §10, ADR-0006 §5~7, EVL-01~08). The order, the checkpoints and the retries are in graph.py.
 
-- `evaluate_unit`: T5 for one answer unit (main or follow-up answer). Used by `pre_evaluate` during the interview
-  and by the final run for units without a reusable pre-evaluation.
-- `load_report_inputs` + `build_report`: the final run. The first reads everything in one short transaction; the
-  second makes the model calls with no transaction open (they take minutes on the CPU, past the 30 s
-  idle-in-transaction limit of core/db.py). Units come from `answer_pre_evaluations` with the current manifest hash
-  or a fresh T5 call; scores are computed by code (scoring.py); T6 summary and T7 candidate feedback produce the prose,
-  T8 gives the coding judgements the coding score is computed from (ADR-0017). Nothing is written here: the caller persists inside its fenced transaction.
+- `evaluate_unit`: T5 for one answer unit (main or follow-up answer), shared by `pre_evaluate` (through units.judge) and the
+  final run's unit node. `eval_samples` judgements, the per-criterion median is kept (ADR-0023).
+- scores are computed by code (scoring.py) from the unit payloads; T8 code review, the company's own items, T6 summary and
+  T7 candidate feedback are one model call each. Nothing here opens a transaction around a model call and nothing here
+  writes: the graph nodes load in short transactions and the handler persists inside its fenced transaction.
 """
-import asyncio
-import time
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -19,24 +15,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai import rubric
 from app.ai.client import AIClient
 from app.coding.grading import strip_comments
+from app.core.config import get_settings
 from app.core.constants import CRITERIA, Criterion
-from app.core.db import session_scope
-from app.core.storage import get_storage
-from app.evaluation import details
 from app.evaluation.scoring import (
     CODING_METRIC_WEIGHTS,
-    RULE_WEIGHT,
-    SCORING_VERSION,
     QuestionScores,
     ScoreResult,
     UnitScores,
     coding_total,
-    compute,
     measured_efficiency,
     no_answer_unit,
 )
 from app.models import (
-    AnswerPreEvaluation,
     Application,
     CodingProblem,
     CodingSubmission,
@@ -44,13 +34,12 @@ from app.models import (
     CodingTestResult,
     InterviewAnswer,
     InterviewQuestion,
-    Job,
     JobPosting,
-    PostingEvalSettings,
 )
 from app.coding.levels import LEVELS
-from app.coding.variants import problem_of
 from app.questions.compose import job_brief
+from app.questions.level import career_level
+from app.resumes.schemas import to_ai_resume
 
 CRITERION_NAME = {i["criterion"]: i["name"] for i in rubric.ITEMS}
 CRITERION_KEY = {i["criterion"]: i["key"] for i in rubric.ITEMS}
@@ -67,21 +56,71 @@ class CodingNotGraded(Exception):
 CODE_MAX_CHARS = 6000  # keeps the prompt inside the eval model's context next to the answer
 
 
-def unit_input(q: InterviewQuestion, a: InterviewAnswer, posting: JobPosting) -> dict:
-    """T5 input: no resume, name, gender, age, photo or contact (EVL-07). eval_text is already redacted (rd-1)."""
+def candidate_level(app: Application | None, posting: JobPosting) -> str | None:
+    """NEW / JUNIOR / SENIOR from the resume's work periods (app/questions/level.py), the only thing T5 learns from the resume:
+    it decides how the rubric is read (rubric-v5 LEVEL_VIEW), never a score."""
+    if app is None or not app.resume_snapshot:
+        return None
+    try:
+        return career_level(to_ai_resume(app.resume_snapshot),
+                            " ".join(filter(None, (posting.experience_level, posting.title, posting.requirements))))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def unit_input(q: InterviewQuestion, a: InterviewAnswer, posting: JobPosting, level: str | None = None) -> dict:
+    """T5 input: no resume, name, gender, age, photo or contact (EVL-07); of the resume only the career level (rubric-v5).
+    eval_text is already redacted (rd-1)."""
     inp = {"question": q.text, "question_type": q.slot_type, "job_brief": job_brief(posting),
+           "question_kind": rubric.question_kind(q.slot_type, q.text, bool(a.code_text)),  # what 논리성·전문성 need (ADR-0023)
            "answer": a.eval_text or "", "is_no_answer": a.is_no_answer}
+    if level:
+        inp["level"] = level
     if a.code_text:  # SC-A06 live coding: the submitted code is read with the answer (never executed)
         inp["code"], inp["code_language"] = a.code_text[:CODE_MAX_CHARS], a.code_language or ""
     return inp
 
 
-async def evaluate_unit(ai: AIClient, q: InterviewQuestion, a: InterviewAnswer, posting: JobPosting) -> tuple[dict, str]:
-    """Returns (payload, manifest_hash). Raises EvaluationFailed; AIUnavailable propagates (job deferral)."""
-    r = await ai.llm("evaluate_answer", unit_input(q, a, posting), lane="BATCH")
-    if r.status != "OK":
-        raise EvaluationFailed(f"evaluate_answer {r.status}")
-    return {**r.output, "flags": r.flags, "llm_calls": r.attempts.get("llm_calls", 0)}, r.manifest_hash
+async def evaluate_unit(ai: AIClient, q: InterviewQuestion, a: InterviewAnswer, posting: JobPosting,
+                        app: Application | None = None) -> tuple[dict, str]:
+    """Returns (payload, manifest_hash). Raises EvaluationFailed; AIUnavailable propagates (job deferral).
+
+    `eval_samples` independent T5 judgements, then per criterion the median one with its own evidence and comment (ADR-0023).
+    Every kept score is one the model gave; code only picks the middle of the model's own judgements. A rule result (답변 없음,
+    TOO_SHORT) has no model call and is not repeated. Samples that failed are left out; none left = EvaluationFailed."""
+    inp = unit_input(q, a, posting, candidate_level(app, posting))
+    samples, calls, manifest, status = [], 0, None, "INVALID"
+    for _ in range(max(1, get_settings().eval_samples)):
+        r = await ai.llm("evaluate_answer", inp, lane="BATCH")
+        calls += r.attempts.get("llm_calls", 0)
+        status = r.status
+        if r.status == "OK":
+            samples.append(r)
+            manifest = r.manifest_hash
+            if not r.output.get("llm", True):
+                break  # a rule result: the same every time
+    if not samples:
+        raise EvaluationFailed(f"evaluate_answer {status}")
+    out = median_judgement([s.output for s in samples])
+    flags: dict = {}
+    for s in samples:
+        flags.update({k: v for k, v in (s.flags or {}).items() if v})
+    return {**out, "flags": flags, "llm_calls": calls, "samples": len(samples)}, manifest
+
+
+def median_judgement(outputs: list[dict]) -> dict:
+    """Per criterion, the judgement whose score is the median of the samples (the lower middle of an even count), kept whole
+    with its evidence sentence and comment. The sub-items and STAR come from the sample whose 논리성 was kept."""
+    if len(outputs) == 1:
+        return outputs[0]
+    items, logic_from = {}, outputs[0]
+    for crit in outputs[0]["items"]:
+        ranked = sorted(outputs, key=lambda o: o["items"][crit]["score"])
+        pick = ranked[(len(ranked) - 1) // 2]
+        items[crit] = pick["items"][crit]
+        if crit == Criterion.LOGIC.value:
+            logic_from = pick
+    return {**logic_from, "items": items, "scores_sampled": {c: [o["items"][c]["score"] for o in outputs] for c in items}}
 
 
 def unit_scores(payload: dict) -> UnitScores:
@@ -124,133 +163,66 @@ async def _coding(db: AsyncSession, app: Application, posting: JobPosting) -> tu
     return {"passed": sub.passed, "total": sub.total, "score": sub.score, "reached": True, "limit_hit": bool(limit_hit)}, sub
 
 
-@dataclass
-class ReportInputs:
-    manifest_hash: str
-    posting: JobPosting
-    weights: dict
-    questions: list[InterviewQuestion]
-    answers: dict  # question_id -> answer
-    cached: dict  # answer_id -> reusable pre-evaluation payload
-    coding: dict | None
-    submission: CodingSubmission | None
-    problem: CodingProblem | None = None  # only when there is code to review (T8)
-    public_tests: list[CodingTestcase] = field(default_factory=list)
-    custom_items: list = field(default_factory=list)  # the company's own evaluation items of this posting's settings
-
-
-async def load_report_inputs(db: AsyncSession, app: Application, manifest_hash: str) -> ReportInputs:
-    """Raises CodingNotGraded before any model call when the submission is still being graded."""
-    posting = await db.get(JobPosting, app.posting_id)
-    settings = await db.get(PostingEvalSettings, app.eval_settings_id)
-    qs = (await db.execute(select(InterviewQuestion).where(InterviewQuestion.application_id == app.id)
-                           .order_by(InterviewQuestion.seq, InterviewQuestion.role.desc()))).scalars().all()
-    answers = {a.question_id: a for a in (await db.execute(select(InterviewAnswer).where(
-        InterviewAnswer.application_id == app.id))).scalars()}
-    cached = {p.answer_id: p.payload for p in (await db.execute(select(AnswerPreEvaluation).where(
-        AnswerPreEvaluation.answer_id.in_([a.id for a in answers.values()] or [None]),
-        AnswerPreEvaluation.manifest_hash == manifest_hash))).scalars()}
-    coding, sub = await _coding(db, app, posting)
-    inp = ReportInputs(manifest_hash, posting, settings.all_weights(), list(qs), answers, cached, coding, sub,
-                       custom_items=list(settings.custom_items or []))
-    if sub is not None and sub.code.strip():
-        inp.problem = await problem_of(db, app.id, posting)
-        inp.public_tests = list((await db.execute(select(CodingTestcase).where(
-            CodingTestcase.problem_id == inp.problem.id, CodingTestcase.visibility == "PUBLIC")
-            .order_by(CodingTestcase.ordinal))).scalars().all())
-    return inp
-
-
-async def wait_for_pre_evaluations(inp: ReportInputs, max_wait_sec: float = 45.0) -> None:
-    """Answers whose `pre_evaluate` job is still queued or running are waited for instead of being evaluated a second
-    time: the same answer twice would occupy the model slot for twice as long. No job in flight = evaluate here."""
-    deadline = time.monotonic() + max_wait_sec
-    while True:
-        missing = [a.id for a in inp.answers.values() if a.id not in inp.cached]
-        if not missing or time.monotonic() >= deadline:
-            return
-        async with session_scope() as db:
-            running = await db.scalar(select(func.count()).select_from(Job).where(
-                Job.kind == "pre_evaluate", Job.state.in_(["QUEUED", "RUNNING"]),
-                Job.dedupe_key.in_([f"pre:{m}" for m in missing])))
-            for p in (await db.execute(select(AnswerPreEvaluation).where(
-                    AnswerPreEvaluation.answer_id.in_(missing), AnswerPreEvaluation.manifest_hash == inp.manifest_hash))).scalars():
-                inp.cached[p.answer_id] = p.payload
-        if not running:
-            return
-        await asyncio.sleep(0.4)
-
-
-async def build_report(ai: AIClient, app: Application, inp: ReportInputs) -> Report:
-    posting, qs, answers, cached = inp.posting, inp.questions, inp.answers, inp.cached
-    mains = [q for q in qs if q.role == "MAIN"]
+def question_rows(qs: list[InterviewQuestion], answers: dict) -> list[tuple]:
+    """(main question, its answer, follow-up question, its answer) per main question, in question order."""
     followups = {q.parent_id: q for q in qs if q.role == "FOLLOWUP"}
-    units: dict = {}
-    todo = []
-    for q in qs:
-        a = answers.get(q.id)
-        if a is None:
-            continue
-        if cached.get(a.id):
-            units[a.id] = cached[a.id]
-        else:
-            todo.append((q, a))
-    for q, a in todo:  # normally only the last answer: the interview pre-evaluated the others
-        units[a.id] = (await evaluate_unit(ai, q, a, posting))[0]
-
-    rows, question_scores = [], []
-    for m in mains:
-        a = answers.get(m.id)
+    rows = []
+    for m in (q for q in qs if q.role == "MAIN"):
         fq = followups.get(m.id)
-        fa = answers.get(fq.id) if fq else None
-        rows.append((m, a, fq, fa))
+        rows.append((m, answers.get(m.id), fq, answers.get(fq.id) if fq else None))
+    return rows
+
+
+def question_scores(rows, units: dict, attempt_status: str) -> list[QuestionScores]:
+    """Per main question the unit scores the area totals are computed from (6.2, 6.4, OQ-07)."""
+    out = []
+    for m, a, _fq, fa in rows:
         if a is None:
-            if app.attempt_status == "SUBMITTED":
-                question_scores.append(QuestionScores(m.seq, no_answer_unit()))  # never answered -> 답변 없음
+            if attempt_status == "SUBMITTED":
+                out.append(QuestionScores(m.seq, no_answer_unit()))  # never answered -> 답변 없음
             continue  # EXPIRED: only answered main questions count (OQ-07)
-        question_scores.append(QuestionScores(m.seq, unit_scores(units[a.id]),
-                                              unit_scores(units[fa.id]) if fa else None))
-    if app.attempt_status == "SUBMITTED" and len(question_scores) != len(mains):
-        raise EvaluationFailed(f"expected {len(mains)} main questions, found {len(question_scores)}")
-
-    coding, weights = inp.coding, inp.weights
-    review = await _code_review(ai, posting, inp) if inp.problem is not None else None
-    coding_value = None
-    det = await details.analyze(rows, units, get_storage())
-    if "coding" in weights:
-        coding_value, det.detail["coding"] = _coding_metrics(coding, review)
-    custom_scores, det.detail["custom"] = await _custom_items(ai, rows, inp.custom_items)
-    scores = compute(question_scores, weights, coding_value, det.rule_scores, custom_scores)
-    det.detail["blend"] = {"scoring": SCORING_VERSION, "rule_weight": float(RULE_WEIGHT), "rule_scores": {k: float(v) for k, v in det.rule_scores.items()}}
-
-    if _anything_answered(rows):
-        summary = await _summary(ai, rows, units, scores)
-        feedback = await _feedback(ai, rows, units, scores)
-    else:  # nothing to read: the model would only make something up, so the texts are fixed (and say so)
-        summary, feedback = dict(NO_ANSWER_SUMMARY), dict(NO_ANSWER_FEEDBACK)
-    answered_main = sum(1 for m, a, _, _ in rows if a is not None and not a.is_no_answer)
-    return Report(inp.manifest_hash, units, scores, answered_main, summary, feedback, review, coding, rows, det.detail)
+        out.append(QuestionScores(m.seq, unit_scores(units[a.id]), unit_scores(units[fa.id]) if fa else None))
+    if attempt_status == "SUBMITTED" and len(out) != len(rows):
+        raise EvaluationFailed(f"expected {len(rows)} main questions, found {len(out)}")
+    return out
 
 
-async def _custom_items(ai: AIClient, rows, items: list[dict]) -> tuple[dict[str, Decimal], list[dict]]:
-    """Grades of the company's own items (0% items are not evaluated). Score = grade points x 20, by code."""
-    active = [it for it in items if it.get("weight", 0) > 0]
-    if not active:
-        return {}, []
-    answers = []
+def answered_main(rows) -> int:
+    return sum(1 for _m, a, _, _ in rows if a is not None and not a.is_no_answer)
+
+
+def custom_answers(rows) -> list[dict]:
+    """The answers T-custom reads: per main question its answer and follow-up answer as one text."""
+    out = []
     for m, a, _fq, fa in rows:
         text = " ".join(x.eval_text for x in (a, fa) if x is not None and not x.is_no_answer and x.eval_text)
         if text.strip():
-            answers.append({"no": m.seq, "question": m.text, "text": text})
-    if answers:
-        r = await ai.llm("custom_criteria", {"items": active, "answers": answers}, lane="BATCH")
-        if r.status != "OK":
-            raise EvaluationFailed(f"custom_criteria {r.status}")
-        graded = r.output["items"]
-    else:  # nothing was answered: every item is the lowest grade without evidence
-        graded = {it["id"]: {"grade": "하", "score": 1, "evidence_status": "NO_ANSWER", "quote": None, "comment": ""} for it in active}
+            out.append({"no": m.seq, "question": m.text, "text": text})
+    return out
+
+
+def active_custom_items(items: list[dict] | None) -> list[dict]:
+    return [it for it in (items or []) if it.get("weight", 0) > 0]  # 0% items are not evaluated
+
+
+async def grade_custom_items(ai: AIClient, rows, items: list[dict]) -> dict:
+    """The model's grades of the company's own items, keyed by item id (one call over the whole interview)."""
+    active = active_custom_items(items)
+    answers = custom_answers(rows)
+    if not active:
+        return {}
+    if not answers:  # nothing was answered: every item is the lowest grade without evidence
+        return {it["id"]: {"grade": "하", "score": 1, "evidence_status": "NO_ANSWER", "quote": None, "comment": ""} for it in active}
+    r = await ai.llm("custom_criteria", {"items": active, "answers": answers}, lane="BATCH")
+    if r.status != "OK":
+        raise EvaluationFailed(f"custom_criteria {r.status}")
+    return r.output["items"]
+
+
+def custom_item_scores(items: list[dict], graded: dict) -> tuple[dict[str, Decimal], list[dict]]:
+    """Score = grade points x 20, by code; the detail the report shows."""
     scores, detail = {}, []
-    for it in active:
+    for it in active_custom_items(items):
         g = graded[it["id"]]
         scores[f"custom:{it['id']}"] = Decimal(g["score"] * 20)
         detail.append({"id": it["id"], "name": it["name"], "description": it.get("description") or "", "weight": it["weight"],
@@ -305,7 +277,7 @@ async def _feedback(ai: AIClient, rows, units: dict, scores: ScoreResult) -> dic
     criteria = {}
     for c in CRITERIA:
         comments = [units[a.id]["items"][c.value].get("comment", "") for _, a, _, _ in rows
-                    if a is not None and units[a.id]["items"][c.value]["evidence_status"] == "OK"]
+                    if a is not None and units[a.id]["items"][c.value]["evidence_status"] in ("OK", "UNLINKED")]
         criteria[CRITERION_NAME[c.value]] = {"band": _band(scores.criteria[CRITERION_KEY[c.value]]),
                                              "comments": [x for x in comments if x][:5]}
     answers = [x.eval_text for _, a, _, fa in rows for x in (a, fa) if x is not None and x.eval_text]
@@ -315,14 +287,15 @@ async def _feedback(ai: AIClient, rows, units: dict, scores: ScoreResult) -> dic
     return r.output
 
 
-async def _code_review(ai: AIClient, posting: JobPosting, report_in: ReportInputs) -> dict:
+async def _code_review(ai: AIClient, posting: JobPosting, problem: CodingProblem, public_tests: list[CodingTestcase],
+                       code: str) -> dict:
     """T8 gets the statement, PUBLIC examples and the code without comments: hidden tests and their results never reach
     the prompt (COD-06, SC-79). The result is part of the score, so a failure fails the attempt (EVL-06)."""
-    level = LEVELS.get(report_in.problem.level)
-    inp = {"problem": report_in.problem.statement_md, "language": posting.coding_language or "python",
+    level = LEVELS.get(problem.level)
+    inp = {"problem": problem.statement_md, "language": posting.coding_language or "python",
            "level_expectation": f"Lv.{level.level}: {level.expected}" if level else "",
-           "code": strip_comments(report_in.submission.code)[:CODE_MAX_CHARS],
-           "examples": [{"input": t.input, "output": t.expected_output} for t in report_in.public_tests]}
+           "code": strip_comments(code)[:CODE_MAX_CHARS],
+           "examples": [{"input": t.input, "output": t.expected_output} for t in public_tests]}
     r = await ai.llm("code_review", inp, lane="BATCH")
     if r.status != "OK":
         raise EvaluationFailed(f"code_review {r.status}")

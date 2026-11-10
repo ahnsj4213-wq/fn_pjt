@@ -31,7 +31,6 @@ x-backend-env: &backend-env
   AIHIRE_LLM_RT_SLOT: ${LLM_RT_SLOT:-0}
   AIHIRE_EMBED_URL: http://ai:8083
   AIHIRE_STT_URL: http://ai:8201
-  AIHIRE_RETAKE_POSTING_IDS: ${RETAKE_POSTING_IDS:-}
   AIHIRE_TTS_URL: http://ai:8202
   AIHIRE_LLM_MODEL: ${LLM_MODEL:-qwen3.5:4b}
   AIHIRE_EMBED_MODEL: bge-m3
@@ -48,6 +47,10 @@ x-backend-env: &backend-env
   AIHIRE_CODE_EXECUTION_ENABLED: "true"
   AIHIRE_TRUSTED_ORIGINS: '${TRUSTED_ORIGINS:-["http://localhost:8080", "http://127.0.0.1:8080"]}'
   AIHIRE_DATA_DIR: /data
+  # Test candidate accounts that may apply to the same posting again (the earlier application is deleted). dev only.
+  AIHIRE_TESTER_EMAILS: ${TESTER_EMAILS:-}
+  # live: 첫 질문만 면접 전, 나머지는 면접 중(현재 질문에 답하는 동안 다음 질문을 미리 생성). upfront: 10개 모두 면접 전 (ADR-0022)
+  AIHIRE_QUESTION_MODE: ${QUESTION_MODE:-live}
 
 x-gpu: &gpu
   deploy:

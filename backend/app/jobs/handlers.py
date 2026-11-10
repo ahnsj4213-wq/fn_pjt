@@ -5,6 +5,7 @@ rolls back instead of writing twice (R-14). AIUnavailable (app.ai.client) / Runn
 without consuming an attempt (OQ-23); any other exception consumes it.
 """
 import logging
+import time
 from uuid import UUID
 
 from sqlalchemy import func, select, text, update
@@ -22,13 +23,14 @@ from app.core.db import session_scope, sessionmaker
 from app.core.logging import log_event
 from app.core.storage import get_storage
 from app.core.timeutil import utcnow
+from app.evaluation import graph as eval_graph
 from app.evaluation import pipeline
+from app.evaluation import units as eval_units
 from app.evaluation.scoring import SCORING_VERSION
 from app.jobs.queue import enqueue
-from app.jobs.worker import ON_CLAIM, ON_EXHAUSTED, ON_REQUEUE, InfraUnavailable, JobCtx, fenced_complete, handler
+from app.jobs.worker import ON_CLAIM, ON_EXHAUSTED, ON_REQUEUE, InfraUnavailable, JobCtx, LeaseLost, fenced_complete, handler
 from app.models import (
     AnswerEvaluation,
-    AnswerPreEvaluation,
     Application,
     CandidateFeedback,
     CodingProblem,
@@ -55,29 +57,34 @@ log = logging.getLogger("app.worker")
 
 
 
-async def _prepare_coding_variant(db: AsyncSession, app: Application) -> None:
+async def _prepare_coding_variant(app_id: UUID) -> None:
     """Make this application's coding problem now, with the statement reworded by the model. Best effort: a failure here
-    only means the variant is made unreworded when the interview ends (turns.finish_interview)."""
-    posting = await db.get(JobPosting, app.posting_id)
-    if await get_variant(db, app.id) is not None:
-        return
-    # A live-coding question (SC-A06) names its problem; otherwise the posting's coding test does.
-    live = (await db.execute(select(InterviewQuestion.grounding).where(
-        InterviewQuestion.application_id == app.id, InterviewQuestion.source == "PROBLEM"))).scalars().first()
-    if live and live.get("problem_id"):
-        base = await db.get(CodingProblem, UUID(live["problem_id"]))
-    elif posting.coding_enabled:
-        base = await base_problem_for(db, app, posting)
-    else:
-        return
+    only means the variant is made unreworded when the interview ends (turns.finish_interview). The model call runs with
+    no transaction open (LangGraph refactor 2026-11-10): read, reword, then write in its own short transaction."""
+    async with session_scope() as db:
+        app = await db.get(Application, app_id)
+        posting = await db.get(JobPosting, app.posting_id)
+        if await get_variant(db, app.id) is not None:
+            return
+        # A live-coding question (SC-A06) names its problem; otherwise the posting's coding test does.
+        live = (await db.execute(select(InterviewQuestion.grounding).where(
+            InterviewQuestion.application_id == app.id, InterviewQuestion.source == "PROBLEM"))).scalars().first()
+        if live and live.get("problem_id"):
+            base = await db.get(CodingProblem, UUID(live["problem_id"]))
+        elif posting.coding_enabled:
+            base = await base_problem_for(db, app, posting)
+        else:
+            return
+        base_id, original = base.id, base.statement_md
     statement = None
     try:
-        r = await get_ai_client().llm("problem_rewrite", {"statement": base.statement_md}, lane="BATCH")
+        r = await get_ai_client().llm("problem_rewrite", {"statement": original}, lane="BATCH")
         if r.status == "OK":
             statement = r.output.get("statement")
     except Exception:  # noqa: BLE001 - never block question composition on a cosmetic rewrite
         log.warning("problem_rewrite_failed", exc_info=True)
-    await ensure_variant(db, app.id, base, statement)
+    async with session_scope() as db:
+        await ensure_variant(db, app_id, await db.get(CodingProblem, base_id), statement)
 
 
 # ── compose_questions (ADR-0005) ───────────────────────────────────────────────
@@ -94,9 +101,8 @@ async def compose_questions(ctx: JobCtx) -> None:
             return
     # The composition graph (questions/graph.py) makes and writes the set; a retry continues at the node that stopped.
     qset_id = await compose_graph.run(app_id, settings_id)
+    await _prepare_coding_variant(app_id)
     async with session_scope() as db:
-        app = await db.get(Application, app_id)
-        await _prepare_coding_variant(db, app)
         count = await db.scalar(select(func.count()).select_from(InterviewQuestion).where(InterviewQuestion.question_set_id == qset_id))
         await fenced_complete(db, ctx)
     log_event(log, "questions_composed", application_id=str(app_id), count=count)
@@ -132,6 +138,7 @@ async def tts_pregen(ctx: JobCtx) -> None:
     async with session_scope() as db:
         qset = await db.get(QuestionSet, qset_id)
         app = await db.get(Application, qset.application_id)
+        app_ref = str(app.id)
         if qset.status != "READY" or app.attempt_status in ("SUBMITTED", "EXPIRED"):
             await fenced_complete(db, ctx)
             return
@@ -142,13 +149,18 @@ async def tts_pregen(ctx: JobCtx) -> None:
             InterviewQuestion.question_set_id == qset_id, InterviewQuestion.role == "MAIN")
             .order_by(InterviewQuestion.seq))).scalars() if q.id not in done]
     ai = get_ai_client()
+    t_all = time.monotonic()
     for qid, qtext in todo:  # one question per transaction: progress survives a restart
+        t0 = time.monotonic()
         out = await ai.tts(qtext)
+        log_event(log, "tts_pregen_one", application_id=app_ref, stage="tts", duration_ms=int((time.monotonic() - t0) * 1000))
         key = f"tts/{qid}.pcm"
         await get_storage().put(key, out.pcm48k)
         async with session_scope() as db:
             await db.execute(insert(QuestionTtsAsset).values(question_id=qid, audio_key=key, duration_ms=out.duration_ms,
                                                              voice_model=out.voice_model).on_conflict_do_nothing())
+    log_event(log, "tts_pregen_done", application_id=app_ref, count=len(todo),
+              duration_ms=int((time.monotonic() - t_all) * 1000))
     async with session_scope() as db:
         await fenced_complete(db, ctx)
 
@@ -224,17 +236,13 @@ async def _ocr_resume(key: str, pages: list[int]) -> tuple[list, str | None]:
 # ── pre_evaluate (EVL-05, T15) ─────────────────────────────────────────────────
 @handler("pre_evaluate")
 async def pre_evaluate(ctx: JobCtx) -> None:
+    """The same unit evaluation as the final run's unit node (evaluation/units.judge): loaded in a short transaction, T5 with
+    none open, sealed; stored in the fenced transaction. The final run reuses it only if units.reuse_problems finds nothing."""
     answer_id = UUID(ctx.payload["answer_id"])
-    async with session_scope() as db:
-        a = await db.get(InterviewAnswer, answer_id)
-        q = await db.get(InterviewQuestion, a.question_id)
-        app = await db.get(Application, a.application_id)
-        posting = await db.get(JobPosting, app.posting_id)
-    payload, manifest = await pipeline.evaluate_unit(get_ai_client(), q, a, posting)
+    payload, manifest, _a = await eval_units.judge(get_ai_client(), answer_id)
     async with session_scope() as db:
         await fenced_complete(db, ctx)
-        await db.execute(insert(AnswerPreEvaluation).values(answer_id=answer_id, manifest_hash=manifest, payload=payload)
-                         .on_conflict_do_nothing())
+        await eval_units.store(db, answer_id, manifest, payload, replace=False)
 
 
 # ── evaluate_application (EVL-06, ADR-0006 §4~7) ───────────────────────────────
@@ -287,26 +295,31 @@ ON_EXHAUSTED["evaluate_application"] = _eval_on_exhausted
 
 @handler("evaluate_application")
 async def evaluate_application(ctx: JobCtx) -> None:
+    """The evaluation graph (evaluation/graph.py) makes every model call with no transaction open and keeps its progress in
+    a checkpoint: the retry of this job (EVL-06) continues at the step that stopped. The report is written here, in the
+    fenced transaction, and the checkpoint is dropped after that."""
     app_id = UUID(ctx.payload["application_id"])
-    ai = get_ai_client()
-    health = await ai.health()
+    health = await get_ai_client().health()
     manifest = health.get("manifest_hash") or ""
+    async with session_scope() as db:
+        run_id = await db.scalar(text("SELECT id FROM evaluation_runs WHERE application_id=:a AND lease_token=:t"),
+                                 {"a": app_id, "t": ctx.lease_token})
+    if run_id is None:
+        raise RuntimeError("evaluation run row missing")
     try:
-        async with session_scope() as db:
-            app = await db.get(Application, app_id)
-            run_id = await db.scalar(text("SELECT id FROM evaluation_runs WHERE application_id=:a AND lease_token=:t"),
-                                     {"a": app_id, "t": ctx.lease_token})
-            if run_id is None:
-                raise RuntimeError("evaluation run row missing")
-            inputs = await pipeline.load_report_inputs(db, app, manifest)
+        values = await eval_graph.run(app_id, manifest, job_id=ctx.id, lease_token=ctx.lease_token)
     except pipeline.CodingNotGraded as e:
         raise InfraUnavailable("coding submission not graded yet") from e
-    await pipeline.wait_for_pre_evaluations(inputs)  # the last answer's pre-evaluation is usually still running
-    # No transaction across the model calls: they outlast the 30 s idle-in-transaction limit on the CPU.
-    rep = await pipeline.build_report(ai, app, inputs)
+    except eval_graph.ManifestChanged as e:
+        raise InfraUnavailable(str(e)) from e
+    except eval_graph.LeaseLost as e:
+        raise LeaseLost(ctx.id) from e
+    rep = await eval_graph.finalize(values)
     async with session_scope() as db:
         await fenced_complete(db, ctx)
+        app = await db.get(Application, app_id)
         await _write_report(db, app, run_id, rep, health)
+    await eval_graph.forget(app_id, ctx.id)
     log_event(log, "evaluation_done", application_id=str(app_id), count=len(rep.units))
 
 

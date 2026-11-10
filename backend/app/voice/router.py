@@ -48,6 +48,19 @@ async def offer(aid: UUID, body: OfferIn, ctx: CandidateCtx = Depends(require_ca
             raise conflict("STATE_CONFLICT", "면접을 진행할 수 있는 상태가 아닙니다.")  # C4: slot required
         if iv is not None and iv.text_mode_since is not None:
             raise conflict("STATE_CONFLICT", "텍스트 모드로 진행 중입니다.")
+        # ADR-0024: one connection per interview. Another window of the live one is turned away (the live one goes on);
+        # a connection after questions were already asked is a return after leaving: the attempt ends, nothing resumes.
+        live = registry.get(app.id)
+        if live is not None and not live.closed and live.purpose == "interview":
+            raise conflict("ALREADY_CONNECTED", "다른 창에서 면접이 진행 중입니다. 이 창은 닫아 주십시오.")
+        asked = await db.scalar(text("SELECT EXISTS (SELECT 1 FROM interview_turns WHERE application_id=:a)"), {"a": app.id})
+        if asked:
+            from app.applications.lifecycle import end_left
+
+            await get_for_owner(db, Application, aid, ctx.user_id, for_update=True)
+            await end_left(db, app)
+            await db.commit()
+            raise conflict("ATTEMPT_ENDED", "면접 도중 화면을 벗어나 면접이 종료되었습니다. 답변한 질문까지 평가됩니다.")
     await db.commit()  # release the row before the (slower) WebRTC negotiation
     try:
         answer, session_id = await registry.open_session(app.id, body.purpose.lower(), body.sdp)

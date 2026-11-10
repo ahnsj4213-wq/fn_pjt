@@ -8,7 +8,12 @@ export function useSession() {
   return useQuery({ queryKey: SESSION_KEY, queryFn: fetchSession, staleTime: Infinity });
 }
 
+/**
+ * A new session (login, signup, logout) drops every other cached answer: lists fetched before it were answered for
+ * someone else (e.g. the main page's postings without `has_applied`), and staleTime would keep showing them.
+ */
 export function setSession(qc: QueryClient, s: SessionOut | null): void {
+  qc.removeQueries({ predicate: (q) => q.queryKey[0] !== SESSION_KEY[0] });
   qc.setQueryData(SESSION_KEY, s);
 }
 

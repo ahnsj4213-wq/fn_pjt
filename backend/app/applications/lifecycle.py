@@ -47,6 +47,40 @@ async def expire_unfinished(db: AsyncSession, posting_id: UUID) -> int:
     return len(rows)
 
 
+async def end_left(db: AsyncSession, app: Application) -> None:
+    """The candidate left in the middle (window closed, connection lost, no signal): the attempt ends there (ADR-0024,
+    2026-11-09 user decision: no resuming, no retaking). Answered questions are evaluated (OQ-07), the coding draft or
+    live code is submitted as it is, the live turn is abandoned. Through INTERRUPTED: the transition table allows
+    INTERRUPTED -> EXPIRED, not a direct jump. Caller holds the application row lock."""
+    from sqlalchemy import text
+
+    from app.models import Interview
+    from app.notify import inbox
+
+    if app.attempt_status not in ("INTERVIEWING", "CODING", "INTERRUPTED"):
+        return
+    was = app.interrupted_from if app.attempt_status == "INTERRUPTED" else app.attempt_status
+    await db.execute(text("UPDATE interview_turns SET state='ABANDONED', end_reason='DISCONNECT', closed_at=now() "
+                          "WHERE application_id=:a AND state IN ('PRESENTING','ANSWERING','FINALIZING')"), {"a": app.id})
+    if app.attempt_status != "INTERRUPTED":
+        app.interrupted_from, app.attempt_status = app.attempt_status, "INTERRUPTED"
+        await db.flush()
+    now = utcnow()
+    app.attempt_status, app.interrupted_from, app.expired_at = "EXPIRED", None, now
+    await db.flush()
+    grade_job = None
+    if was == "CODING":
+        grade_job = await auto_submit_draft(db, app, kind="AUTO_EXPIRED")
+    elif (await db.get(JobPosting, app.posting_id)).coding_enabled:
+        grade_job = await submit_live_code(db, app, only_if_written=True)
+    if app.answered_main_count > 0:
+        await register_evaluation(db, app, depends_on=grade_job)
+    await db.execute(delete(InterviewSlot).where(InterviewSlot.application_id == app.id))
+    await db.execute(update(Interview).where(Interview.application_id == app.id).values(
+        interruption_count=Interview.interruption_count + 1, current_phase=None, ended_at=now))
+    await inbox.interview_stopped(db, app)
+
+
 async def auto_submit_draft(db: AsyncSession, app: Application, kind: str) -> int | None:
     """COD-05: submit the last saved draft once (manual and automatic submits race safely on the unique key).
     Returns the grading job id, or None when a submission already existed."""

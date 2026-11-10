@@ -24,11 +24,10 @@ async def test_interview_events_and_schedule_answer_reach_the_inbox_once(client,
     assert (await _notes(client))["items"] == []
     start = ("UPDATE applications a SET attempt_status='INTERVIEWING', eval_settings_id=p.current_settings_id, "
              "interview_started_at=now() FROM job_postings p WHERE a.id=:a AND p.id=a.posting_id")
-    async with session_scope() as db:  # the applicant stops half way, twice
+    async with session_scope() as db:  # the applicant leaves half way (ADR-0024: ended); a second signal changes nothing
         await db.execute(text("UPDATE applications SET attempt_status='PREPARING' WHERE id=:a"), {"a": app_id})
         await db.execute(text(start), {"a": app_id})
         await turns.interrupt(db, app_id)
-        await db.execute(text("UPDATE applications SET attempt_status='INTERVIEWING', interrupted_from=NULL WHERE id=:a"), {"a": app_id})
         await turns.interrupt(db, app_id)
     n = await _notes(client)
     assert [(i["kind"], "멈췄습니다" in i["text"]) for i in n["items"]] == [("APPLY", True)] and n["unread"] == 1

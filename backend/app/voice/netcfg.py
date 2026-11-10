@@ -44,7 +44,8 @@ class _RangeLoop:
 
 
 def install_port_range(lo: int, hi: int) -> None:
-    """Idempotent. aioice calls `asyncio.get_event_loop()` from its own module, so only its view is redirected."""
+    """Idempotent. aioice gets its loop from its own module's `asyncio` (get_event_loop up to 0.10,
+    get_running_loop from 0.11), so only its view is redirected, for both calls."""
     global _installed
     if _installed == (lo, hi):
         return
@@ -54,6 +55,7 @@ def install_port_range(lo: int, hi: int) -> None:
     proxy = types.ModuleType("asyncio_rtc_ports")
     proxy.__getattr__ = lambda name: getattr(real, name)  # type: ignore[method-assign]
     proxy.get_event_loop = lambda: _RangeLoop(real.get_event_loop(), lo, hi)  # type: ignore[attr-defined]
+    proxy.get_running_loop = lambda: _RangeLoop(real.get_running_loop(), lo, hi)  # type: ignore[attr-defined]
     aioice.ice.asyncio = proxy
     _installed = (lo, hi)
 

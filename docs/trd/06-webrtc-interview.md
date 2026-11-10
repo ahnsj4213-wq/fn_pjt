@@ -75,7 +75,7 @@
 | 최대 구간 | 15초 연속 발화면 마지막 2초 안의 최저 RMS 프레임에서 강제 분할 | [TRD] Whisper 30초 창 안에 유지 |
 | 최소 발화 | 구간 안 발화 합계 0.25초 미만이면 STT 생략(잡음) | [TRD] |
 | STT 호출 | 구간 PCM을 `ai /v1/stt`로, 턴 안에서 순서대로(동시 1) | TRD 05 §4 |
-| 환각 차단(`hl-1`) | `no_speech_prob ≥ 0.6 && avg_logprob ≤ −1.0`, 압축률 > 2.4, 차단 목록("시청해 주셔서 감사합니다", "구독과 좋아요", "자막 제공" 등) → 그 구간 텍스트 비움 | [TRD] |
+| 환각 차단(`hl-1`) | `no_speech_prob ≥ 0.6 && avg_logprob ≤ −1.0` 또는 `no_speech_prob ≥ 0.8`, 압축률 > 2.4, 차단 목록("시청해 주셔서 감사합니다", "구독과 좋아요", "자막 제공" 등), 구간 전체가 상투 문구뿐("감사합니다", "아멘", "고맙습니다", "음" 등, 반복 포함. 문장 안의 같은 말은 유지) → 그 구간 텍스트 비움. 입력 전체 또는 구간의 RMS < 0.003(약 −50 dBFS)이면 무음으로 보고 인식하지 않음(2026-11-09, 잡음에서 "감사합니다"·"아멘"이 답변에 들어간 사례, R-28) | [TRD] |
 | 비교 후보 | Silero VAD(잡음 강건) — S-16 실제 녹음으로 비교 후 교체 여부 결정 | — |
 
 - 자막: 구간마다 `caption_segment{segment_no, text}`. 구간 안 중간 결과(`caption_partial`)는 v1에서 보내지 않는다(GPU 부하, 예약 이름). 말하는 동안 화면은 마이크 레벨 막대 + "인식 중" 표시(D).
@@ -193,7 +193,7 @@
 
 | 항목 | 값 | 근거 |
 |---|---|---|
-| 끊김 판정(음성) | ICE `failed`/`closed` 즉시, `disconnected` 5초 지속, 상향 RTP 무수신 5초, DC close | [TRD], D-22(DC `ping`은 백그라운드 탭에서 늦어져 판정에 안 씀) |
+| 끊김 판정(음성) | ICE `failed`/`closed` 즉시, `disconnected` 5초 지속, 상향 RTP 무수신(ICE가 끊겼으면 5초, ICE `connected`면 30초), DC close. ICE `connected` 상태의 무수신 5초는 종료 대신 `error{code:MIC_SILENT}`로 마이크 확인 안내(2026-11-09, ADR-0025 보완) | [TRD], D-22(DC `ping`은 백그라운드 탭에서 늦어져 판정에 안 씀) |
 | 판정 시 | 진행 중 턴 ABANDONED(FINALIZING은 확정 계속), 응시 INTERRUPTED, `interruption_count+1` | OQ-21, B R-10 |
 | 슬롯 | INTERVIEWING만 점유. 연결 중 15초마다 임대 갱신(`slot_lease_seconds`=120). INTERRUPTED가 되면 갱신을 멈추므로 마지막 갱신 뒤 최대 120초 동안 그 지원 건 전용으로 남았다가 회수된다. CODING 진입·제출 때 반환 | T10, 설정 `slot_lease_seconds` |
 | 클라이언트 재연결 | 1·2·4초 간격 3회, 매회 IV-6 → IV-3(INTERVIEW), 연결 제한 10초(총 ≤ 약 37초 < 슬롯 유예 120초) | D T22, B R-11 |
@@ -215,7 +215,8 @@
 4. ASK: `interviews.followups_used`를 조건부 증가(0행이면 LIMIT으로 건너뜀) → 꼬리질문을 `interview_questions`(FOLLOWUP, 같은 번호, `answer_limit_sec=45`, `grounding`)로 저장 → `ai /v1/tts` 즉시 합성 → S1.
 5. 꼬리질문 TTS가 `t0 + 5.0초`까지 끝나지 않으면 `question`(텍스트)을 먼저 보내고 합성이 끝나는 대로 송출한다. 마이크는 `tts_end` + 0.3초 뒤 열린다(OQ-22). 합성 실패면 `tts_end{played:false}` 뒤 즉시 개방.
 6. SKIP·건너뜀: 다음 본질문(사전 합성 음성) S1. 판단 결과·사유·지연은 지원자에게 보내지 않는다.
-7. 시간 만료로 끝난 답변은 확정이 `deadline_at + 1.0초`에 시작되므로 LLM에 남는 시간이 약 1초 짧다. 5초 안 판정은 실측(S-11)으로 확인하고 넘으면 팀에 마감 단축을 제안한다(OQ-31).
+7. 멱등(ADR-0027): 같은 답변의 판단 단계가 다시 실행되면(크래시 후 재개) 저장된 `followup_decisions`를 돌려주고 모델을 부르지 않는다. 쓰기는 본질문 행을 잠근 뒤 다시 확인한다. 답변 확정이 두 번 와도 답변 1개, `pre_evaluate` 1건만 남는다.
+8. 시간 만료로 끝난 답변은 확정이 `deadline_at + 1.0초`에 시작되므로 LLM에 남는 시간이 약 1초 짧다. 5초 안 판정은 실측(S-11)으로 확인하고 넘으면 팀에 마감 단축을 제안한다(OQ-31).
 
 ## 13. TURN과 외부망
 

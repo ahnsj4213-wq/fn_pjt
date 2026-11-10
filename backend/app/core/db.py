@@ -2,6 +2,7 @@
 asyncio subprocesses also need (psycopg async does not)."""
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -9,6 +10,13 @@ from app.core.config import get_settings
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
+# How many `session_scope` transactions the current task is inside. A model call made while this is > 0 holds a database
+# transaction (and its locks) open for seconds: tests and tools/bench_ai.py check it.
+_open_scopes: ContextVar[int] = ContextVar("aihire_open_scopes", default=0)
+
+
+def open_scopes() -> int:
+    return _open_scopes.get()
 
 
 def get_engine() -> AsyncEngine:
@@ -49,6 +57,10 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 @asynccontextmanager
 async def session_scope() -> AsyncIterator[AsyncSession]:
     """Session for workers/CLI: commits on success, rolls back on error."""
-    async with sessionmaker()() as session:
-        async with session.begin():
-            yield session
+    _open_scopes.set(_open_scopes.get() + 1)
+    try:
+        async with sessionmaker()() as session:
+            async with session.begin():
+                yield session
+    finally:  # not reset(token): a generator closed from another context would raise there
+        _open_scopes.set(max(0, _open_scopes.get() - 1))

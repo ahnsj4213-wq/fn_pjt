@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { deleteMyMedia, fetchMyReport, fetchRecruiterReportView, type MyReport, type RecruiterReportView, type ReportAnswer, type ReportDetail, type ReportPoint } from '@/api/candidate/report';
+import { deleteMyMedia, fetchMyReport, fetchRecruiterReportView, type EvidenceNote, type MyReport, type RecruiterReportView, type ReportAnswer, type ReportDetail, type ReportPoint } from '@/api/candidate/report';
 import { ApiError } from '@/shared/http/client';
 import { formatDate } from '@/shared/format';
 import { describeError } from '@/shared/http/errors';
@@ -102,9 +102,35 @@ function AnswerBlock({ a, label }: { a: ReportAnswer; label?: string }) {
         <span className="mk-key"> <mark className="pos">가점 구절</mark> <mark className="neg">감점 구절</mark></span></span>
         <Marked a={a} /><Evidence a={a} /></div>
       {a.criteria.length > 0 && (
-        <div className="qby">{a.criteria.map((c) => <div key={c.key}><span>{c.label}</span><Bar v={c.score} low={c.score < 65} /><b>{c.score}</b></div>)}</div>
+        <div className="qby">{a.criteria.map((c) => (
+          <div key={c.key}><span>{c.label}</span><Bar v={c.score} low={c.score < 65} />
+            <b title={c.note ? NOTE_TEXT[c.note] : undefined}>{c.score}{c.note ? '*' : ''}</b></div>
+        ))}</div>
       )}
+      <CriterionNotes a={a} />
     </>
+  );
+}
+
+/** Scores that are not an ordinary judgement with an evidence sentence say so (ADR-0023), so a floor is never read as a judgement. */
+const NOTE_TEXT: Record<EvidenceNote, string> = {
+  '근거 미연결': 'AI가 매긴 점수이지만 답변에서 근거 문장을 연결하지 못했습니다.',
+  '내용 부족': '답변에서 이 항목의 근거로 삼을 내용을 찾지 못했습니다.',
+  '근거 추출 실패': '이전 평가 방식에서 근거 문장을 옮겨 적지 못해 최저점으로 처리된 항목입니다. 재평가하면 현재 기준으로 다시 매깁니다.',
+  '답변 없음': '답변이 없어 최저점으로 처리했습니다.',
+};
+
+function CriterionNotes({ a }: { a: ReportAnswer }) {
+  const noted = a.criteria.filter((c) => c.note);
+  if (!noted.length) return null;
+  const byNote = new Map<EvidenceNote, string[]>();
+  for (const c of noted) byNote.set(c.note!, [...(byNote.get(c.note!) ?? []), c.label]);
+  return (
+    <div className="cnotes">
+      {[...byNote].map(([note, labels]) => (
+        <p key={note} className="hint">* <b>{note}</b> ({labels.join(', ')}) — {NOTE_TEXT[note]}</p>
+      ))}
+    </div>
   );
 }
 
@@ -217,7 +243,6 @@ export function Report({ mode = 'candidate' }: { mode?: 'candidate' | 'recruiter
           </div>
         ) : (
           <div className="rbtns">
-            <button className="btn" type="button" onClick={() => navigate(`/postings/${encodeURIComponent(r.posting_id)}/apply`)}>다시 면접 보기</button>
             <button className="btn btn-primary" type="button" onClick={() => navigate('/')}>다른 공고 보기</button>
           </div>
         )}

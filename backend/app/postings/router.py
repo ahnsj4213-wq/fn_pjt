@@ -6,6 +6,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.client import AIUnavailable, get_ai_client
+from app.applications import tester
 from app.audit import audit
 from app.auth.deps import RecruiterCtx, get_optional_principal, require_recruiter
 from app.auth.scope import get_for_company
@@ -201,6 +202,8 @@ def _listed() -> tuple:
 
 async def _applied(db: AsyncSession, p: Principal | None, posting_ids: list[UUID]) -> set[UUID]:
     if p is None or p.role != "CANDIDATE" or not posting_ids:
+        return set()
+    if await tester.is_tester(db, p.user_id):  # a test account may apply again, so every posting stays "지원하기"
         return set()
     return set((await db.execute(select(Application.posting_id).where(
         Application.candidate_id == p.user_id, Application.posting_id.in_(posting_ids)))).scalars())

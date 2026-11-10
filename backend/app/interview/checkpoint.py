@@ -143,6 +143,9 @@ async def purge_finished(db) -> None:
             # composition threads (compose:<application>:<settings>) are needed while the questions can still be composed
             "(thread_id LIKE 'compose:%' AND split_part(thread_id, ':', 2) NOT IN "
             "  (SELECT id::text FROM applications WHERE attempt_status IN ('PREPARING', 'READY'))) "
+            # evaluation threads (eval:<application>:<job>) while their job can still run (queued or running)
+            "OR (thread_id LIKE 'eval:%' AND split_part(thread_id, ':', 3) NOT IN "
+            "  (SELECT id::text FROM jobs WHERE kind = 'evaluate_application' AND state IN ('QUEUED', 'RUNNING'))) "
             # interview threads (<application>) while the interview is in progress or can be resumed
-            "OR (thread_id NOT LIKE 'compose:%' AND thread_id NOT IN "
+            "OR (thread_id NOT LIKE 'compose:%' AND thread_id NOT LIKE 'eval:%' AND thread_id NOT IN "
             "  (SELECT id::text FROM applications WHERE attempt_status IN ('INTERVIEWING', 'INTERRUPTED')))"))

@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.applications import tester
 from app.auth.deps import CandidateCtx, require_candidate
 from app.auth.scope import get_for_owner
 from app.core.constants import CANDIDATE_FEEDBACK_NOTICE
@@ -63,6 +64,16 @@ async def apply(posting_id: UUID, body: ApplyIn, ctx: CandidateCtx = Depends(req
     if (consent is None or consent.candidate_id != ctx.user_id or consent.posting_id != posting_id
             or not consent.all_required_agreed):
         raise conflict("CONSENT_REQUIRED", "필수 항목에 모두 동의해야 지원할 수 있습니다.")  # SEC-02, AC-05
+    if await tester.is_tester(db, ctx.user_id):  # dev/test accounts only: the earlier application goes (JOB-02 for the rest)
+        old = (await db.execute(select(Application).where(Application.posting_id == posting_id,
+                                                          Application.candidate_id == ctx.user_id).with_for_update())
+               ).scalar_one_or_none()
+        if old is not None:
+            if old.attempt_status in ("INTERVIEWING", "CODING"):
+                raise conflict("ATTEMPT_IN_PROGRESS", "진행 중인 면접이 있습니다. 끝난 뒤 다시 지원해 주십시오.")
+            if await tester.has_decision(db, old.id):
+                raise conflict("ALREADY_DECIDED", "합격·불합격 결정이 기록된 지원은 지울 수 없어 다시 지원할 수 없습니다.")
+            await tester.delete_application(db, old.id)
     content = parse_resume_content(body.resume)
     snapshot_file_id = None
     if body.resume_file_id:
@@ -123,10 +134,10 @@ def status_label(app: Application) -> tuple[str, str | None]:
         return "결과 확인", "평가 완료"
     if a == "READY":
         return "응시 전", None
-    if a in ("PREPARING", "INTERVIEWING", "CODING", "INTERRUPTED"):
-        return "응시 중(이어하기)", None
-    if a == "EXPIRED":
-        label = f"기간 만료({app.answered_main_count}문항 응답)"
+    if a in ("PREPARING", "INTERVIEWING", "CODING"):
+        return "응시 중", None
+    if a in ("EXPIRED", "INTERRUPTED"):  # left in the middle or the posting closed: ended, nothing to continue (ADR-0024)
+        label = f"중도 종료({app.answered_main_count}문항 응답)"
         return label, ("평가 완료" if e == "DONE" else "평가 진행 중" if e else None)
     # SUBMITTED: ON_HOLD is an internal state and is shown as "in progress" (no re-test is ever requested)
     return ("검토 중", "평가 완료") if e == "DONE" else ("제출 완료", "평가 진행 중")
@@ -164,7 +175,7 @@ async def _out(db: AsyncSession, app: Application) -> CandidateApplicationOut:
                                       coding_enabled=posting.coding_enabled),
         applied_at=app.applied_at, attempt_status=app.attempt_status, status_label=label, evaluation_label=ev,
         decision=published_decision(app), answered_main_count=app.answered_main_count,
-        can_start=app.attempt_status in ("READY", "PREPARING", "INTERRUPTED") and is_open(posting),
+        can_start=app.attempt_status in ("READY", "PREPARING") and is_open(posting),
         main_count=main_count, share_result=app.share_result, progress_label=plabel, progress_kind=pkind)
 
 

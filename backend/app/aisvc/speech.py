@@ -8,6 +8,7 @@ Model calls run in a worker thread; each engine serves one request at a time (CP
 """
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -50,16 +51,36 @@ BLOCKLIST = ("시청해 주셔서 감사합니다", "시청해주셔서 감사�
              "다음 영상에서 만나요", "끝까지 시청")
 
 
+# A segment that is nothing but one of these (repeated or not) is what Whisper writes over silence and noise: it learned them
+# from the closing lines of subtitled videos and sermons. Inside a real sentence they stay ("도와주셔서 감사합니다라고 말했습니다").
+# 2026-11-09: a candidate who never said them got "감사합니다" and "아멘" in their answers, and the evaluation commented on them.
+FILLER_ONLY = re.compile(
+    r"^(?:감사합니다|고맙습니다|감사해요|감사드립니다|아멘|할렐루야|수고하셨습니다|안녕히계세요|안녕히가세요|다음에또만나요|"
+    r"시청감사합니다|시청해주셔서감사합니다|좋아요|구독|구독과좋아요|알림설정|감사|아|어|음|으|흠|하)+$")
+_NOT_WORD = re.compile(r"[^0-9a-zA-Z가-힣]")
+NO_SPEECH_ALONE = 0.8  # this sure there is no speech: blank whatever the text's own confidence
+# About -50 dBFS: below room noise, a fan or a breath. Speech at a normal distance is usually -30 to -20 dBFS (0.03-0.1). Kept low on
+# purpose (a quiet voice must never be lost); not measured on real interview microphones yet (R-28).
+SILENCE_RMS = 0.003
+
+
 def is_hallucination(text: str, no_speech_prob: float, avg_logprob: float, compression_ratio: float) -> str | None:
     """Reason the segment must be blanked, or None to keep it."""
-    if no_speech_prob >= 0.6 and avg_logprob <= -1.0:
+    if no_speech_prob >= NO_SPEECH_ALONE or (no_speech_prob >= 0.6 and avg_logprob <= -1.0):
         return "NO_SPEECH"
     if compression_ratio > 2.4:
         return "REPETITION"
     compact = "".join(text.split())
     if any("".join(b.split()) in compact for b in BLOCKLIST):
         return "BLOCKLIST"
+    if FILLER_ONLY.match(_NOT_WORD.sub("", text)):
+        return "FILLER_ONLY"
     return None
+
+
+def rms(audio: np.ndarray) -> float:
+    """Loudness of float audio in [-1, 1]; an empty piece counts as loud (nothing to judge, keep what the model wrote)."""
+    return float(np.sqrt(np.mean(np.square(audio, dtype=np.float64)))) if audio.size else 1.0
 
 
 def pcm16_to_float(pcm: bytes) -> np.ndarray:
@@ -135,12 +156,16 @@ class STTEngine:
         return self.up and self.active.get("device") == "cpu" and self.device != "cpu"
 
     def _transcribe_sync(self, audio: np.ndarray) -> dict:
+        if rms(audio) < SILENCE_RMS:  # nothing but room noise: Whisper would only make something up
+            return {"text": "", "segments": [], "dropped": ["SILENCE"]}
         segs, _ = self._model.transcribe(audio, language="ko", beam_size=1, condition_on_previous_text=False,
                                          vad_filter=False)
         kept, dropped = [], []
         for s in segs:
             text = s.text.strip()
             reason = is_hallucination(text, float(s.no_speech_prob), float(s.avg_logprob), float(s.compression_ratio))
+            if reason is None and rms(audio[int(s.start * STT_RATE): int(s.end * STT_RATE)]) < SILENCE_RMS:
+                reason = "SILENCE"  # the words sit on a quiet stretch of a longer recording
             if reason:
                 dropped.append(reason)
                 continue

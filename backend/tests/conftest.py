@@ -14,11 +14,12 @@ import asyncpg
 import pytest
 
 PG = "postgresql://aihire:aihire_dev_only@127.0.0.1:55432"
-TEST_DB = "aihire_test"
+TEST_DB = os.environ.get("AIHIRE_TEST_DB", "aihire_test")  # parallel runs (one per agent) need their own database
 os.environ["AIHIRE_DATABASE_URL"] = f"postgresql+asyncpg://aihire:aihire_dev_only@127.0.0.1:55432/{TEST_DB}"
 os.environ["AIHIRE_ENV"] = "test"
 # Most tests compose the whole set before the interview; tests of live composition switch it on themselves.
 os.environ.setdefault("AIHIRE_QUESTION_MODE", "upfront")
+os.environ.setdefault("AIHIRE_EVAL_SAMPLES", "1")  # one judgement per answer keeps call counts readable; the median has its own test
 # Redis DB 15 keeps tests away from development data; tests needing Redis skip when it is not running.
 os.environ.setdefault("AIHIRE_REDIS_URL", "redis://127.0.0.1:6379/15")
 os.environ.setdefault("AIHIRE_DATA_DIR", str(Path(__file__).parent / ".data"))

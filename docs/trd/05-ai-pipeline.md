@@ -96,7 +96,7 @@ INT-14(면접 시작 전 AI 상태): `app`의 `GET /api/system/ai-health`가 `/v
 | T2 question_generate | IA | 0.7 | 400 | 2 | 생성 시도 최대 2(1회 재시도, T17) | 은행 대체(QST-07) |
 | T3 resume_question | IA | 0.5 | 500 | 2 | 생성 시도 최대 2 | 은행 대체(QST-03·07, OQ-37) |
 | T4 followup_decide | RT | 0.3 | 120 | 0(시간) | 0 | 건너뜀(6.2) |
-| T5 evaluate_answer | BATCH | 0 (seed 고정) | 450 | 2 | 인용 재생성 1(EVL-02), P-8 재생성 1 | 단위 실패 → 작업 시도 실패(EVL-06) |
+| T5 evaluate_answer | BATCH | 0 (seed 고정) | 420 | 2 | 근거 문장 재요청 1(EVL-02), P-8 재생성 1, 표본 3개 중앙값(ADR-0023) | 단위 실패 → 작업 시도 실패(EVL-06) |
 | T6 report_summary | BATCH | 0.2 | 600 | 2 | P-8 재생성 1 | 작업 시도 실패 |
 | T7 candidate_feedback | BATCH | 0.3 | 450 | 2 | 금지 표현 재생성 1 | 작업 시도 실패 |
 | T8 code_review | BATCH | 0 | 800 | 2 | 인용 재생성 1, P-8 재생성 1 | 작업 시도 실패(코딩 점수에 들어가므로 비워 두지 않음, ADR-0017) |
@@ -157,9 +157,15 @@ INT-14(면접 시작 전 AI 상태): `app`의 `GET /api/system/ai-health`가 `/v
 1. 시점: READY→PREPARING 전이 때 등록된 `compose_questions` 작업(INTERACTIVE). 시작 조건은 질문 세트 READY(텍스트)뿐이고 TTS 사전 합성은 조건이 아니다(T20).
 2. 슬롯 순서 고정 `[인성1, 인성2, 이력서1, 이력서2, 기업1, 기업2, 직무1~4]`(코드 상수 `SLOT_ORDER`). 커스텀 질문이 있으면 **7번(첫 직무 자리)**에 넣고 직무 은행에서 3개만 고른다(OQ-36 임시).
 3. 인성·기업·직무: 은행 우선. 선택 범위 `is_active AND (company_id IS NULL OR company_id = 공고 회사)`, 기업·직무는 직무군 일치, `usage_count` 오름차순·동률 무작위, 이미 고른 질문과 유사하면 건너뜀. 부족분만 T2 생성.
-4. 이력서: T3. 2개가 안 되면 1회 재시도(T17), 그래도 모자란 수만큼 같은 직무군 직무 은행 질문으로 대체(`source=BANK_FALLBACK`, 슬롯 표시는 RESUME, OQ-37).
+4. 이력서: T3. 2개가 안 되면 1회 재시도(T17), 그래도 모자란 수만큼 코드가 만드는 경험 질문으로 대체한다(`source=BANK_FALLBACK`, `grounding.fallback=EXPERIENCE`). 아직 묻지 않은 경력·프로젝트 이름 + 고정 문장, 없으면 일반 경험 질문이다. 2026-11-10 이전에는 직무 은행 질문이었으나 "경험" 표시로 직무 질문이 나가 바꿨다(OQ-37). 은행에서 꺼내는 모든 질문은 슬롯 유형 검사(`level.fits_type`)를 거친다. 회사 자료가 없어 T2가 직무 질문을 낸 지원 동기 슬롯은 고정 동기 문장(공고 제목)으로 묻는다.
 5. 생성 실패(2회) 시 같은 종류의 은행 질문. 은행도 비면 시드 공용 질문(회사 무관 SEED)을 쓴다 → **시드 최소량**(인성 10, 범용 기업 4, 직무군별 직무 8)을 운영 체크리스트에 둔다(F).
 6. 결과는 불변 스냅샷(QST-06): 문항마다 `source`, `grounding`, `prompt_version`. 사용 횟수 증가는 면접 시작 트랜잭션(B).
+7. 실행 구조 (ADR-0027, 2026-11-10)
+   - 그래프 하나로 실행한다: `questions.graph.run` = `plan → project(T3) → motivation(T2+RAG) → job_skill(T2+RAG) → write`.
+   - 회사 자료 RAG는 함수 루프다(최대 2라운드, 2라운드는 새 문서가 있을 때만).
+   - 검증에 실패한 질문만 다시 만든다(통과분 고정, 재생성 1회). 그래도 모자라면 코드 대체 질문(`TEMPLATE`)으로 채운다.
+   - 모델 호출 중에는 DB 트랜잭션을 열지 않는다. live는 읽기 → 생성 → 짧은 쓰기(advisory lock 후 재확인) 순서다.
+   - 최악 호출 수(10문항 upfront): LLM 20 → 14. 임베딩: 영역당 최대 10 → 3.
 
 ### T4 `followup_decide` (QST-05, 6.2, INT-10)
 
@@ -176,7 +182,7 @@ LLM 호출 전 규칙(코드, `skip_cause=RULE|LIMIT`): 이 본질문에 꼬리�
 
 ### 평가 세부 항목과 코드가 재는 값 (SC-A08, 2026-11-03)
 
-루브릭은 `rubric-v3`, 점수 계산은 `score-v3`(코딩 점수 ADR-0017), 세부 계산은 `details-v1`이다.
+루브릭은 `rubric-v5`(ADR-0026, v4는 ADR-0023), 점수 계산은 `score-v3`(코딩 점수 ADR-0017), 세부 계산은 `details-v1`이다.
 
 - **세부 점수(T5 `evaluate_answer@1.4.0`)**: 기존 4개 영역 판정 뒤에 숫자만 더 쓴다. `expertise_sub`(개념 정확성·실무 적용·설명의 깊이)와 `logic_sub`(주장 명확성·근거 제시·논리적 흐름)는 각 1~5점, `star`(상황·과제·행동·결과)는 각 0/1. 인용과 설명은 붙이지 않아 출력이 짧다. 답변마다 `answer_pre_evaluations.payload.detail`과 `answer_evaluations.detail`(전문성·논리성 행)에 저장하고, 리포트는 답변들의 평균(×20)과 STAR가 들어 있던 비율로 `detail.sub`를 만든다. 규칙으로 1점을 준 답변(짧음·무응답)은 세부 점수가 없고 평균에서 빠진다.
 - **코드가 재는 값(`evaluation/details.py`, 모델 호출 없음)**: 부정적 표현은 고정 문구 목록(`NEGATIVE_PHRASES`)을 답변 텍스트에서 센다(1회당 20점 감점, 0점 바닥). 답변 시간은 질문 제한시간 대비 쓴 시간이 35% 이상이면 만점이고 짧을수록 낮다. 말의 속도는 공백을 뺀 글자 수를 말한 구간(첫 소리부터 마지막 소리까지)의 분으로 나눈다. 240~420자/분이 만점이고 벗어나면 낮아진다. 뚜렷함은 말한 프레임과 잡음 바닥의 비(SNR 6~30dB를 0~100으로), 음성 높낮이는 말한 프레임의 기본 주파수(자기상관)를 반음으로 바꾼 표준편차(1.5~5반음이 만점)다. 음성 답변에만 속도·뚜렷함·높낮이·답변 시간을 잰다.
@@ -191,22 +197,41 @@ LLM 호출 전 규칙(코드, `skip_cause=RULE|LIMIT`): 이 본질문에 꼬리�
 
 이력서 질문(T3 `resume_question@1.2.0`)은 무엇에 대한 질문인지 분명해야 한다. (1) 프롬프트: 질문마다 이력서의 서로 다른 항목을 골라 그 항목의 구체적 상황·시스템 이름을 질문에 쓰고, '~한 경험이 있나요?' 같은 예·아니오 질문은 쓰지 않는다. (2) 검증: 예·아니오로 끝나는 질문은 1회 다시 쓰게 한다(그래도 모자라면 받아들인다). (3) 코드가 만드는 머리말: 검증된 근거 구절로 `이력서의 ‘회사’ 직무 경력(기간)에서 적으신 ‘근거 구절’ 부분에 대해 묻겠습니다. <모델 질문>` 형태를 만든다(`compose.ground_question`). 모델이 모호하게 써도 어느 부분인지는 질문에 드러난다. 모델이 쓴 원래 질문은 `grounding.asked`에 남긴다.
 
-### T5 `evaluate_answer` (EVL-01~03·07, 6.3)
+### T5 `evaluate_answer` (EVL-01~03·07, 6.3) — `evaluate_answer@2.1.0`, `rubric-v5` (ADR-0026, ADR-0023)
 
-답변 단위(본답변·꼬리답변 각각)로 1회 호출. 입력: `{"question": "s", "question_type": "s", "job_brief": "공고 직무·요건 요약", "answer": "eval_text", "rubric": "rubric-v1 본문"}` — 이력서·성명·성별·나이·사진·연락처 없음. 출력(키 순서 **인용 → 코멘트 → 점수**):
+답변 단위(본답변·꼬리답변 각각). 입력: `{"question", "question_type"(영역), "question_kind", "job_brief", "answer": eval_text}` — 이력서·성명·성별·나이·사진·연락처 없음.
+`question_kind`는 코드가 영역과 질문 문구로 정한다(`rubric.question_kind`): 경험 EXPERIENCE · 행동·가치관 BEHAVIOR · 기술 지식 TECHNICAL · 설계 DESIGN · 상황 대응 SITUATION. 라이브 코딩은 TECHNICAL.
+프롬프트에는 그 유형에서 논리성·전문성이 보는 요소(`rubric.QUESTION_KINDS`)가 붙는다. 점수는 모델이 정하고, 코드는 형식과 근거만 검증한다.
+
+답변은 코드가 문장으로 나눠 번호를 붙여 보여 준다(`quotes.sentences`: 마침표·물음표·줄바꿈, 160자 넘는 문장은 쉼표에서, 최대 40개). 출력:
 
 ```json
-{"expertise":   {"quote": "eval_text에서 그대로 복사한 연속 구절|''", "comment": "≤100자", "score": 1},
- "logic":       {"quote": "", "comment": "", "score": 1},
- "specificity": {"quote": "", "comment": "", "score": 1},
- "delivery":    {"quote": "", "comment": "", "score": 1}}
+{"found": {"problem": 1, "cause": 2, "grounds": 3, "alternatives": 3, "action": 3, "result": 4, "knowledge": 2},
+ "expertise": {"sent": 2, "comment": "≤30자", "score": 4},
+ "logic":     {"sent": 3, "comment": "", "score": 5},
+ "attitude":  {"sent": 1, "comment": "", "score": 4},
+ "delivery":  {"sent": 1, "comment": "", "score": 5},
+ "expertise_sub": {"a": 4, "b": 4, "c": 3}, "logic_sub": {"a": 5, "b": 4, "c": 4},
+ "star": {"situation": 1, "task": 1, "action": 1, "result": 1}}
 ```
 
-- 항목당 인용 1개(통합 결정, B 스키마 `quote/quote_start/quote_end`). `score` 정수 1~5.
-- `quote == ""` → 그 항목 `evidence_status=INSUFFICIENT, reason=NO_EVIDENCE`, 1점(지어내지 않기, P-4).
-- 인용 대조 실패 항목만 "다음 인용은 답변 원문에 없다. 원문을 띄어쓰기·문장부호까지 그대로 복사하라"를 붙여 **1회 재생성** → 다시 실패하면 `INSUFFICIENT/QUOTE_MISMATCH`, 1점(EVL-02).
-- LLM 전 규칙: `is_no_answer` → 4항목 `NO_ANSWER` 1점(6.4 '답변 없음'). 매우 짧은 답변(eval_text 정규화 15자 미만 또는 `nc-1` 일치, OQ-09) → 4항목 `INSUFFICIENT/TOO_SHORT` 1점, LLM 호출 없음.
-- 저장하는 인용은 LLM 문자열이 아니라 **eval_text의 원문 범위**(`quote_start`, `quote_end`, `quote = eval_text[start:end]`, ADR-0008).
+- `found`: 문제 상황·원인 분석·판단 근거·대안·실행·결과·직무 지식이 드러난 문장 번호(없으면 0). 점수 전에 답변을 읽게 하는 단계이며 코드가 점수로 쓰지 않는다. 범위 밖 번호는 0으로 바꿔 `detail.found`에 저장.
+- `sent`: 그 항목 판단의 근거 문장 번호. 저장하는 인용은 그 문장의 eval_text 범위(`quote_start`, `quote_end`, ADR-0008 유지). 모델이 인용 문자열을 쓰지 않으므로 잘못 옮겨 적거나 지어낼 수 없다.
+- 근거 상태(항목별):
+
+| 상태 | 조건 | 점수 |
+|---|---|---|
+| `OK` | 1 ≤ sent ≤ 문장 수 | 모델 점수 |
+| `UNLINKED` 근거 미연결 | 점수 3 이상인데 sent가 0이거나 없는 번호 → 1회 재요청 → 그래도 없음 | 모델 점수 유지, 인용 없음 |
+| `INSUFFICIENT/LOW_CONTENT` 내용 부족 | 점수 1~2이고 가리킬 문장 없음(sent 0) | 모델 점수(1~2) |
+| `INSUFFICIENT/TOO_SHORT` 내용 부족(규칙) | LLM 전 규칙: 정규화 15자 미만 또는 무내용 문구(OQ-09) | 1점, 호출 없음 |
+| `NO_ANSWER` 답변 없음 | `is_no_answer` | 1점, 호출 없음 |
+
+  평가 불가(재시도 후에도 모델 출력이 없음)는 항목 상태가 아니다: 평가 시도가 실패하고 리포트는 평가 보류 → 재평가(EVL-06). 임시 점수를 보여 주지 않는다.
+  `INSUFFICIENT/QUOTE_MISMATCH`·`NO_EVIDENCE`는 2.0.0 이전 실행의 값으로만 남는다(화면에 "근거 추출 실패").
+- 중앙값 판정: 같은 답변을 `AIHIRE_EVAL_SAMPLES`(기본 3)번 독립 채점하고, 항목마다 점수가 중앙값인 판정(근거 문장·코멘트 포함)을 그대로 쓴다(짝수면 낮은 쪽). 세부 점수·STAR·found는 논리성 판정을 고른 표본에서. 남는 점수는 항상 모델이 낸 점수 중 하나다. 규칙 결과는 반복하지 않는다. 실패한 표본은 빼고, 모두 실패하면 단위 실패.
+- 길이로 판단하지 않는다(루브릭 공통 문장): 짧아도 요소를 갖추면 고득점. 보정 세트에서 같은 내용의 1문장 답변과 4문장 답변이 같은 점수대(5점)인지 확인한다.
+- 보정: `scripts/eval_calibration.py`(실제 모델, 14개 답변 × 기대 범위, 순서, 근거 연결, `--samples`·`--repeat`로 일관성). 결과는 ADR-0023.
 
 ### T6 `report_summary` (RPT-02)
 
@@ -245,6 +270,17 @@ T6과 **별도 호출·별도 저장**(`candidate_feedback`). 입력: 항목별 
 ### T9 `problem_rewrite` (코딩 문제 변형, 유출 방지)
 입력: 틀의 문제 설명. 출력: `{statement}`. 배경 이야기·이름·문장만 바꾸고 `### 입력`·`### 출력` 제목, 백틱 변수, 모든 숫자와 제약은 그대로 둔다. 검증(`coding/variants.py statement_preserves`): 제목, 원본의 숫자 집합, 백틱 토큰이 모두 남아 있어야 한다. 어긋나면 1회 다시 쓰게 하고, 그래도 어긋나면 원본 설명을 쓴다(`flags.kept_original`). 데이터 블록 표지(`<<<…>>>`)가 섞여 나오면 지운다. 테스트 입력과 기대 출력은 이 작업이 만들지 않는다(생성기와 정답 풀이). 로컬 모델 실측(2026-11-03, 6개 문제): 3개 바뀜, 3개 원본 유지, 호출당 약 8~9초(질문 구성 작업 안에서 실행).
 
+
+### 6.x 지원자 수준·난이도·품질 검사 (ADR-0025, 2026-11-09)
+
+- 수준: 이력서 경력 기간 합산(인턴·아르바이트 제외) → NEW(<1년)·JUNIOR(1~5년)·SENIOR. "신입" 공고는 SENIOR를 JUNIOR로 낮춘다.
+- 난이도 배분(직무·프로젝트 슬롯, 쉬운 것부터): NEW 50:40:10, JUNIOR 30:50:20, SENIOR 10:50:40 (기초:실무 적용:심화).
+- T2 `question_generate@1.7.0`, T3 `resume_question@1.5.0`: 프롬프트 맨 앞에 수준·난이도, 회사 자료는 구체화에만. 검사에서 `problems()`(MANY_TOPICS, TOO_LONG, NUMBER, NOT_MOTIVATION, NOT_JOB, PRESUMES_EXPERIENCE, TOO_HARD, COPIES_FACT) 거부, 사유를 재생성 피드백에 넣음. 별도 검증 LLM 호출 없음.
+- T4 `followup_decide@1.4.0`: 수준·본질문 난이도 입력, 답변이 구체적이면 한 단계 깊게·모호하면 같은 수준 이하. 같은 코드 검사(경험 가정 제외).
+- 질문은행 대체는 수준에 맞는 질문(`fits_level`) 우선.
+- 본질문은 면접 전 준비(`question_mode=upfront` 기본)와 `tts_pregen`. 면접 중 LLM 호출은 꼬리질문뿐이며 무응답·시간 초과는 규칙으로 건너뛴다.
+- 시간 로그: `compose_stage`(노드별·total), `rag_stage`(retrieve·generate), `llm_task`, `tts_pregen_one/done`, `tts_live`, `tts_not_pregenerated`, `question_transition`(답변 확정→다음 질문, 그중 음성 준비).
+
 ## 7. 인용 검증 (ADR-0008 요약)
 
 | 단계 | 규칙 |
@@ -280,7 +316,9 @@ T6과 **별도 호출·별도 저장**(`candidate_feedback`). 입력: 항목별 
 
 ## 9. 루브릭·안전 필터
 
-### 9.1 `rubric-v1` 기준 문장 (6.3, X-05)
+### 9.1 `rubric-v1` 기준 문장 (6.3, X-05) — 이력
+
+> 현재 기준은 `rubric-v5`(ADR-0026: 예시는 참고 사례, 논리성은 질문 유형별, 육하원칙은 도구, 지원자 수준별 해석)이며 그 바탕은 `rubric-v4`(ADR-0023)다. 원문은 `backend/app/ai/rubric.py`다: 항목별 1~5점 기준 문장과 점수별 예시, 질문 유형(경험·행동·기술·설계·상황 대응)별로 논리성·전문성이 보는 요소. 논리성은 사고·판단 과정(문제 상황·원인 분석·판단 근거·대안 검토·실행·결과 검증과 인과의 일관성), 전문성은 직무 지식과 그 적용의 정확성이다. 아래 v1 표는 이력으로 남긴다.
 
 공통 지침(프롬프트에 포함): 평가 근거는 답변 텍스트뿐이다. **목소리·억양·말 속도·침묵·말버릇·STT 표기 오류·띄어쓰기·맞춤법은 판단에 쓰지 않는다.** 모든 문항에 같은 4항목을 적용한다(인성 문항 포함, OQ-38). 각 점수에는 그 판단을 뒷받침하는 원문 인용을 1개 붙인다.
 
@@ -316,7 +354,7 @@ T6과 **별도 호출·별도 저장**(`candidate_feedback`). 입력: 항목별 
 | 2 | 핵심을 찾기 어렵고 내용이 순서 없이 이어져 여러 번 읽어야 이해된다. |
 | 1 | 텍스트에서 핵심과 구조를 파악할 수 없다. |
 
-'근거 부족'·'답변 없음'의 1점은 코드 규칙(6.4)이며 위 1점(LLM 판정)과 `evidence_status`로 구분해 저장한다. 원문 파일: `backend/app/ai/rubric/rubric-v1.json`(내용 해시를 manifest에 기록).
+'답변 없음'·짧은 답변(TOO_SHORT)의 1점은 코드 규칙(6.4)이며 LLM 판정과 `evidence_status`로 구분해 저장한다. rubric-v4부터 근거 문장을 연결하지 못한 것만으로는 1점이 되지 않는다(`UNLINKED`, ADR-0023). 원문 파일: `backend/app/ai/rubric/rubric-v1.json`(내용 해시를 manifest에 기록).
 
 ### 9.2 합불 추천 차단 (`p8-1`, P-8, SCOPE-9.2)
 
@@ -342,6 +380,13 @@ T6과 **별도 호출·별도 저장**(`candidate_feedback`). 입력: 항목별 
 | 답변 확정 | `eval_answer`(BATCH, EVL-05) | T5 → 검증 → `answer_pre_evaluations(answer_id, manifest_hash, payload)`에 단위 결과 저장(불변, `ON CONFLICT DO NOTHING`). 실패는 이 작업만 실패, 면접은 계속 |
 | 제출·만료 | `evaluate_application`(BATCH, EVL-06) | 같은 manifest의 단위 결과를 재사용하고 없거나 무효인 단위만 T5 → T6 → T7 → T8(코딩 켠 공고, P1) → 점수 계산(B `scoring.py`) → `answer_evaluations`·`recruiter_reports`·`candidate_feedback`를 펜싱 조건부로 반영 → DONE |
 | 재평가 | 새 `evaluate_application` | ON_HOLD → PENDING. 같은 manifest의 유효 단위는 재사용 |
+
+평가 작업은 LangGraph 그래프로 실행한다(ADR-0027, `evaluation/graph.py`, `thread_id=eval:<application>:<job>`).
+
+- 흐름: `prepare → unit(단위별 순차) → verify → code_review(T8) → custom → score → summary(T6) → feedback(T7)`. 그 뒤 핸들러가 `finalize`(점수 재계산 확인)하고 펜싱 저장한다.
+- 사전 평가는 재사용 규칙(`SHAPE`·`RUBRIC_VERSION`·`STALE`·`QUOTE_MISMATCH`·`UNLINKED`)을 통과하면 재사용하고, 걸린 단위만 실행당 1회 재평가한다.
+- 시스템 실패(근거 미연결·인용 불일치·근거 없음)가 판정 항목의 50%를 넘으면 ON_HOLD(`EvidenceUnverifiable`)다. 내용 부족(무내용·짧음·무응답)은 낮은 점수로 확정한다. 개수는 리포트 `detail.evidence`에 남긴다.
+- 작업 재시도는 같은 스레드를 이어서 실행해 끝난 단계를 다시 부르지 않는다. 모델 호출 중에는 DB 트랜잭션이 없다.
 
 - 시도: 작업당 최대 2(최초 + 자동 1회), 10분은 임대 시작부터(EVL-06, T16). 인프라 오류·선점·임대 상실은 시도 미소모(OQ-23).
 - 점수 연결(6.4): 문항 점수 = 본답변·꼬리답변 항목 점수 평균(꼬리 전 중단이면 본답변만). `evidence_status`: `OK`(LLM 점수), `INSUFFICIENT`(1점, 사유 `TOO_SHORT|QUOTE_MISMATCH|NO_EVIDENCE`), `NO_ANSWER`(1점). 리포트의 **근거 부족 개수와 답변 없음 개수는 따로 센다**(T19, `insufficient_count`, `no_answer_count`).

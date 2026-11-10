@@ -77,7 +77,7 @@ class AnswerOut(BaseModel):
     highlights: list[Highlight]
     negative: list[str]
     evidence: list[Evidence]
-    criteria: list[dict]  # [{key, label, score}] on the 100-point scale
+    criteria: list[dict]  # [{key, label, score, note}] on the 100-point scale; note = evidence_note (None for an ordinary score)
     score: int | None
     good: str | None
     fix: str | None
@@ -160,6 +160,19 @@ def _find_negative(text: str | None) -> list[str]:
     return sorted(set(negative_expressions(text or "")))  # the same list the score counts (evaluation/details.py)
 
 
+def evidence_note(e: AnswerEvaluation) -> str | None:
+    """How a criterion score came about when it is not an ordinary judgement with its evidence sentence (ADR-0023):
+    근거 미연결 = the model's score stands but no sentence was linked; 내용 부족 = nothing in the answer to point at (the model's
+    1~2, or the TOO_SHORT rule); 근거 추출 실패 = a run before ADR-0023 that floored a failed citation to 1 point."""
+    if e.evidence_status == "UNLINKED":
+        return "근거 미연결"
+    if e.evidence_status == "NO_ANSWER":
+        return "답변 없음"
+    if e.evidence_status == "INSUFFICIENT":
+        return "근거 추출 실패" if e.insufficient_reason in ("QUOTE_MISMATCH", "NO_EVIDENCE") else "내용 부족"
+    return None
+
+
 def _answer_out(aid: uuid.UUID, a: InterviewAnswer, items: list[AnswerEvaluation]) -> AnswerOut:
     order = {k: i for i, (k, *_r) in enumerate(CRITERIA)}
     items = sorted(items, key=lambda e: order[crit_key(e)])
@@ -174,7 +187,7 @@ def _answer_out(aid: uuid.UUID, a: InterviewAnswer, items: list[AnswerEvaluation
             continue
         highlights.append(Highlight(start=e.quote_start, end=e.quote_end, kind=kind, criterion=labels[crit_key(e)]))
         evidence.append(Evidence(criterion=crit_key(e), label=labels[crit_key(e)], kind=kind, quote=e.quote, comment=e.comment))
-    crit = [{"key": crit_key(e), "label": labels[crit_key(e)], "score": e.score * 20} for e in items]
+    crit = [{"key": crit_key(e), "label": labels[crit_key(e)], "score": e.score * 20, "note": evidence_note(e)} for e in items]
     score = round(sum(c["score"] for c in crit) / len(crit)) if crit else None
     scored = [e for e in items if e.evidence_status == "OK" and e.comment]
     best = max(scored, key=lambda e: e.score, default=None)

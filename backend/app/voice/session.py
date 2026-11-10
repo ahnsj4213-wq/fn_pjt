@@ -59,6 +59,7 @@ CLIENT_READY_WAIT_SEC = 3.0
 DC_OPEN_WAIT_SEC = 10.0
 DISCONNECTED_GRACE_SEC = 5.0
 NO_AUDIO_SEC = 5.0
+NO_AUDIO_HARD_SEC = 30.0  # audio gone this long with ICE still "connected" ends the interview as a lost connection
 SLOT_RENEW_SEC = 15.0
 TTS_TIMEOUT_SEC = 10.0
 PRECHECK_WINDOW_SEC = 6.0
@@ -113,11 +114,13 @@ class VoiceSession:
         self.think_turn: UUID | None = None
         self.think_cmd: asyncio.Queue = asyncio.Queue()
         self.finalizing = False
+        self._answered_at: float | None = None  # monotonic time the last answer was confirmed (question_transition)
         self._finalize_done = asyncio.Event()
         self._finalize_done.set()
         self.closed = False
         self.superseded = False
         self.last_rx: float | None = None
+        self._mic_warned = False
         self.last_activity = time.monotonic()
         self._tasks: set[asyncio.Task] = set()
         self._runner: asyncio.Task | None = None
@@ -313,11 +316,20 @@ class VoiceSession:
         """Graph node `ask`: show the question (event + audio on the downlink track) and run the think time."""
         if self.closed:
             raise SessionClosed
+        t_audio = time.monotonic()
         audio = await self._question_audio(view)
         self.send("question", view.turn_id, main_no=view.main_no, main_count=view.main_count,
                   is_followup=view.is_followup, area=view.area, text=view.text, audio="track" if audio else "none",
                   limit_sec=view.limit_sec, think_sec=view.think_sec, answer_mode=view.answer_mode,
                   presentation_no=view.presentation_no)
+        # ADR-0025: answer confirmed -> next question on screen, and the part of it spent getting the audio
+        since = self._answered_at
+        self._answered_at = None
+        now = time.monotonic()
+        log_event(log, "question_transition", application_id=str(self.app_id), seq=view.main_no,
+                  stage="followup" if view.is_followup else "main", source="audio" if audio else "text",
+                  duration_ms=int((now - since) * 1000) if since is not None else None,
+                  latency_ms=int((now - t_audio) * 1000))
         await self._play(audio)
         self.send("tts_end", view.turn_id, played=bool(audio))
         if audio:
@@ -376,6 +388,7 @@ class VoiceSession:
         try:
             if gate is not None:
                 gate.finalized = True
+            self._answered_at = time.monotonic()
             if answer is not None:
                 self.send("answer_finalized", turn_id, reason=reason.lower(), text=answer.transcript or "",
                           no_answer=answer.is_no_answer)
@@ -506,11 +519,15 @@ class VoiceSession:
                 data = await get_storage().get(asset.audio_key)
                 if data:
                     return data
+            log_event(log, "tts_not_pregenerated", application_id=str(self.app_id), seq=view.main_no)
+        t0 = time.monotonic()
         try:
             out = await asyncio.wait_for(get_ai_client().tts(view.text), TTS_TIMEOUT_SEC)
         except Exception as e:  # noqa: BLE001 - TTS down: the question is shown as text (INT-04)
             log_event(log, "tts_failed", application_id=str(self.app_id), error_code=type(e).__name__)
             return None
+        log_event(log, "tts_live", application_id=str(self.app_id), stage="followup" if view.is_followup else "main",
+                  duration_ms=int((time.monotonic() - t0) * 1000))
         return out.pcm48k or None
 
     async def _store_audio(self, gate: Gate) -> tuple[str | None, int | None]:
@@ -594,10 +611,22 @@ class VoiceSession:
     async def _watchdog(self) -> None:
         while not self.closed:
             await asyncio.sleep(1.0)
-            if self.purpose == "interview" and self.last_rx is not None and \
-                    time.monotonic() - self.last_rx > NO_AUDIO_SEC:
-                await self.lost("NO_AUDIO")
-            elif self.purpose == "precheck" and time.monotonic() - self.last_activity > PRECHECK_IDLE_SEC:
+            silent = None if self.last_rx is None else time.monotonic() - self.last_rx
+            if self.purpose == "interview" and silent is not None and silent > NO_AUDIO_SEC:
+                # 2026-11-09: five seconds without audio packets ended a live interview at 4/10 while ICE was still connected.
+                # A gap with the connection up is the microphone, not the candidate leaving (ADR-0024): warn and go on.
+                # Only a connection that is down, or audio gone for NO_AUDIO_HARD_SEC, ends it.
+                if self.pc.connectionState == "connected" and silent <= NO_AUDIO_HARD_SEC:
+                    if not self._mic_warned:
+                        self._mic_warned = True
+                        self.send("error", code="MIC_SILENT")
+                        log_event(log, "voice_mic_silent", application_id=str(self.app_id))
+                else:
+                    await self.lost("NO_AUDIO")
+                continue
+            if silent is not None:
+                self._mic_warned = False
+            if self.purpose == "precheck" and time.monotonic() - self.last_activity > PRECHECK_IDLE_SEC:
                 await self.close("PRECHECK_IDLE")
 
     async def lost(self, cause: str) -> None:

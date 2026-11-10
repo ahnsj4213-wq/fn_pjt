@@ -14,6 +14,7 @@ from app.ai.textrules import (accuses_lie, content_tokens, fence, has_p8, is_for
                               looks_like_question, shares_content)
 from app.core.config import get_settings
 from app.evaluation.quotes import find_span
+from app.questions.level import DIFFICULTY_TEXT, LEVEL_TEXT, REJECT_TEXT, problems
 
 
 class _Anchor(BaseModel):
@@ -36,7 +37,7 @@ def _skip(cause: str, reason: str = "NONE") -> dict:
 
 class FollowupDecide(TaskSpec):
     name = "followup_decide"
-    version = "followup_decide@1.3.0"
+    version = "followup_decide@1.4.0"
     lane = "RT"
     temperature = 0.3
     num_predict = 160
@@ -54,6 +55,8 @@ class FollowupDecide(TaskSpec):
               "- '앞선 답변'과 이어지거나 어긋나는 점이 있으면 그것을 물어도 된다. 이때 anchor.source는 previous다.\n"
               "- '회사 자료'의 프로젝트·기술이 답변 내용과 직접 관련되면, 답변의 표현을 그 상황에 연결해 물어도 된다. 회사 자료에 없는 회사 사실은 말하지 않는다.\n"
               "- '이미 한 꼬리질문'과 같은 내용을 다시 묻지 않는다.\n"
+              "- 난이도는 답변에 맞춘다. 답변이 구체적이고 정확하면 한 단계 깊게(이유, 대안, 한계) 묻고, 모호하거나 짧으면 같은 수준 이하로 "
+              "구체적인 사례나 본인의 역할 하나만 묻는다. 지원자 수준을 넘는 설계 질문이나 여러 기술을 엮은 질문은 하지 않는다.\n"
               "- anchor.quote에 고른 표현을 글자 그대로 복사하고, 질문은 그 표현을 넣은 60자 이내의 짧은 의문문으로 쓰고 '?'로 끝낸다. 답변 문장을 되풀이하지 않는다. "
               "형태 예: '재순위화 모델을 고른 이유는 무엇입니까?' "
               "새 주제를 꺼내지 않는다. 거짓 여부를 판정하지 말고 확인만 한다. 나이·가족·출신·종교 등 사적인 질문을 하지 않는다.")
@@ -67,7 +70,10 @@ class FollowupDecide(TaskSpec):
 
     def build(self, inp: dict, nonce: str) -> tuple[str, dict]:
         resume = "\n".join(inp.get("resume_evidence") or [])
-        user = (f"질문 유형: {inp.get('question_type', '')}\n본질문:\n{fence('QUESTION', inp.get('question', ''), nonce)}\n"
+        head = f"지원자 수준: {LEVEL_TEXT[inp['level']]}\n" if inp.get("level") in LEVEL_TEXT else ""
+        if inp.get("difficulty") in DIFFICULTY_TEXT:
+            head += f"본질문 난이도: {DIFFICULTY_TEXT[inp['difficulty']].split(':')[0]}\n"
+        user = head + (f"질문 유형: {inp.get('question_type', '')}\n본질문:\n{fence('QUESTION', inp.get('question', ''), nonce)}\n"
                 f"답변:\n{fence('ANSWER', inp['answer'], nonce)}\n")
         if resume:
             user += f"이력서 근거 문장:\n{fence('RESUME', resume, nonce)}\n"
@@ -128,6 +134,13 @@ class FollowupDecide(TaskSpec):
                            *(f"{d['title']} {d['text']}" for d in inp.get("company_context") or [])])
         if unsupported_terms(q, known):
             raise TaskInvalid("term not in any source")
+        # ADR-0025: one point, short, no invented figures; the candidate said it, so asking about it presumes nothing
+        bad = [r for r in problems(q, kind="FOLLOWUP", level=inp.get("level") or "JUNIOR", basis=known, from_resume=True)
+               if r != "TOO_LONG" or len(q) > 80]
+        if bad:
+            if final:
+                raise TaskInvalid("question quality: " + ",".join(bad))
+            return Check(feedback={"quote": "꼬리질문을 고쳐라. " + " ".join(REJECT_TEXT[r] for r in bad if r in REJECT_TEXT)})
         if any(similar_question(q, a) for a in inp.get("asked") or []):
             if final:
                 raise TaskInvalid("repeats an earlier follow-up")

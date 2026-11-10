@@ -65,8 +65,9 @@ export function MyResume() {
       setFileName(file.name);
       if (out.extraction_status === 'DONE' && out.fields) {
         // What the file says replaces the standard sections and the cover letter; the choices only this form has stay as typed.
+        // A file without a cover letter empties it: the previous file's text must not stay under the new resume (2026-11-09).
         const c: ResumeContent = { ...EMPTY_RESUME, ...out.fields, name: out.fields.name || form.name,
-          desired_job: form.desired_job || null, experience_level: null, intro: out.fields.intro || form.intro || null };
+          desired_job: form.desired_job || null, experience_level: null, intro: out.fields.intro || null };
         setBase(c);
         setForm(toFlat(c));
         toast('파일에서 읽은 내용을 양식에 채웠습니다. 확인한 뒤 저장해 주십시오');

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { Navigate, useNavigate, useParams } from 'react-router';
 import { fetchPosting } from '@/api/common/postings';
 import { useSession } from '@/app/session';
 import { useGaze } from '@/media/gaze';
@@ -204,6 +204,8 @@ export function Check() {
     </div>
   );
   const bars = Math.round((micTesting ? level : 0) * 16);
+
+  if (posting.data?.has_applied) return <Navigate to="/me/applications" replace />; // one application per posting (JOB-02)
 
   return (
     <div className="wrap"><div className="stub xwide">

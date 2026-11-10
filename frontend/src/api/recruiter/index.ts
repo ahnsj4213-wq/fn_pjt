@@ -201,7 +201,7 @@ export type CriterionKey = 'EXPERTISE' | 'LOGIC' | 'ATTITUDE' | 'DELIVERY';
 export interface ReportItem {
   key: CriterionKey;
   score: number;
-  evidence: 'OK' | 'INSUFFICIENT' | 'NO_ANSWER';
+  evidence: 'OK' | 'UNLINKED' | 'INSUFFICIENT' | 'NO_ANSWER';
   insufficient_reason?: string | null;
   /** start/end index display_text; text is the original substring (ADR-0008). */
   quote: { text: string; start: number | null; end: number | null } | null;

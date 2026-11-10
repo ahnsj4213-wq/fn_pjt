@@ -82,15 +82,19 @@ async def sync_examples(db: AsyncSession, ai: AIClient, model: str, *, path: Pat
 
 
 async def find_examples(db: AsyncSession, ai: AIClient, model: str, kind: str, query: str, k: int,
-                        exclude: list[str] = ()) -> list[Example]:
-    """The k reference questions of `kind` nearest to `query`, skipping texts already in the set."""
+                        exclude: list[str] = (), vector: list[float] | None = None) -> list[Example]:
+    """The k reference questions of `kind` nearest to `query`, skipping texts already in the set. `vector`: the embedding of
+    query[:SEARCH_CHARS] when the caller has it (the document search embedded the same text)."""
     if k <= 0 or not query.strip():
         return []
-    try:
-        (vec,) = await ai.embed([query[:SEARCH_CHARS]])
-    except AIUnavailable:
-        log_event(log, "rag_skipped", kind=kind, reason="embed_unavailable")
-        return []
+    if vector is not None:
+        vec = vector
+    else:
+        try:
+            (vec,) = await ai.embed([query[:SEARCH_CHARS]])
+        except AIUnavailable:
+            log_event(log, "rag_skipped", kind=kind, reason="embed_unavailable")
+            return []
     if len(vec) != EMBED_DIM:
         return []
     rows = (await db.execute(text(

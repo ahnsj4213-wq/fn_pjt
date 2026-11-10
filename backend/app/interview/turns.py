@@ -246,6 +246,11 @@ async def decide_followup(app_id: UUID, answer_id: UUID) -> InterviewQuestion | 
         iv = await db.get(Interview, app_id)
         if q.role != "MAIN" or q.answer_mode == "CODE":  # a coding answer is the code and its comments: nothing to ask aloud
             return None
+        if await db.get(FollowupDecision, q.id) is not None:
+            # Already decided (the graph step ran again after a crash, or a second resume of the same answer): no second
+            # model call; the follow-up written then, if any, is the answer.
+            return (await db.execute(select(InterviewQuestion).where(InterviewQuestion.parent_id == q.id,
+                                                                     InterviewQuestion.role == "FOLLOWUP"))).scalar_one_or_none()
         cap = (await db.get(QuestionSet, q.question_set_id)).followup_max
         has_fu = await db.scalar(select(func.count()).select_from(InterviewQuestion).where(InterviewQuestion.parent_id == q.id))
         if has_fu or iv.followups_used >= cap:
@@ -263,10 +268,17 @@ async def decide_followup(app_id: UUID, answer_id: UUID) -> InterviewQuestion | 
             from app.questions.compose import job_brief
             from app.resumes.schemas import to_ai_resume
 
+            from app.questions.level import career_level
+
             app = await db.get(Application, app_id)
-            brief = job_brief(await db.get(JobPosting, app.posting_id))
+            posting = await db.get(JobPosting, app.posting_id)
+            brief = job_brief(posting)
+            resume = to_ai_resume(app.resume_snapshot) if app.resume_snapshot else {}
+            level = (q.grounding or {}).get("level") or career_level(
+                resume, " ".join(filter(None, (posting.experience_level, posting.title, posting.requirements))))
             payload |= {"job_brief": brief, "application_id": str(app_id), "answer_id": str(answer_id),
-                        "shared_terms": shared_terms(brief, flatten_resume(to_ai_resume(app.resume_snapshot))[0]),
+                        "level": level, "difficulty": (q.grounding or {}).get("difficulty"),
+                        "shared_terms": shared_terms(brief, flatten_resume(resume)[0]),
                         **await _followup_context(db, app, ans)}
         deadline_ms = int((ans.confirmed_at.timestamp() + FOLLOWUP_DECISION_TIMEOUT_SEC) * 1000)
     t0 = time.monotonic()
@@ -295,6 +307,10 @@ async def decide_followup(app_id: UUID, answer_id: UUID) -> InterviewQuestion | 
                     reason = out.get("reason", "VAGUE")
     latency = int((time.monotonic() - t0) * 1000)
     async with session_scope() as db:
+        await db.get(InterviewQuestion, q.id, with_for_update=True)  # one decision per main question at a time
+        if await db.get(FollowupDecision, q.id) is not None:  # another run decided while the model was thinking
+            return (await db.execute(select(InterviewQuestion).where(InterviewQuestion.parent_id == q.id,
+                                                                     InterviewQuestion.role == "FOLLOWUP"))).scalar_one_or_none()
         fu = None
         if cause is None:
             ok = (await db.execute(update(Interview).where(Interview.application_id == app_id,
@@ -348,14 +364,9 @@ async def finish_interview(db: AsyncSession, app_id: UUID) -> str:
 
 
 async def interrupt(db: AsyncSession, app_id: UUID) -> None:
-    """Connection lost: the live turn is abandoned (partial answer discarded, OQ-21); the slot keeps its lease
-    until it expires (grace, T10) so a quick reconnect gets it back."""
+    """Connection lost or the candidate left: the attempt ends here (ADR-0024; partial answer discarded, OQ-21).
+    Nothing to resume: answered questions are evaluated, the rest count as unanswered."""
+    from app.applications.lifecycle import end_left
+
     app = await db.get(Application, app_id, with_for_update=True)
-    if app.attempt_status not in ("INTERVIEWING", "CODING"):
-        return
-    await db.execute(text("UPDATE interview_turns SET state='ABANDONED', end_reason='DISCONNECT', closed_at=now() "
-                           "WHERE application_id=:a AND state IN ('PRESENTING','ANSWERING','FINALIZING')"), {"a": app_id})
-    app.interrupted_from, app.attempt_status = app.attempt_status, "INTERRUPTED"
-    await inbox.interview_stopped(db, app)
-    await db.execute(update(Interview).where(Interview.application_id == app_id).values(
-        interruption_count=Interview.interruption_count + 1, current_phase=None))
+    await end_left(db, app)

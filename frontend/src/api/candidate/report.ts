@@ -3,6 +3,9 @@ import { apiFetch } from '@/shared/http/client';
 
 export interface Highlight { start: number; end: number; kind: 'good' | 'bad'; criterion: string }
 export interface Evidence { criterion: string; label: string; kind: 'good' | 'bad'; quote: string; comment: string | null }
+/** 근거 미연결: the AI's score stands, no sentence linked. 내용 부족: nothing to point at. 근거 추출 실패: an older run floored it. */
+export type EvidenceNote = '근거 미연결' | '내용 부족' | '근거 추출 실패' | '답변 없음';
+
 export interface ReportAnswer {
   text: string | null;
   seconds: number | null;
@@ -11,7 +14,8 @@ export interface ReportAnswer {
   highlights: Highlight[];
   negative: string[];
   evidence: Evidence[];
-  criteria: { key: string; label: string; score: number }[];
+  /** note: how the score came about when it is not an ordinary judgement with an evidence sentence (ADR-0023). */
+  criteria: { key: string; label: string; score: number; note?: EvidenceNote | null }[];
   score: number | null;
   good: string | null;
   fix: string | null;

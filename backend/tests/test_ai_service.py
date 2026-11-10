@@ -355,7 +355,7 @@ async def test_fake_client_runs_real_validators():
     fake.fail["code_review"] = "invalid"
     assert (await fake.llm("code_review", {"code": "print(1)"}, lane="BATCH")).status == "INVALID"
     # Every model call is captured for prompt assertions (SC-79).
-    assert fake.calls[0].task == "evaluate_answer" and ANSWER in fake.calls[0].messages[0][1]["content"]
+    assert fake.calls[0].task == "evaluate_answer" and "[2] 병목을 찾기 위해" in fake.calls[0].messages[0][1]["content"]  # numbered sentences
 
 
 async def test_fake_client_speech_and_embed():
@@ -379,6 +379,41 @@ def test_hallucination_rule_hl1():
     assert is_hallucination("네", 0.7, -0.5, 1.0) is None  # both conditions are needed
     assert is_hallucination("아 아 아 아 아 아 아", 0.1, -0.3, 2.6) == "REPETITION"
     assert is_hallucination("캐시를 도입해 응답 시간을 줄였습니다", 0.05, -0.3, 1.3) is None
+
+
+def test_filler_only_segments_are_blanked_but_real_sentences_keep_them():
+    """2026-11-09: "감사합니다", "아멘" appeared in answers of a candidate who never said them (Whisper over noise)."""
+    for t in ("감사합니다.", "감사합니다. 감사합니다.", "아멘", "아멘.", "고맙습니다!", "음...", "시청해 주셔서 감사합니다"):
+        assert is_hallucination(t, 0.1, -0.3, 1.1) in ("FILLER_ONLY", "BLOCKLIST"), t
+    for t in ("도와주셔서 감사합니다라고 팀원에게 말했습니다", "네, 캐시를 썼습니다", "감사 로그를 남겼습니다", "아키텍처를 바꿨습니다"):
+        assert is_hallucination(t, 0.1, -0.3, 1.1) is None, t
+    assert is_hallucination("인덱스를 추가했습니다", 0.85, -0.2, 1.1) == "NO_SPEECH"  # sure enough there is no speech
+
+
+def test_quiet_audio_is_not_sent_to_whisper_and_quiet_segments_are_dropped():
+    import numpy as np
+
+    from app.aisvc.speech import STT_RATE, STTEngine
+
+    class Seg:
+        def __init__(self, start, end, text):
+            self.start, self.end, self.text = start, end, text
+            self.no_speech_prob, self.avg_logprob, self.compression_ratio = 0.1, -0.3, 1.1
+
+    class Model:
+        calls = 0
+
+        def transcribe(self, audio, **kw):
+            Model.calls += 1
+            return [Seg(0.0, 1.0, "캐시를 도입했습니다"), Seg(1.0, 2.0, "그래서 빨라졌습니다")], None
+
+    eng = STTEngine(_model=Model())
+    rng = np.random.default_rng(0)
+    noise = (rng.standard_normal(2 * STT_RATE) * 0.0005).astype(np.float32)  # about -66 dBFS
+    assert eng._transcribe_sync(noise) == {"text": "", "segments": [], "dropped": ["SILENCE"]} and Model.calls == 0
+    voice = np.concatenate([(np.sin(np.arange(STT_RATE) / 8) * 0.1).astype(np.float32), noise[:STT_RATE]])
+    out = eng._transcribe_sync(voice)  # the second "sentence" sits on the quiet second
+    assert out["text"] == "캐시를 도입했습니다" and out["dropped"] == ["SILENCE"]
 
 
 def test_resample_to_48k_s16():
@@ -405,26 +440,45 @@ async def test_service_500_reports_exception_type_and_location(ai_app):
     assert "in broken" in err["message"] and "secret" not in r.text
 
 
-async def test_evaluate_empty_quote_gets_one_regeneration():
-    """Score > 1 with an empty quote is asked again once; still empty -> NO_EVIDENCE 1 point (no invention)."""
+async def test_evidence_is_a_sentence_number_and_a_failed_citation_keeps_the_score():
+    """ADR-0023: the model names sentence numbers, code stores that sentence's span. No sentence + score >= 3 is asked once more,
+    then kept as UNLINKED (the score stays); no sentence + score 1~2 is 내용 부족 (LOW_CONTENT) at once; an unknown number is no evidence."""
+    from app.evaluation.quotes import sentences
     fake = FakeAIClient()
     calls = {"n": 0}
-    good = ANSWER[:30]
 
     def reply(inp, msgs):
         calls["n"] += 1
-        quote = "" if calls["n"] == 1 else good
-        item = {"quote": good, "comment": "근거가 있다.", "score": 4}
-        return {"expertise": item, "logic": {**item, "quote": quote}, "attitude": item,
-                "delivery": {**item, "quote": ""}}
+        first = calls["n"] == 1
+        return {"expertise": {"sent": 1, "comment": "수치로 개선을 설명했다.", "score": 4},
+                "logic": {"sent": 0 if first else 2, "comment": "원인 분석이 이어진다.", "score": 4},
+                "attitude": {"sent": 0, "comment": "입장이 드러나지 않는다.", "score": 2},
+                "delivery": {"sent": 9 if first else 0, "comment": "결론이 앞에 있다.", "score": 4}}
 
     fake.responses["evaluate_answer"] = reply
-    r = await fake.llm("evaluate_answer", {"question": "q", "answer": ANSWER}, lane="BATCH")
-    items = r.output["items"]
-    assert r.status == "OK" and r.attempts["llm_calls"] == 2 and "비어 있거나" in fake.calls[0].messages[1][-1]["content"]
-    assert items["LOGIC"]["evidence_status"] == "OK" and items["LOGIC"]["score"] == 4  # filled in on regeneration
-    assert (items["DELIVERY"]["evidence_status"], items["DELIVERY"]["insufficient_reason"], items["DELIVERY"]["score"]) \
-        == ("INSUFFICIENT", "NO_EVIDENCE", 1)
+    r = await fake.llm("evaluate_answer", {"question": "성능 문제를 해결한 경험을 말씀해 주세요.", "question_type": "PROJECT",
+                                           "answer": ANSWER}, lane="BATCH")
+    items, sents = r.output["items"], sentences(ANSWER)
+    assert r.status == "OK" and r.attempts["llm_calls"] == 2 and "sent가 0이거나" in fake.calls[0].messages[1][-1]["content"]
+    assert "logic" in fake.calls[0].messages[1][-1]["content"] and "attitude" not in fake.calls[0].messages[1][-1]["content"]
+    ex = items["EXPERTISE"]
+    assert ex["evidence_status"] == "OK" and ex["quote"]["text"] == sents[0].text == ANSWER[ex["quote"]["start"]:ex["quote"]["end"]]
+    assert items["LOGIC"]["evidence_status"] == "OK" and items["LOGIC"]["quote"]["text"] == sents[1].text  # found on the second ask
+    assert (items["ATTITUDE"]["evidence_status"], items["ATTITUDE"]["insufficient_reason"], items["ATTITUDE"]["score"]) \
+        == ("INSUFFICIENT", "LOW_CONTENT", 2)
+    assert (items["DELIVERY"]["evidence_status"], items["DELIVERY"]["score"], items["DELIVERY"]["quote"]) == ("UNLINKED", 4, None)
+    assert r.output["question_kind"] == "EXPERIENCE"
+
+
+async def test_the_prompt_says_what_the_kind_of_question_needs():
+    fake = FakeAIClient()
+    for question, area, kind in (("REST와 gRPC의 차이는 무엇입니까?", "JOB_SKILL", "기술 지식"),
+                                 ("주문 시스템을 설계한다면 어떻게 구성하시겠습니까?", "JOB_SKILL", "설계"),
+                                 ("배포 중 장애가 나면 어떻게 대응하시겠습니까?", "JOB_SKILL", "상황 대응"),
+                                 ("팀원과 의견이 다를 때 어떻게 하시나요?", "COLLABORATION", "행동·가치관"),
+                                 ("성능을 개선했던 경험을 말씀해 주세요.", "PROJECT", "경험")):
+        await fake.llm("evaluate_answer", {"question": question, "question_type": area, "answer": ANSWER}, lane="BATCH")
+        assert f"질문 유형: {kind}" in fake.calls[-1].messages[0][1]["content"], question
 
 
 def test_stt_warmup_runs_encoder_and_falls_back(monkeypatch):

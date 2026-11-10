@@ -80,6 +80,7 @@ export function ConsentResume() {
     try { sessionStorage.setItem(choiceKey(pid), JSON.stringify({ agree, share })); } catch { /* blocked */ }
   }, [pid, agree, share]);
 
+  if (posting.data?.has_applied) return <Navigate to="/me/applications" replace />; // one application per posting (JOB-02)
   if (!check) return <Navigate to={applyPath(pid)} replace />;
 
   const reg = resume.data?.resume ?? null;
@@ -166,6 +167,7 @@ export function ConsentResume() {
       await prepareInterview(aid);
       await reportMedia(aid, { mic_ok: true, camera_ok: true, speaker_ok: true });
       void qc.invalidateQueries({ queryKey: ['my-applications'] });
+      void qc.invalidateQueries({ queryKey: ['postings'] }); // the main page leaves out postings already applied to
       navigate(`/applications/${encodeURIComponent(aid)}/interview`, { state: { started: true }, replace: true });
     } catch (e) {
       setError(describeError(e).message);

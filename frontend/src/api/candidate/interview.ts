@@ -40,7 +40,6 @@ export interface InterviewState {
   gaze_warnings: number;
   next_after_interview: 'CODING' | 'DONE';
   live_code_graded?: boolean;
-  retake_allowed?: boolean;
   warnings: string[];
   turn: TurnView | null;
   slot_grace_until: string | null;
@@ -57,10 +56,7 @@ export interface AiHealth {
 export const prepareInterview = (aid: string) =>
   apiFetch<{ attempt_status: AttemptStatus; questions_ready: boolean }>(`${base(aid)}/interview/prepare`, { method: 'POST' });
 export const fetchInterviewState = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/state`);
-export const retakeInterview = (aid: string) =>
-  apiFetch<{ attempt_status: AttemptStatus; posting_id: string }>(`${base(aid)}/interview/retake`, { method: 'POST' });
 export const startInterview = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/start`, { method: 'POST' });
-export const resumeInterview = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/resume`, { method: 'POST' });
 export const enterTextMode = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/text-mode`, { method: 'POST' });
 export const nextTextQuestion = (aid: string) => apiFetch<InterviewState>(`${base(aid)}/interview/next`, { method: 'POST' });
 export const finishTurn = (aid: string, turnId: string) =>

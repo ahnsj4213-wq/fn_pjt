@@ -85,7 +85,7 @@ class FakeAIClient:
         pieces = [x.strip() for x in src.replace(".", "\n").splitlines() if len(x.strip()) >= 4]
         qs = []
         for i, basis in enumerate(pieces[: int(inp.get("n", 3)) + 2]):
-            qs.append({"text": f"'{basis[:40]}' 업무에 본인의 경험을 어떻게 활용할지 말씀해 주세요 ({i + 1})?",
+            qs.append({"text": f"'{basis[:40]}' 업무에 본인의 경험을 어떻게 활용할지 말씀해 주세요 ({'가나다라마바사아'[i % 8]})?",
                        "basis_quote": basis})
         return {"questions": qs}
 
@@ -112,8 +112,7 @@ class FakeAIClient:
 
     @staticmethod
     def _reply_evaluate_answer(inp: dict) -> dict:
-        quote = inp["answer"].strip()[:40]
-        item = {"quote": quote, "comment": "답변에서 판단 근거가 되는 내용이 확인된다.", "score": 3}
+        item = {"sent": 1, "comment": "답변에서 판단 근거가 되는 내용이 확인된다.", "score": 3}  # evidence = sentence 1
         out = {k: dict(item) for k in ("expertise", "logic", "attitude", "delivery")}
         out["expertise_sub"] = {"a": 3, "b": 3, "c": 3}
         out["logic_sub"] = {"a": 4, "b": 3, "c": 3}
@@ -143,8 +142,7 @@ class FakeAIClient:
 
     @staticmethod
     def _reply_custom_criteria(inp: dict) -> dict:
-        text = inp["answers"][0]["text"].strip()[:30]
-        return {"results": [{"id": it["id"], "quote": text, "comment": "기준에 맞는 내용이 확인된다.", "grade": "중"} for it in inp["items"]]}
+        return {"results": [{"id": it["id"], "sent": 1, "comment": "기준에 맞는 내용이 확인된다.", "grade": "중"} for it in inp["items"]]}
 
     @staticmethod
     def _reply_problem_rewrite(inp: dict) -> dict:

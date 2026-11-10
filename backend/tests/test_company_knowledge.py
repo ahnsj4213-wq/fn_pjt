@@ -90,7 +90,7 @@ async def test_questions_are_made_from_the_companys_documents_and_name_their_sou
     assert all(x.grounding and x.grounding["sources"] for x in qs)
 
 
-async def test_no_company_documents_means_a_job_question_from_the_posting(client, make_client, fake_ai):
+async def test_no_company_documents_still_asks_a_motivation_question(client, make_client, fake_ai):
     _, app_id, cand = await setup_app(client, make_client, title="결제 백엔드 개발자", duties="가맹점 정산 API 개발")
     async with session_scope() as db:
         await db.execute(text("UPDATE companies SET intro = '확인되지 않은 회사 소개 문장입니다.' "
@@ -102,6 +102,9 @@ async def test_no_company_documents_means_a_job_question_from_the_posting(client
     gen = next(c for c in fake_ai.calls if c.task == "question_generate" and c.input.get("company_intro") == "")
     assert gen.input["kind"] == "JOB" and gen.input["knowledge"] == []
     assert "확인되지 않은" not in motivation.text
+    # 2026-11-10: the slot is 지원 동기, so the job question the model wrote is not asked there (nor stored in the company bank)
+    assert motivation.text == "이 회사의 ‘결제 백엔드 개발자’ 업무에서 어떤 점에 관심이 있고, 본인의 어떤 경험을 살릴 수 있다고 보십니까?"
+    assert motivation.bank_question_id is None
 
 
 async def test_generated_questions_may_not_state_what_the_sources_do_not_have(fake_ai):

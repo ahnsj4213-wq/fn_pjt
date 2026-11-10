@@ -44,10 +44,12 @@ describe('My Page (SC-A09~A11, SC-A15)', () => {
     expect(within(nav).getByRole('link', { name: '지원 현황' }).getAttribute('aria-current')).toBe('page');
     const table = await screen.findByTestId('my-applications');
     expect(within(table).getAllByText('10.05', { selector: 'td' })).toHaveLength(2);
-    expect(within(table).getByText('중단 (질문 3/5)')).toBeTruthy();
+    expect(within(table).getByText('중도 종료 (질문 3/5)')).toBeTruthy();
     expect(within(table).getByText('2차 면접 일정 확정').className).toBe('pill good');
     expect(within(screen.getByTestId('action-a1')).getByRole('button').textContent).toBe('리포트 보기');
-    expect(within(screen.getByTestId('action-a2')).getByRole('button').textContent).toBe('다시 지원');
+    // ADR-0024: a stopped attempt has ended; its answered questions are evaluated, nothing is continued or retaken
+    expect(within(screen.getByTestId('action-a2')).getByRole('button').textContent).toBe('리포트 보기');
+    expect(screen.queryByText('다시 지원')).toBeNull();
     expect(screen.getByText('합격 여부는 기업이 결정하면 이곳과 메일로 알려 드립니다.')).toBeTruthy();
   });
 

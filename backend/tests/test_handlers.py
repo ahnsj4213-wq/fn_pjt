@@ -161,7 +161,8 @@ async def _compose_scoped(client, make_client, canary: str) -> None:
     company_a, app_a, cand_a = await setup_app(client, make_client, job_family="DESIGN", title=f"{canary} QA 엔지니어",
                                                duties=f"{canary} 회귀 테스트 자동화. 릴리스 품질 지표 관리")
     qs = await prepare_and_compose(cand_a, app_a)
-    assert qs[3].source == "BANK_FALLBACK" and qs[3].slot_type == "PROJECT"
+    assert qs[3].source == "TEMPLATE" and qs[3].slot_type == "PROJECT"
+    assert qs[3].grounding["fallback"] == "EXPERIENCE" and qs[3].bank_question_id is None  # an experience question, not the job bank's
     ai_qs = [x for x in qs if x.source == "AI"]
     assert ai_qs and all(x.grounding["basis"]["text"] for x in ai_qs) and any(canary in x.text for x in ai_qs)
     async with session_scope() as db:
@@ -503,7 +504,7 @@ async def test_resume_questions_name_the_part_of_the_resume_they_are_about(clien
     assert len(qs) == 3
     for x in qs:
         quote = x.grounding["evidence"][0]["text"]
-        assert x.source in ("AI", "BANK_FALLBACK")
+        assert x.source in ("AI", "TEMPLATE")
         if x.source == "AI":
             # "커머스랩 백엔드 개발자 업무에서 …하셨는데, <question>": the resume is never named or quoted
             assert "이력서" not in x.text and "‘" not in x.text and "적으신" not in x.text
@@ -614,36 +615,62 @@ async def test_common_bank_questions_are_fitted_to_the_resume_and_keep_their_tex
 
     def adapt(inp, msgs):
         flat = flatten_resume(inp["resume"])[0]
-        line = next(ln.split(": ", 1)[1] for ln in flat.splitlines() if len(ln.split(": ", 1)[-1]) >= 12)
+        taken = tuple(a["entry"] for a in inp.get("avoid") or [])  # the job the resume question asks about is left to it
+        line = next(ln.split(": ", 1)[1] for ln in flat.splitlines()
+                    if ln.startswith(("experience[", "projects[")) and not ln.startswith(taken or ("\0",)) and len(ln.split(": ", 1)[-1]) >= 12)
         quote = line[:12]
         good, bad = inp["items"][0], inp["items"][1]
-        return {"questions": [{"id": good["id"], "basis_quote": quote},
+        return {"questions": [{"id": good["id"], "basis_quote": quote, "scene": "여러 팀과 일정을 맞추는 일에서"},
                               {"id": bad["id"], "basis_quote": "한국대학교 컴퓨터공학"}]}  # school: not work, so not used
     fake_ai.responses["question_adapt"] = adapt
     _, app_id, cand = await setup_app(client, make_client, default_plan=True)
     qs = await prepare_and_compose(cand, app_id)
-    bank = [x for x in qs if x.source in ("BANK", "BANK_FALLBACK")]
-    adapted = [x for x in bank if x.grounding and x.grounding.get("adapted_from")]
-    assert len(adapted) == 1 and adapted[0].text != adapted[0].grounding["adapted_from"]
-    assert adapted[0].prompt_version.startswith("question_adapt@") and adapted[0].bank_question_id is not None
-    assert adapted[0].grounding["basis"]["field"].startswith("experience[") and adapted[0].text.endswith(adapted[0].grounding["adapted_from"])
-    assert all("한국대학교" not in x.text for x in bank)  # the school was refused: that question kept the bank text
-
+    # 2026-11-10: no question comes from the question bank; 인성·협업 are made by code from the resume or the posting
+    assert not [x for x in qs if x.source in ("BANK", "BANK_FALLBACK") or x.bank_question_id is not None and x.source != "AI"]
+    common = [x for x in qs if x.slot_type in ("PERSONALITY", "COLLABORATION") and x.source != "CUSTOM"]
+    assert common and all(x.source == "TEMPLATE" and x.grounding["sources"] and x.grounding["fallback"] == "COMMON" for x in common)
 
 def test_the_adapted_sentence_is_built_by_code_around_the_bank_question():
     from app.ai.tasks.question_adapt import fit
     q = "피드백을 받고 일하는 방식을 바꿨던 경험을 말씀해 주세요."
-    assert fit(q, "물류 수요 예측 모델 개선, 예측 오차 18% 감소", "RESUME") == "물류 수요 예측 모델 개선 업무를 하실 때, " + q
+    quote = "물류 수요 예측 모델 개선, 예측 오차 18% 감소"
+    assert fit(q, quote, "RESUME", scene="예측 결과를 운영에 반영하는 일에서") == "예측 결과를 운영에 반영하는 일에서, " + q
     h = "협업 중에 맡은 일이 늦어지는 팀원이 있다면 어떻게 하시겠습니까?"
-    assert fit(h, "복합 인덱스를 추가했다", "RESUME") == "복합 인덱스를 추가하셨는데, 그 과정에서 " + h
     assert fit(h, "x", "DOCUMENT", "공장 망 단절 대응") == "공장 망 단절 대응 같은 일을 맡았을 때 " + h
     assert fit(q, "x", "DOCUMENT", "공장 망 단절 대응") is None  # a document is not the candidate's past
 
 
-def test_awkward_resume_phrases_are_smoothed_when_a_bank_question_is_fitted():
+def test_an_adapted_question_never_shows_the_resume_wording():
+    """2026-11-09: "규칙 기반 경보와 점검 우선순위 수립 업무를 하실 때, ..." read as taken from the resume. The scene is general."""
     from app.ai.tasks.question_adapt import fit
-    from app.ai.textrules import tidy_particles
-    q = "피드백을 받고 일하는 방식을 바꿨던 경험을 말씀해 주세요."
-    assert tidy_particles("IBM Netizza 를 이관") == "IBM Netizza를 이관"
-    assert fit(q, "IBM Netizza 를 신규 솔루션으로 이관", "RESUME") == "IBM Netizza를 신규 솔루션으로 이관하실 때, " + q
-    assert fit(q, "정산 배치 개선 프로젝트", "RESUME") == "정산 배치 개선 프로젝트를 하실 때, " + q
+    q = "일이 계획대로 되지 않아 크게 실망했을 때 어떻게 다시 추스르셨는지 말씀해 주세요."
+    quote = "규칙 기반 경보와 점검 우선순위 수립"
+    assert fit(q, quote, "RESUME", scene="규칙 기반 경보와 점검 우선순위 수립 업무에서") is None  # the resume's words
+    assert fit(q, quote, "RESUME", scene="하루 300건을 처리하는 업무에서") is None  # a number from the resume
+    assert fit(q, quote, "RESUME", scene="") is None  # nothing general to say: the bank text stays
+    assert fit(q, quote, "RESUME", scene="여러 요청을 동시에 처리해야 하는 업무에서") == "여러 요청을 동시에 처리해야 하는 업무에서, " + q
+
+
+async def test_a_later_resume_question_never_asks_about_a_part_of_the_resume_already_asked(client, make_client, fake_ai):
+    """Live composition makes one resume question at a time: what earlier questions asked about is excluded (and the tail differs)."""
+    from app.ai.client import get_ai_client
+    from app.core.config import get_settings
+    from app.models import Application, Company, JobPosting
+    from app.questions import compose as C
+    _, app_id, cand = await setup_app(client, make_client, default_plan=True)
+    composed = await prepare_and_compose(cand, app_id)
+    first = [x for x in composed if x.slot_type == "PROJECT" and x.source == "AI"][:1]
+    assert first
+    async with session_scope() as db:
+        app = await db.get(Application, uuid.UUID(app_id))
+        c = C._Ctx(app, await db.get(JobPosting, app.posting_id), await db.get(Company, app.company_id), None, get_ai_client(),
+                   get_settings().embed_model, db)
+        c.picked = [C.Picked(x.seq, x.slot_type, x.text, x.source, x.bank_question_id, x.grounding) for x in first]
+        await C._fill_resume(db, c, [(9, "PROJECT")])
+        new = c.picked[-1]
+        resume = C.to_ai_resume(app.resume_snapshot)
+        old_keys = {C._evidence_key(resume, ev) for ev in first[0].grounding["evidence"]}
+        assert new.seq == 9 and new.text != first[0].text
+        if new.source == "AI":
+            assert not {C._evidence_key(resume, ev) for ev in new.grounding["evidence"]} & old_keys
+        await db.rollback()
