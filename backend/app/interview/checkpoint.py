@@ -141,12 +141,16 @@ async def purge_finished(db) -> None:
     for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
         await db.execute(text(
             f"DELETE FROM {table} WHERE "
-            # composition threads of the earlier design (compose:<application>:<settings>): the graph no longer uses them
-            "thread_id LIKE 'compose:%' "
+            # composition threads (compose:<application>:<settings>) once the attempt is past the composition
+            "(thread_id LIKE 'compose:%' AND split_part(thread_id, ':', 2) NOT IN "
+            "  (SELECT id::text FROM applications WHERE attempt_status IN ('READY', 'PREPARING'))) "
+            # coding submission threads (submit:<application>): a run in progress keeps it while the attempt is CODING
+            "OR (thread_id LIKE 'submit:%' AND split_part(thread_id, ':', 2) NOT IN "
+            "  (SELECT id::text FROM applications WHERE attempt_status = 'CODING')) "
             # evaluation threads (eval:<application>:<job>) while their job can still run (queued or running)
             "OR (thread_id LIKE 'eval:%' AND split_part(thread_id, ':', 3) NOT IN "
             "  (SELECT id::text FROM jobs WHERE kind = 'evaluate_application' AND state IN ('QUEUED', 'RUNNING'))) "
-            # interview graph threads (<application>, ADR-0016 rev. 2026-11-11): the composition (READY, PREPARING), the
+            # interview threads (<application>, ADR-0028): the composition (READY, PREPARING), the
             # interview (INTERVIEWING; INTERRUPTED until the sweeper ends it, ADR-0024) and the coding test (CODING)
-            "OR (thread_id NOT LIKE 'compose:%' AND thread_id NOT LIKE 'eval:%' AND thread_id NOT IN "
+            "OR (thread_id NOT LIKE 'compose:%' AND thread_id NOT LIKE 'submit:%' AND thread_id NOT LIKE 'eval:%' AND thread_id NOT IN "
             "  (SELECT id::text FROM applications WHERE attempt_status IN ('READY', 'PREPARING', 'INTERVIEWING', 'INTERRUPTED', 'CODING')))"))

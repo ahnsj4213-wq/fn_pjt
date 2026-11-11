@@ -180,5 +180,95 @@ async def test_live_composition_of_one_slot_keeps_the_same_bound(client, make_cl
     assert await q("SELECT source FROM interview_questions WHERE application_id=:a AND seq=2 AND role='MAIN'", a=app_id) == [("TEMPLATE",)]
 
 
+# ── code-made questions pass the same gate (PR #2 review) ──────────────────────
+def _real(posting=POSTING, snap=SNAP):
+    return C._Ctx(SimpleNamespace(resume_snapshot=snap, id=uuid.uuid4()), posting, SimpleNamespace(intro="", id=uuid.uuid4()),
+                  SimpleNamespace(question_plan=None, custom_question=None, id=uuid.uuid4()), None)
+
+
+def _foreign_posting(n: int):
+    lines = "\n".join(f"{w} {HAN} 업무 담당과 운영" for w in ("주문 결제", "정산 배치", "로그 수집", "알림 발송")[:n])
+    return SimpleNamespace(title="백엔드 개발자", duties=lines, requirements=None, preferred=None, experience_level=None, id=uuid.uuid4())
+
+
+def _foreign_resume():
+    import copy
+    r = copy.deepcopy(RESUME)
+    r["career"] = [{"company": f"{HAN}랩", "role": "개발자", "period": "2020-2021", "description": "주문 처리 API 개발"},
+                   {"company": f"{HAN}웍스", "role": "개발자", "period": "2021-2022", "description": "정산 배치 개발"}]
+    r["projects"] = [{"title": f"{HAN} 개선", "role": "리드", "period": "2023", "description": "배치 병렬화"}]
+    return ResumeContent(**r).model_dump()
+
+
+def _safe(p) -> bool:
+    return p.source == "TEMPLATE" and p.text in quality.SAFE_TEXT[p.slot] and p.grounding.get("fallback") == "SAFE"
+
+
+@pytest.mark.parametrize("area", list(quality.SAFE_TEXT))
+def test_every_safe_sentence_passes_the_gate_and_none_repeats_another(area):
+    texts = quality.SAFE_TEXT[area]
+    assert texts
+    for i, t in enumerate(texts):
+        p = C.Picked(1, area, t, "TEMPLATE", grounding={"sources": [{"type": "TEMPLATE"}], "fallback": "SAFE"})
+        assert quality.judge(_real(), p, []) == [], t
+        assert not any(C.similar_question(t, u) for u in texts[:i]), t
+        assert HAN not in t and "커머스랩" not in t and POSTING.title not in t  # no company or candidate text in it
+
+
+async def test_a_code_made_job_question_with_a_foreign_script_line_is_replaced_by_a_safe_sentence():
+    c = _real(_foreign_posting(3))
+
+    async def attempt(c, empty):
+        return "TIMEOUT"
+    slots = [(4, "JOB_SKILL"), (5, "JOB_SKILL"), (6, "JOB_SKILL")]  # the default plan's three 직무 slots
+    await quality.fill(c, slots, attempt, lambda c, rest: C.posting_fallback(c, "JOB", rest))
+    assert [p.seq for p in c.picked] == [4, 5, 6] and all(_safe(p) for p in c.picked)
+    assert len({p.text for p in c.picked}) == 3 and c.rejects.get("FOREIGN_SCRIPT") == 3
+    assert all(quality.judge(c, p) == [] for p in c.picked)
+
+
+async def test_common_and_experience_questions_from_a_foreign_script_resume_get_safe_sentences():
+    c = _real(snap=_foreign_resume())
+    await C._fill_common(None, c, "PERSONALITY", [(2, "PERSONALITY")])
+    assert _safe(c.picked[-1]) and c.rejects.get("FOREIGN_SCRIPT") == 1
+    start = len(c.picked)
+    C.experience_fallback(c, C.to_ai_resume(c.app.resume_snapshot), [(7, "PROJECT"), (8, "PROJECT"), (9, "PROJECT")])
+    assert any(HAN in p.text for p in c.picked[start:])
+    quality.check_fallback(c, start)  # three 경험 slots: three safe sentences, no composition failure
+    assert all(_safe(p) for p in c.picked[start:]) and all(quality.judge(c, p) == [] for p in c.picked)
+
+
+def test_a_code_made_question_that_passes_is_kept_as_it_is():
+    c = _real()
+    C.posting_fallback(c, "JOB", [(4, "JOB_SKILL")])
+    before = c.picked[0]
+    quality.check_fallback(c, 0)
+    assert c.picked[0] is before and not _safe(before)
+
+
+def test_no_passing_sentence_left_fails_the_composition_explicitly(monkeypatch):
+    c = _real(_foreign_posting(4))
+    C.posting_fallback(c, "JOB", [(3, "JOB_SKILL"), (4, "JOB_SKILL"), (5, "JOB_SKILL"), (6, "JOB_SKILL")])
+    with pytest.raises(C.ComposeError):  # four failing slots, three safe sentences: never a question that failed the gate
+        quality.check_fallback(c, 0)
+    c = _real(_foreign_posting(1))
+    C.posting_fallback(c, "JOB", [(4, "JOB_SKILL")])
+    monkeypatch.setitem(quality.SAFE_TEXT, "JOB_SKILL", (f"{HAN} 업무를 설명해 주시겠습니까?",))
+    with pytest.raises(C.ComposeError):
+        quality.check_fallback(c, 0)
+
+
+async def test_live_fallback_passes_the_gate_too():
+    c = _real(_foreign_posting(2))
+    asked = _posting_pick(2, "MOTIVATION", "이 회사에 지원하게 된 가장 큰 이유는 무엇입니까?")
+    c.picked.append(asked)  # already asked in this interview
+    await live._fallback(None, c, C.Slot(4, C.Area.JOB_SKILL, None))
+    new = [p for p in c.picked if p.seq == 4]
+    assert len(new) == 1 and _safe(new[0]) and quality.judge(c, new[0]) == []
+    await live._fallback(None, c, C.Slot(3, C.Area.MOTIVATION, None))  # the safe motivation sentence repeats the asked one
+    mot = [p for p in c.picked if p.seq == 3]
+    assert len(mot) == 1 and quality.judge(c, mot[0]) == [] and not C.similar_question(mot[0].text, asked.text)
+
+
 def test_the_steps_module_is_only_nodes():
     assert not hasattr(steps, "build") and not hasattr(steps, "run")  # the one graph is interview/graph.py

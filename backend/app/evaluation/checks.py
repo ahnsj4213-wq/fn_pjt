@@ -13,9 +13,12 @@ The verification loop (pipeline.evaluate_unit), at most once per evaluation of a
                                     taken from it (`merge_rejudge`; an only-unstable criterion keeps its median and
                                     the extra judgement only confirms it) -> find_problems again -> `settle`
 `settle` never asks the model again. What still fails is put on one of two sides:
-- system side  the evidence could not be linked or verified (UNLINKED, INSUFFICIENT/QUOTE_MISMATCH): the model's judgement
-               is not trusted as evidence; too many of these hold the evaluation (graph.verify, SYSTEM_HOLD_RATIO).
-- content side the model's own reason says the answer lacks it: INSUFFICIENT/LOW_CONTENT with the score capped at CONTENT_CAP.
+- system side  QUOTE_MISMATCH, NO_EVIDENCE or REASON_SCORE left after the re-judgement: the evidence could not be linked or
+               verified. Settled as UNLINKED: the model's score stays, no quote is shown; too many of these hold the evaluation
+               (graph.verify, SYSTEM_HOLD_RATIO) for a recruiter. An evidence failure or a word match on the reason never lowers
+               the score (ADR-0023 directive; PR #2 review: unit-check-2).
+- content side 내용 부족 comes only from the answer itself (rule results: TOO_SHORT / no answer) or from the model's own low
+               score (1~2, LOW_CONTENT as the model gave it). `settle` never caps a score.
 A wrong shape (criterion missing, score outside 1~5) cannot be settled: the unit fails (EvaluationFailed, held by EVL-06).
 A criterion that stays unstable keeps its median score and is counted (UNSTABLE), it is neither held nor capped.
 
@@ -33,7 +36,7 @@ from app.ai import rubric
 from app.ai.tasks.evaluate import LINK_MIN_SCORE
 from app.core.constants import CRITERIA, Criterion
 
-CHECK_VERSION = "unit-check-1"
+CHECK_VERSION = "unit-check-2"
 REASON_HIGH = 4
 CONTENT_CAP = 2  # = the LOW_CONTENT ceiling of answer_evaluations (migration 0033)
 UNSTABLE_SPREAD = 3
@@ -170,15 +173,11 @@ def settle(judged: dict, left: dict[str, list[str]]) -> tuple[dict, dict]:
         codes = left.get(crit, [])
         if "SHAPE" in codes:
             raise ValueError(f"{crit} SHAPE")
-        if "QUOTE_MISMATCH" in codes:  # system: the sentence is not one of the answer
-            it = {**it, "score": 1, "evidence_status": "INSUFFICIENT", "insufficient_reason": "QUOTE_MISMATCH", "quote": None}
-            side[crit] = "SYSTEM"
-        elif "REASON_SCORE" in codes or ("NO_EVIDENCE" in codes and lacking(it.get("comment"))):
-            # content: the model's own reason says the answer lacks it -> 내용 부족, the score capped
-            it = {**it, "score": min(it["score"], CONTENT_CAP), "evidence_status": "INSUFFICIENT",
-                  "insufficient_reason": "LOW_CONTENT", "quote": None}
-            side[crit] = "CONTENT"
-        elif "NO_EVIDENCE" in codes:  # system: a score the answer was not linked to; the model's score stays (ADR-0023)
+        if any(x in codes for x in ("QUOTE_MISMATCH", "NO_EVIDENCE", "REASON_SCORE")):
+            # system side: the evidence could not be verified (a quote that is not in the answer, a score with no sentence, a
+            # reason that contradicts the score). The model's score stays and no quote is shown (UNLINKED, ADR-0023: an
+            # extraction failure never makes the answer's score; a word match on the reason never lowers it either). Too many
+            # of these hold the evaluation (SYSTEM_HOLD_RATIO) for a recruiter instead of scoring the candidate low.
             it = {**it, "evidence_status": "UNLINKED", "insufficient_reason": None, "quote": None}
             side[crit] = "SYSTEM"
         if "UNSTABLE" in codes:

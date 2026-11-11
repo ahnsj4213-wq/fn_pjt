@@ -41,7 +41,7 @@ from app.models import (
     Application, Company, Interview, InterviewAnswer, InterviewQuestion, JobPosting, PostingEvalSettings, QuestionSet,
 )
 from app.jobs.queue import enqueue
-from app.questions import compose as C
+from app.questions import compose as C, quality
 from app.questions.dbio import ShortReads
 from app.resumes.schemas import to_ai_resume
 
@@ -101,6 +101,7 @@ async def _fill(db, c: C._Ctx, sl: C.Slot) -> None:
 async def _fallback(db, c: C._Ctx, sl: C.Slot) -> None:
     """Generation failed or took too long: a question made by code (no model, no database)."""
     c.picked = [p for p in c.picked if p.seq != sl.seq]
+    start = len(c.picked)
     one = [(sl.seq, sl.area.value)]
     if sl.area == Area.PROJECT:  # 경험 stays an experience question (OQ-37, revised 2026-11-10)
         C.experience_fallback(c, to_ai_resume(c.app.resume_snapshot), one)
@@ -108,6 +109,7 @@ async def _fallback(db, c: C._Ctx, sl: C.Slot) -> None:
         C.common_fallback(c, one, sl.area.value)
     else:  # made by code from the posting, never from the question bank
         C.posting_fallback(c, FALLBACK_KIND[sl.area], one)
+    quality.check_fallback(c, start)  # the same gate as a generated question (a failing one gets a safe fixed sentence)
 
 
 # ── one composition at a time per application in this process ─────────────────

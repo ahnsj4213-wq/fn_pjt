@@ -159,9 +159,11 @@ async def start(state: State) -> dict:
         if app is None:
             return {"stage": END, "result": "ENDED"}
         if entry == COMPOSE:
+            if app.attempt_status not in ("READY", "PREPARING"):  # a late retry: the interview began or the attempt is over
+                return {"stage": END, "qset_id": None}
             done = (await db.execute(select(QuestionSet.id).where(
                 QuestionSet.application_id == app_id, QuestionSet.settings_id == UUID(state["settings_id"]),
-                QuestionSet.status.in_(["COMPOSING", "READY"])))).scalar_one_or_none()
+                QuestionSet.status == "READY"))).scalar_one_or_none()  # only a READY set is composed (COMPOSING is not)
             return {"stage": END, "qset_id": str(done)} if done is not None else {"stage": COMPOSE}
         if entry == SUBMIT:
             return {"stage": SUBMIT} if app.attempt_status == "CODING" else {"stage": END, "result": "NOT_CODING"}
@@ -313,7 +315,14 @@ def reset_graph() -> None:
     _compiled = None
 
 
-def thread_id(app_id: UUID) -> str:
+def thread_id(app_id: UUID, entry: str = "INTERVIEW", settings_id: UUID | None = None) -> str:
+    """One graph, one checkpoint thread per entry (PR #2 review): the interview's own thread is the application id; the
+    composition (compose:<application>:<settings version>) and the coding submission (submit:<application>) never write,
+    overwrite or delete it, so a late compose retry or a double submission cannot touch a waiting interview."""
+    if entry == COMPOSE:
+        return f"compose:{app_id}:{settings_id}"
+    if entry == SUBMIT:
+        return f"submit:{app_id}"
     return str(app_id)
 
 
@@ -329,12 +338,12 @@ _FRESH = {"stage": None, "settings_id": None, "live": False, "picked": [], "qset
           "end_reason": None, "answer_id": None, "answered": False, "route": None, "result": None}
 
 
-def _cfg(app_id: UUID, io: TurnIO | None = None, **extra) -> dict:
-    return {"configurable": {"thread_id": thread_id(app_id), "io": io, **extra}, "recursion_limit": 100}
+def _cfg(app_id: UUID, io: TurnIO | None = None, *, tid: str | None = None, **extra) -> dict:
+    return {"configurable": {"thread_id": tid or thread_id(app_id), "io": io, **extra}, "recursion_limit": 100}
 
 
-async def _forget(app_id: UUID) -> None:
-    await (await get_checkpointer()).adelete_thread(thread_id(app_id))
+async def _forget(tid: str) -> None:
+    await (await get_checkpointer()).adelete_thread(tid)
 
 
 async def _outcome(graph, app_id: UUID, cfg: dict) -> Outcome:
@@ -344,14 +353,16 @@ async def _outcome(graph, app_id: UUID, cfg: dict) -> Outcome:
         return Outcome(True, view_from_dict(vals["turn"]))
     out = Outcome(False, None, vals.get("result"))
     if out.result in ("CODING", "SUBMITTED", "ENDED"):
-        await _forget(app_id)  # the run is over: nothing left to resume
+        await _forget(thread_id(app_id))  # the run is over: nothing left to resume
     return out
 
 
-async def compose(app_id: UUID, settings_id: UUID) -> UUID:
-    """The COMPOSE entry (the `compose_questions` job): compose and write the question set; returns its id. A run left by a failed
-    attempt for the same settings version continues at the node that stopped."""
-    graph, cfg = await get_graph(), _cfg(app_id)
+async def compose(app_id: UUID, settings_id: UUID) -> UUID | None:
+    """The COMPOSE entry (the `compose_questions` job): compose and write the question set; returns its id (None: the attempt
+    moved past its composition meanwhile, nothing was written). A run left by a failed attempt for the same settings version
+    continues at the node that stopped."""
+    tid = thread_id(app_id, COMPOSE, settings_id)
+    graph, cfg = await get_graph(), _cfg(app_id, tid=tid)
     cfg["recursion_limit"] = 20
     snap = await graph.aget_state(cfg)
     vals = snap.values or {}
@@ -362,8 +373,8 @@ async def compose(app_id: UUID, settings_id: UUID) -> UUID:
     else:
         final = await graph.ainvoke({**_FRESH, "application_id": str(app_id), "entry": COMPOSE, "settings_id": str(settings_id)}, cfg)
     log_event(log, "compose_stage", application_id=str(app_id), stage="total", duration_ms=int((time.monotonic() - t0) * 1000))
-    await _forget(app_id)
-    return UUID(final["qset_id"])
+    await _forget(tid)  # its own thread only: the interview's thread (the application id) is never touched
+    return UUID(final["qset_id"]) if final.get("qset_id") else None
 
 
 async def begin(app_id: UUID, mode: str, io: TurnIO) -> Outcome:
@@ -397,7 +408,8 @@ async def ensure_waiting(app_id: UUID, view: turns.TurnView, mode: str, io: Turn
 async def submit_coding(db, app_id: UUID, code: str, kind: str) -> str:
     """The SUBMIT entry: the coding test's final submission in the caller's transaction (`db` holds the application lock).
     Returns SUBMITTED | ALREADY_SUBMITTED | NOT_CODING. The checkpoints of the run are deleted with it."""
-    graph, cfg = await get_graph(), _cfg(app_id, coding=CodingSubmit(db, code, kind))
+    tid = thread_id(app_id, SUBMIT)
+    graph, cfg = await get_graph(), _cfg(app_id, tid=tid, coding=CodingSubmit(db, code, kind))
     final = await graph.ainvoke({**_FRESH, "application_id": str(app_id), "entry": SUBMIT}, cfg)
-    await _forget(app_id)
+    await _forget(tid)
     return final.get("result") or "NOT_CODING"

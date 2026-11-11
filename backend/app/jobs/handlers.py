@@ -95,7 +95,7 @@ async def compose_questions(ctx: JobCtx) -> None:
         live = (await db.execute(select(QuestionSet).where(QuestionSet.application_id == app_id,
                                                            QuestionSet.status.in_(["COMPOSING", "READY"])))).scalar_one_or_none()
         stale = app.attempt_status not in ("READY", "PREPARING")
-        if stale or (live is not None and live.settings_id == settings_id):
+        if stale or (live is not None and live.settings_id == settings_id and live.status == "READY"):
             await fenced_complete(db, ctx)  # already composed, or the attempt moved on: nothing to do
             return
     # The interview graph's COMPOSE entry (interview/graph.py, questions/steps.py) makes and writes the set; a retry continues
@@ -103,6 +103,11 @@ async def compose_questions(ctx: JobCtx) -> None:
     from app.interview import graph as interview_graph
 
     qset_id = await interview_graph.compose(app_id, settings_id)
+    if qset_id is None:  # the interview began (or the attempt ended) while composing: nothing written, nothing to prepare
+        async with session_scope() as db:
+            await fenced_complete(db, ctx)
+        log_event(log, "questions_compose_stale", application_id=str(app_id))
+        return
     await _prepare_coding_variant(app_id)
     async with session_scope() as db:
         count = await db.scalar(select(func.count()).select_from(InterviewQuestion).where(InterviewQuestion.question_set_id == qset_id))

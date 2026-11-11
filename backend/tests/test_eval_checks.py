@@ -110,22 +110,64 @@ def test_the_lacking_reason_is_narrow(comment, lacking):
     assert checks.lacking(comment) is lacking
 
 
-def test_what_still_fails_is_settled_on_the_system_or_the_content_side():
+def test_what_still_fails_is_settled_on_the_system_side_and_the_model_score_stays():
+    """unit-check-2 (PR #2 review, ADR-0023 directive): an evidence failure or a word match on the reason never lowers the
+    score. QUOTE_MISMATCH / NO_EVIDENCE / REASON_SCORE left after the re-judgement are all UNLINKED with the model's score."""
+    assert checks.CHECK_VERSION == "unit-check-2"
     left = {"EXPERTISE": ["QUOTE_MISMATCH"], "LOGIC": ["NO_EVIDENCE"], "ATTITUDE": ["REASON_SCORE"], "DELIVERY": ["NO_EVIDENCE"]}
-    judged = _judged(LOGIC=_item(4, "UNLINKED"), ATTITUDE=_item(5, comment="사례가 부족하다"),
+    wrong_quote = {**_item(5), "quote": {"start": 0, "end": 5, "text": "다른 문장", "sent": 1}}
+    judged = _judged(EXPERTISE=wrong_quote, LOGIC=_item(4, "UNLINKED"), ATTITUDE=_item(5, comment="사례가 부족하다"),
                      DELIVERY=_item(3, "UNLINKED", comment="결과가 드러나지 않는다"))
     items, side = checks.settle(judged, left)
-    assert (items["EXPERTISE"]["evidence_status"], items["EXPERTISE"]["insufficient_reason"], items["EXPERTISE"]["score"]) \
-        == ("INSUFFICIENT", "QUOTE_MISMATCH", 1)
-    assert (items["LOGIC"]["evidence_status"], items["LOGIC"]["score"]) == ("UNLINKED", 4)  # the model's score stays
-    assert (items["ATTITUDE"]["insufficient_reason"], items["ATTITUDE"]["score"], items["ATTITUDE"]["quote"]) == ("LOW_CONTENT", 2, None)
-    assert (items["DELIVERY"]["insufficient_reason"], items["DELIVERY"]["score"]) == ("LOW_CONTENT", 2)  # no sentence, lacking
-    assert side == {"EXPERTISE": "SYSTEM", "LOGIC": "SYSTEM", "ATTITUDE": "CONTENT", "DELIVERY": "CONTENT"}
+    got = {c: (it["evidence_status"], it["insufficient_reason"], it["score"], it["quote"]) for c, it in items.items()}
+    assert got == {"EXPERTISE": ("UNLINKED", None, 5, None), "LOGIC": ("UNLINKED", None, 4, None),
+                   "ATTITUDE": ("UNLINKED", None, 5, None), "DELIVERY": ("UNLINKED", None, 3, None)}
+    assert side == {"EXPERTISE": "SYSTEM", "LOGIC": "SYSTEM", "ATTITUDE": "SYSTEM", "DELIVERY": "SYSTEM"}
+    assert U.outcome_counts([{"items": items, "llm": True}])["system_items"] == 4
+    assert U.outcome_counts([{"items": items, "llm": True}])["content_items"] == 0
     with pytest.raises(ValueError):
         checks.settle(_judged(), {"LOGIC": ["SHAPE"]})
     # what settle leaves is exactly what the stored-result rules accept (and the DB constraint: LOW_CONTENT <= 2)
     payload = {**judged, "items": items, "check": {"version": checks.CHECK_VERSION}}
     assert U.reuse_problems(payload, _a()) == []
+
+
+def test_settle_keeps_the_models_own_low_content_and_the_rule_results():
+    """내용 부족 comes only from the answer (rule: TOO_SHORT / no answer) or the model's own 1~2 with no sentence: kept as is."""
+    low = {"score": 2, "evidence_status": "INSUFFICIENT", "insufficient_reason": "LOW_CONTENT", "quote": None, "comment": "사례가 부족하다"}
+    one = {**low, "score": 1}
+    items, side = checks.settle(_judged(EXPERTISE=low, LOGIC=one), {})
+    assert items["EXPERTISE"] == low and items["LOGIC"] == one and side == {}
+    assert checks.find_problems(_judged(EXPERTISE=low, LOGIC=one), ANSWER) == {}
+    counts = U.outcome_counts([{"items": items, "llm": True}])
+    assert (counts["content_items"], counts["system_items"]) == (2, 0)
+
+
+@pytest.mark.parametrize("text", ["", "잘 모르겠습니다"])
+async def test_rule_results_are_kept_at_one_point_and_never_settled(monkeypatch, text):
+    monkeypatch.setattr(get_settings(), "eval_samples", 3)
+    ai = FakeAIClient()
+    a = _a(text)
+    a.is_no_answer = not text
+    payload, _ = await pipeline.evaluate_unit(ai, _Q, a, _POSTING)
+    assert payload["llm_calls"] == 0 and payload["check"]["rule"] is True
+    want = ("NO_ANSWER", None) if not text else ("INSUFFICIENT", "TOO_SHORT")
+    assert {(v["evidence_status"], v["insufficient_reason"], v["score"]) for v in payload["items"].values()} == {(*want, 1)}
+
+
+def test_seal_fresh_turns_a_wrong_quote_into_unlinked_with_the_model_score():
+    wrong_quote = {**_item(5), "quote": {"start": 0, "end": 5, "text": "다른 문장", "sent": 1}}
+    low = {"score": 2, "evidence_status": "INSUFFICIENT", "insufficient_reason": "LOW_CONTENT", "quote": None, "comment": "부족"}
+    payload = _judged(EXPERTISE=wrong_quote, LOGIC=_item(4, "UNLINKED"), ATTITUDE=low)
+    sealed = U.seal_fresh(payload, _a())
+    it = sealed["items"]
+    assert (it["EXPERTISE"]["evidence_status"], it["EXPERTISE"]["insufficient_reason"], it["EXPERTISE"]["score"],
+            it["EXPERTISE"]["quote"]) == ("UNLINKED", None, 5, None)  # never 1 point for an extraction failure
+    assert (it["LOGIC"]["evidence_status"], it["LOGIC"]["score"]) == ("UNLINKED", 4)
+    assert it["ATTITUDE"] == low and it["DELIVERY"] == payload["items"]["DELIVERY"]  # the model's own 내용 부족 and a sound item stay
+    assert U.outcome_counts([{**sealed, "llm": True}])["system_items"] == 2
+    with pytest.raises(pipeline.EvaluationFailed):
+        U.seal_fresh({**payload, "rubric_version": "other"}, _a())
 
 
 # ── the one re-judgement ───────────────────────────────────────────────────────
@@ -142,9 +184,10 @@ async def test_a_failed_unit_is_judged_again_once_with_the_reasons_and_never_mor
     assert "다시 판정할 이유" in ai.calls[-1].messages[0][1]["content"] and "다시 판정할 이유" not in ai.calls[0].messages[0][1]["content"]
     c = payload["check"]
     assert c["rejudged"] is True and c["found"] == {k: ["REASON_SCORE"] for k in ("EXPERTISE", "LOGIC", "ATTITUDE", "DELIVERY")}
-    assert c["side"] == {k: "CONTENT" for k in ("EXPERTISE", "LOGIC", "ATTITUDE", "DELIVERY")}
-    assert {(v["evidence_status"], v["insufficient_reason"], v["score"]) for v in payload["items"].values()} == {
-        ("INSUFFICIENT", "LOW_CONTENT", 2)}
+    # unit-check-2: a reason that contradicts the score is the system side; the model's score (5) stays, no quote shown
+    assert c["side"] == {k: "SYSTEM" for k in ("EXPERTISE", "LOGIC", "ATTITUDE", "DELIVERY")}
+    assert {(v["evidence_status"], v["insufficient_reason"], v["score"], v["quote"]) for v in payload["items"].values()} == {
+        ("UNLINKED", None, 5, None)}
 
 
 async def test_a_consistent_unit_is_not_judged_again(monkeypatch):
@@ -237,9 +280,25 @@ async def test_a_settled_pre_evaluation_is_reused_and_not_judged_again_in_the_fi
     assert await q("SELECT eval_status FROM applications WHERE id=:a", a=app_id) == [("PENDING",)]
 
 
-async def test_content_side_is_scored_low_with_no_transaction_open_and_counted(client, make_client, fake_ai):
+async def test_a_reason_contradicting_the_score_everywhere_holds_the_run_instead_of_scoring_low(client, make_client, fake_ai):
+    """unit-check-2: REASON_SCORE left after the re-judgement is system side (UNLINKED, the model's 5 stays). All of them: held."""
     app_id, _ = await answered(client, make_client)
     fake_ai.responses["evaluate_answer"] = lambda inp, msgs: _out(1, 5, "구체적인 사례가 부족하다")
+    seen = watch_scopes(fake_ai)
+    await submit_and_register(app_id)
+    await drain()
+    assert await q("SELECT eval_status FROM applications WHERE id=:a", a=app_id) == [("PENDING",)]  # held (EVL-06), not scored
+    assert [x for x in seen if x[1] != 0] == []
+    assert await q("SELECT count(*) FROM answer_evaluations") == [(0,)]  # nothing scored low
+    assert await q("SELECT count(*) FROM recruiter_reports WHERE application_id=:a", a=app_id) == [(0,)]
+
+
+async def test_system_side_at_half_is_scored_with_the_model_scores_and_counted(client, make_client, fake_ai):
+    """Two of four criteria with a reason contradicting the score in every unit: 50 % system side, not over the hold ratio.
+    Those two keep the model's score (UNLINKED, no quote), the other two keep their verified quote."""
+    app_id, _ = await answered(client, make_client)
+    bad = {"sent": 1, "comment": "구체적인 사례가 부족하다", "score": 5}
+    fake_ai.responses["evaluate_answer"] = lambda inp, msgs: _out(1, 4, expertise=bad, logic=bad)
     seen = watch_scopes(fake_ai)
     await submit_and_register(app_id)
     await drain()
@@ -247,8 +306,25 @@ async def test_content_side_is_scored_low_with_no_transaction_open_and_counted(c
     assert [x for x in seen if x[1] != 0] == [] and sum(t == "evaluate_answer" for t, _ in seen) == 2 * (UNITS - 1) + 1
     (det,), = await q("SELECT detail FROM recruiter_reports WHERE application_id=:a", a=app_id)
     ev = det["evidence"]
-    assert (ev["system_items"], ev["content_items"], ev["rejudged_units"]) == (0, 16, UNITS - 1)
-    assert ev["check_found"] == {"REASON_SCORE": 16} and ev["unstable_items"] == 0
+    judged = 4 * (UNITS - 1)
+    assert (ev["system_items"], ev["content_items"], ev["rejudged_units"]) == (judged // 2, 0, UNITS - 1)
+    assert ev["check_found"] == {"REASON_SCORE": judged // 2} and ev["unstable_items"] == 0
+    rows = await q("SELECT DISTINCT criterion, evidence_status, insufficient_reason, score, quote IS NULL FROM answer_evaluations "
+                   "WHERE evidence_status <> 'NO_ANSWER' ORDER BY 1")
+    assert {r[1:] for r in rows if r[0] in ("EXPERTISE", "LOGIC")} == {("UNLINKED", None, 5, True)}
+    assert {r[1:] for r in rows if r[0] in ("ATTITUDE", "DELIVERY")} == {("OK", None, 4, False)}
+
+
+async def test_the_models_own_low_score_is_content_side_and_scored(client, make_client, fake_ai):
+    """내용 부족 as the model gave it (1~2, no sentence): kept, not re-judged, counted on the content side."""
+    app_id, _ = await answered(client, make_client)
+    fake_ai.responses["evaluate_answer"] = lambda inp, msgs: _out(0, 2, "구체적인 사례가 부족하다")
+    await submit_and_register(app_id)
+    await drain()
+    assert await q("SELECT eval_status FROM applications WHERE id=:a", a=app_id) == [("DONE",)]
+    (det,), = await q("SELECT detail FROM recruiter_reports WHERE application_id=:a", a=app_id)
+    ev = det["evidence"]
+    assert (ev["system_items"], ev["content_items"], ev["rejudged_units"]) == (0, 16, 0)
     rows = await q("SELECT DISTINCT evidence_status, insufficient_reason, score FROM answer_evaluations WHERE evidence_status <> 'NO_ANSWER'")
     assert rows == [("INSUFFICIENT", "LOW_CONTENT", 2)]
 

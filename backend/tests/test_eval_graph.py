@@ -286,8 +286,10 @@ def test_a_fresh_result_settles_what_still_fails_and_counts_system_and_content_a
     p = _payload(a)
     p["items"]["LOGIC"]["quote"] = {"start": 0, "end": 5, "text": "다른 문장", "sent": 1}  # not a span of the answer
     sealed = U.seal_fresh(p, a)
-    assert sealed["items"]["LOGIC"] == {**p["items"]["LOGIC"], "score": 1, "evidence_status": "INSUFFICIENT",
-                                        "insufficient_reason": "QUOTE_MISMATCH", "quote": None}
+    # unit-check-2 (PR #2 review): an unverified quote is UNLINKED with the model's score, never 1 point
+    assert sealed["items"]["LOGIC"] == {**p["items"]["LOGIC"], "evidence_status": "UNLINKED", "insufficient_reason": None,
+                                        "quote": None}
+    assert sealed["items"]["LOGIC"]["score"] == p["items"]["LOGIC"]["score"]
     with pytest.raises(EvaluationFailed):
         U.seal_fresh({**_payload(a), "rubric_version": "rubric-v1"}, a)
     low = {"score": 2, "evidence_status": "INSUFFICIENT", "insufficient_reason": "LOW_CONTENT", "quote": None, "comment": ""}
