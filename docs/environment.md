@@ -44,7 +44,7 @@
 | `snowflake-arctic-embed2` | Ollama | 1.2 GB | Apache-2.0 | 임베딩 후보 |
 | `openai/whisper-large-v3-turbo` | `~/.cache/huggingface` (transformers 형식) | 1.6 GB | MIT | faster-whisper용 CTranslate2 변환본은 없음 |
 
-PRD 11.2(X-11)가 언급한 Qwen3-8B, BGE-M3는 디스크에 없다. 다운로드 여부와 실측 결과는 `docs/trd/05-ai-pipeline.md`와 `docs/adr/`에 기록한다.
+PRD 11.2(X-11)가 언급한 Qwen3-8B, BGE-M3는 디스크에 없다. 다운로드 여부와 실측 결과는 `docs/TRD.md` 5장과 `docs/adr/`에 기록한다.
 
 ## 5. 이 환경에서 할 수 없는 검증
 

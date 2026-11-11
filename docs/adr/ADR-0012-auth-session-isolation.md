@@ -2,7 +2,7 @@
 - 상태: 채택 — 가입 중복 이메일 처리(OQ-34)만 채택(임시)
 - 날짜: 2026-10-27
 - 작성: 에이전트 E / 통합 F
-- 관련: USR-01~07, SEC-03·04·05, ADM-07, AC-01~05·19, R-15·16, OQ-34, consolidation-round1 T1·T21·T25, ADR-0011, TRD `07-security.md` 3~5절
+- 관련: USR-01~07, SEC-03·04·05, ADM-07, AC-01~05·19, R-15·16, OQ-34, consolidation-round1 T1·T21·T25, ADR-0011, TRD `docs/TRD.md` 7장 3~5절
 
 ## 맥락
 

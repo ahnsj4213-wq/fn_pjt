@@ -71,7 +71,7 @@ export function Page({ title, narrow = false, children }: { title: string; narro
   );
 }
 
-/** Placeholder body for screens that wait on the API contract (docs/trd/04, 06). */
+/** Placeholder body for screens that wait on the API contract (docs/TRD.md ch.4, 6). */
 export function TodoPanel({ featureIds, children }: { featureIds: string[]; children?: ReactNode }) {
   return (
     <div className={s.todo} data-testid="todo-panel">

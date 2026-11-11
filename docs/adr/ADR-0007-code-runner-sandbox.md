@@ -2,7 +2,7 @@
 - 상태: 채택(임시) — 샌드박스 미검증 시 면접 시작 차단은 팀 확인(OQ-32), 운영 런타임은 운영 호스트 SBX 통과 전까지 미검증
 - 날짜: 2026-10-27
 - 작성: 에이전트 E / 통합 F
-- 관련: COD-03·04·05·06, RULE-6.5, RULE-6.6, AC-15, INT-14, R-06·07, OQ-14·32, consolidation-round1 C1·C8·T1·T13, ADR-0001·0010·0011, TRD `07-security.md` 13절
+- 관련: COD-03·04·05·06, RULE-6.5, RULE-6.6, AC-15, INT-14, R-06·07, OQ-14·32, consolidation-round1 C1·C8·T1·T13, ADR-0001·0010·0011, TRD `docs/TRD.md` 7장 13절
 
 ## 맥락
 

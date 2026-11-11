@@ -1,7 +1,7 @@
 """Initial schema: accounts, postings, applications (3 separate states), interview snapshots,
 coding, evaluation, decisions, audit, durable job queue.
 
-Source: docs/trd/03-data-model.md (derived from agent B proposal + review round 1).
+Source: docs/TRD.md 3장 (derived from agent B proposal + review round 1).
 Revision ID: 0001
 """
 from alembic import op
@@ -709,7 +709,7 @@ CREATE TRIGGER t_posting_coding_lock BEFORE UPDATE ON job_postings
   FOR EACH ROW EXECUTE FUNCTION guard_posting_coding_lock();
 """
 
-# Allowed transitions (docs/trd/03-data-model.md 4절). '-' = NULL. B1/B2 extensions are flagged in open-questions.
+# Allowed transitions (docs/TRD.md 3장 4절). '-' = NULL. B1/B2 extensions are flagged in open-questions.
 TRANSITIONS = {
     "ATTEMPT": [
         ("READY", "PREPARING"), ("PREPARING", "READY"), ("PREPARING", "INTERVIEWING"),

@@ -1,17 +1,18 @@
 # 작업 인수인계 (2026-10-28, AI 서비스·작업 핸들러·음성 런타임·지원자 화면·보관 삭제·탈퇴·오프라인 시험 반영)
 
-온프레미스 AI 채용 플랫폼. 기준 문서는 `통합 PRD.pdf`(저장소에 없음, 추출본은 `docs/prd/`). 이 문서만 읽고 이어서 진행할 수 있도록 현재 상태·검증 결과·다음 할 일을 적었다.
+온프레미스 AI 채용 플랫폼. 기준 문서는 `docs/PRD.md`·`docs/TRD.md`(둘 다 v2.0, 2026-11-11). 이 문서만 읽고 이어서 진행할 수 있도록 현재 상태·검증 결과·다음 할 일을 적었다.
 
 ## 1. 먼저 읽을 문서 (순서대로)
 
-1. `docs/design/consolidation-round1.md` — 설계 통합 결정(Critical 8건 판정, 임시 결정 T1~T27). **모든 설계안·리뷰보다 우선한다.**
+1. `docs/PRD.md` — PRD v2.0(한 파일). 무엇을·왜 만드는지, 기능 ID·인수 기준·남은 확인 사항(14절)
+1-1. `docs/design/consolidation-round1.md` — 초기 설계 통합 결정(T1~T27). 이후 결정은 ADR이 우선한다.
 2. `docs/requirements-traceability.md` — PRD 요구사항·AC-01~22 추적표(상태 칸은 Phase 0 기준이라 갱신 필요, 6절 참고)
-3. `docs/trd/01~08` — TRD. 03(데이터 모델)과 04(API 계약)가 구현 기준
-4. `docs/adr/` — ADR 0001~0012
+3. `docs/TRD.md` — TRD v2.0(한 파일). 3장(데이터 모델)과 4장(API 계약)이 구현 기준
+4. `docs/adr/` — ADR 0001~0027
 5. `docs/open-questions.md`(OQ-01~39), `docs/risks.md`, `docs/data-retention.md`(보관 기간 잠정안)
 6. `prototypes/README.md` — 이 장비(GTX 1660 SUPER 6GB) 실측 결과
 
-설계 과정 기록: `docs/design/proposals/`(에이전트 A~E 독립 설계안), `docs/design/reviews/`(상호 리뷰 1라운드).
+설계 과정 기록: `docs/design/consolidation-round1.md`(1라운드 통합 결정)와 `docs/adr/`. 초기 독립 설계안·상호 리뷰 원문은 git 이력에만 있다(2026-11-11 삭제).
 
 ## 2. 확정된 구성 (요약)
 

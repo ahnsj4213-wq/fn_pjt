@@ -1,5 +1,5 @@
 """Recruiter application endpoints (ADM-01~08, RES-08, RPT-02, AC-03, AC-20). Every query is company-scoped.
-Contract: docs/trd/04-api-contract.md 4.2·4.3."""
+Contract: docs/TRD.md 4장 4.2·4.3."""
 from datetime import date
 from pathlib import Path
 from uuid import UUID

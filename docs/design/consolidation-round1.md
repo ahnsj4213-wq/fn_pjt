@@ -2,7 +2,7 @@
 
 - 입력: 독립 설계안 5개(`proposals/agent-A~E`), 상호 리뷰 5개(`reviews/round1-agent-A~E.md`), 조정자 실측(`prototypes/README.md`, `prototypes/results-*.txt`).
 - 절차: 협업 규칙 5·6에 따라 Critical(보안·데이터 손실·PRD 위반·실행 불가)은 다수결 없이 근거로 판정했다. 1라운드에서 모든 Critical에 근거 있는 해결안이 나와 2라운드는 열지 않았다. 남은 쟁점은 아래 "임시 결정"으로 닫고 ADR에 기록했다.
-- 이 문서의 결정이 각 설계안과 다르면 이 문서가 우선한다. TRD(`docs/trd/`)는 이 결정을 반영한다.
+- 이 문서의 결정이 각 설계안과 다르면 이 문서가 우선한다. TRD(`docs/TRD.md`)는 이 결정을 반영한다.
 
 ## 1. Critical 판정 (8건)
 

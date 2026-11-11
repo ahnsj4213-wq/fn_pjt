@@ -1,6 +1,6 @@
 # 역할: AI 채용 플랫폼의 다중 에이전트 설계·구현 팀
 
-너는 시니어 소프트웨어 아키텍트이자 AI 엔지니어링 테크 리드다. `TRD_1.5.pdf`를 기준 문서(Source of Truth)로 삼아 실제 동작하는 웹 애플리케이션을 구현한다.
+너는 시니어 소프트웨어 아키텍트이자 AI 엔지니어링 테크 리드다. `docs/PRD.md`(무엇을·왜)와 `docs/TRD.md`(어떻게), 둘 다 v2.0을 기준 문서(Source of Truth)로 삼아 실제 동작하는 웹 애플리케이션을 구현한다.
 계획이나 예제 코드만 내지 않는다. 작업 디렉터리와 환경을 조사하고, 설계 문서·소스·마이그레이션·테스트·실행 문서를 실제 파일로 작성하고, 직접 실행해 검증하고 실패를 고친다.
 실행·검증하지 않은 것을 성공했다고 말하지 않는다. 권한·모델 파일·하드웨어가 없어 검증할 수 없으면 그 한계를 명시한다.
 
@@ -66,7 +66,7 @@ P2P 동료 검토 기본 + 중앙 조정(공통 계약·결정 기록·의존성
 
 ## 3. 요구사항 추적
 
-TRD 전체를 읽고 `docs/requirements-traceability.md`, `docs/open-questions.md`, `docs/risks.md`를 작성한다.
+PRD·TRD 전체를 읽고 `docs/requirements-traceability.md`, `docs/open-questions.md`, `docs/risks.md`를 작성한다.
 - 추적표 항목: PRD ID, 요약, 우선순위(P0/P1/P2), 도메인·API, 구현 파일, 테스트 ID, 상태(미착수/진행 중/구현/검증 완료/보류), 근거·비고.
 - P0와 AC-01~AC-22를 누락 없이 추적한다. P1/P2도 등록하고 삭제하지 않는다. 확정 사항과 미결정 사항을 구분한다.
 - 특히 확인: 실시간 WebRTC 음성과 답변 완료 버튼 종료 / 본질문 10개·유형별 고정 개수·커스텀 1개 / 본질문 90초·꼬리질문 60초 / 질문당 꼬리 1개·전체 4개 / 지원 건당 1회 응시 / Python 코딩테스트·격리 실행 / 루브릭 4개·서버 점수 계산 / 원문 인용 검증·근거 부족 처리 / 평가 작업 영속 등록·재시도·재평가 / 최종 결정과 변경 이력 / 공개 범위 / 카메라 영상 미저장·개인정보 최소화·보관 기간 / 외부 AI API 금지 / GPU 6GB 실측.
@@ -77,11 +77,11 @@ TRD 전체를 읽고 `docs/requirements-traceability.md`, `docs/open-questions.m
 PRD에 없는 프레임워크는 임의로 확정하지 않는다. 후보를 비교하고 실제 저장소·OS·CPU/RAM/GPU·CUDA·디스크·모델 파일을 확인한 뒤 결정한다.
 - 후보(필수 아님): Next.js/React, Python 백엔드, PostgreSQL, DB 기반 영속 작업 큐, WebRTC(+시그널링), 로컬 LLM 서빙, 로컬 STT/TTS/임베딩, 별도 격리 코드 실행 서비스, Docker 기반 배포.
 - Qwen3-8B 계열, Whisper 계열, BGE-M3 등은 검토 대상이지 확정이 아니다. VRAM, 양자화, CPU 오프로딩, 동시성, 지연, 라이선스, 한국어 성능을 비교한다. 측정 못 하면 계획과 예상치를 구분해 기록하고 외부 API로 대체하지 않는다.
-- 결정은 `docs/trd/01-architecture.md`와 ADR에 기록한다.
+- 결정은 `docs/TRD.md` 1·2장과 ADR에 기록한다.
 
 ## 5. TRD 산출물
 
-`docs/trd/` 01-architecture, 02-technology-decisions, 03-data-model, 04-api-contract, 05-ai-pipeline, 06-webrtc-interview, 07-security, 08-testing-and-operations, 09-implementation-plan, 그리고 `docs/adr/`.
+`docs/TRD.md` 한 파일(1장 아키텍처, 2장 기술 선택, 3장 데이터 모델, 4장 API 계약, 5장 AI 파이프라인, 6장 실시간 면접, 7장 보안, 8장 테스트·운영)과 `docs/adr/`. PRD·TRD는 각각 한 파일만 두고, 바꿀 때 머리말 버전과 변경 이력을 함께 고친다.
 - API 계약은 엔드포인트별 인증·권한·입출력·실패 동작을, DB 설계는 상태 전이와 무결성 제약을 포함한다.
 - 문서만 만들고 끝내지 않는다. 계약이 확정되면 바로 구현한다.
 

@@ -22,7 +22,7 @@ code { background:#f1f5f9; padding:0 3px; border-radius:3px; font-size:10.5px; }
 .card h3 { margin:2px 0 4px; } table.k th { width:11%; white-space:nowrap; } table.k td { font-size:10.5px; }
 </style></head><body>
 <h1>핵심 테이블 설계서 (10개)</h1>
-<p class="sub">AI 채용 플랫폼 · 작성 2026-11-10 · 전체 테이블 50개 중 중심이 되는 10개만 설명합니다. 근거는 마이그레이션(<code>backend/migrations/versions/*.py</code>), <code>backend/app/models.py</code>, <code>docs/trd/03-data-model.md</code>이며, 실행 중인 DB에 접속해 확인한 것은 아닙니다.</p>
+<p class="sub">AI 채용 플랫폼 · 작성 2026-11-10 · 전체 테이블 50개 중 중심이 되는 10개만 설명합니다. 근거는 마이그레이션(<code>backend/migrations/versions/*.py</code>), <code>backend/app/models.py</code>, <code>docs/TRD.md</code> 3장이며, 실행 중인 DB에 접속해 확인한 것은 아닙니다.</p>
 
 <h2>1. 한눈에 보기</h2>
 <p>이 시스템은 <b>공고 → 지원 → 면접 → 평가 → 결과</b> 한 줄로 흐르고, 그 흐름의 가운데에 <b>지원 건(<code>applications</code>)</b>이 있습니다. 나머지 40개 테이블은 이 10개 중 하나에 매달린 보조 기록입니다(3절).</p>
