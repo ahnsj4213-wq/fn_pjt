@@ -59,7 +59,8 @@ class Settings(BaseSettings):
     interject_enabled: bool = False  # the interviewer cutting into a long answer; out of scope (PRD SCOPE-9.2)
     # upfront = all main questions composed, checked and voiced (tts_pregen) before the interview: moving to the next main
     # question needs no model call (ADR-0025). live (the default since 2026-11-10) = only the first main question before the interview,
-    # each later one composed when it is reached (ADR-0022): 10~40 s of composition inside the interview on a 6 GB GPU.
+    # each later one composed in the background while the one before it is answered (live.prefetch), or when it is
+    # reached if that did not finish (ADR-0022): 10~40 s of composition per question on a 6 GB GPU.
     question_mode: str = Field("live", pattern="^(live|upfront)$")  # live: first question before, the rest during the interview (ADR-0022, 2026-11-10)
     live_compose_timeout_seconds: float = 45.0  # a slower composition takes the question bank instead
     tts_playout_guard_seconds: float = 0.3
