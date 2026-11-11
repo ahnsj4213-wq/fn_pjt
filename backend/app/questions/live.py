@@ -2,13 +2,14 @@
 
 Before the interview the composition graph writes only the first main question and keeps the plan (area, custom text, mode per
 seq) on the question set. When every question so far is answered (and the follow-up decision of the last one is made), the
-interview graph calls `ensure_next`, which composes the next slot of the plan with the same sources as before — the resume (T3),
+interview graph's `compose_next` node (interview/graph.py) calls `ensure_next`, which composes the next slot of the plan with the same sources as before — the resume (T3),
 the company documents (T2 with the corrective RAG loop), code-made common questions — plus what the candidate has just said: the
 latest answers steer the document search and which resume item is asked about.
 
 Rules kept from up-front composition: the counts per area come from the plan (QST-02's 10 questions by type), a question once
-written is never changed (QST-06), a failed or slow generation falls back to a code-made question (QST-07), and every question is
-checked against the ones already asked.
+written is never changed (QST-06), every generated question passes the quality gate with at most one regeneration
+(questions/quality.py), a failed or slow generation falls back to a code-made question (QST-07), and every question is checked
+against the ones already asked.
 
 Composing ahead (2026-11-10): composition on a 6 GB GPU takes 10~40 s, so `prefetch` starts the next main question as soon as the
 current one is shown, while the candidate is still answering it. That question is steered by the answers before the current one;

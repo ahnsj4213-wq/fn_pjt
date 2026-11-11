@@ -10,8 +10,11 @@ the payload is checked as well, because the answer text it was made from can cha
 - RUBRIC_VERSION  made under another rubric version than the one this run records (evaluation_runs.rubric_version)
 - STALE           a rule result (답변 없음, 매우 짧은 답변) the answer as it is now would not get
 - QUOTE_MISMATCH  an OK quote that is not the same span of the answer text as it is now
-- UNLINKED        a score of 3 or more without a sentence of the answer (근거 미연결)
-Any of these: the unit is evaluated again (once per run, graph.py).
+- UNLINKED        a score of 3 or more without a sentence of the answer (근거 미연결), in a result that did not go through the
+                  verification loop of this version (checks.CHECK_VERSION). A settled UNLINKED was already re-judged once and
+                  is reused as it is.
+Any of these: the unit is evaluated again (once per run, graph.py). The checks of a fresh judgement (score-reason-evidence,
+spread of the samples, the one re-judgement) are in checks.py and run inside evaluate_unit, for pre_evaluate and the final run alike.
 
 What the outcome of an item means (requirement 1 of the evaluation graph):
 - system side  UNLINKED, INSUFFICIENT/QUOTE_MISMATCH, INSUFFICIENT/NO_EVIDENCE: the evidence could not be linked or verified.
@@ -25,11 +28,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import rubric
 from app.ai.client import AIClient
-from app.ai.tasks.evaluate import LINK_MIN_SCORE
 from app.ai.textrules import is_short_or_no_content
 from app.core.config import get_settings
 from app.core.constants import CRITERIA
 from app.core.db import session_scope
+from app.evaluation import checks
 from app.evaluation.pipeline import EvaluationFailed, evaluate_unit
 from app.models import AnswerPreEvaluation, Application, InterviewAnswer, InterviewQuestion, JobPosting
 
@@ -40,23 +43,13 @@ REUSE_ORDER = ("SHAPE", "RUBRIC_VERSION", "STALE", "QUOTE_MISMATCH", "UNLINKED")
 
 
 def _item_problem(item: dict, text: str) -> str | None:
-    st, sc, q, reason = item.get("evidence_status"), item.get("score"), item.get("quote"), item.get("insufficient_reason")
-    if st not in STATUSES or not isinstance(sc, int) or isinstance(sc, bool) or not 1 <= sc <= 5:
-        return "SHAPE"
-    if st == "OK":
-        if not q:
-            return "UNLINKED" if sc >= LINK_MIN_SCORE else "SHAPE"
-        s, e = q.get("start"), q.get("end")
-        if not isinstance(s, int) or not isinstance(e, int) or not 0 <= s < e <= len(text) or text[s:e] != q.get("text"):
-            return "QUOTE_MISMATCH"
-        return None
-    if st == "UNLINKED":
-        return "SHAPE" if q else ("UNLINKED" if sc >= LINK_MIN_SCORE else None)
-    if st == "INSUFFICIENT":
-        if reason == "LOW_CONTENT":
-            return None if sc <= 2 else "SHAPE"
-        return None if reason in ("TOO_SHORT",) + SYSTEM_REASONS and sc == 1 else "SHAPE"
-    return None if sc == 1 else "SHAPE"  # NO_ANSWER
+    p = checks.item_problem(item, text)
+    return "UNLINKED" if p == "NO_EVIDENCE" else p
+
+
+def settled(payload: dict) -> bool:
+    """Made by the verification loop of this version (checks.py): what is left in it was decided there, not a fault."""
+    return (payload.get("check") or {}).get("version") == checks.CHECK_VERSION
 
 
 def reuse_problems(payload: dict | None, answer: InterviewAnswer) -> list[str]:
@@ -77,6 +70,8 @@ def reuse_problems(payload: dict | None, answer: InterviewAnswer) -> list[str]:
         found.add("STALE")
     for it in items.values():
         p = _item_problem(it, text) if isinstance(it, dict) else "SHAPE"
+        if p == "UNLINKED" and settled(payload):
+            continue  # already re-judged once and settled as 근거 미연결: evaluating it again would only repeat that
         if p:
             found.add(p)
     return [p for p in REUSE_ORDER if p in found]
@@ -114,6 +109,20 @@ def outcome_counts(payloads: list[dict]) -> dict:
             elif st == "NO_ANSWER":
                 no_answer += 1
     return {"judged_items": judged, "system_items": system, "content_items": content, "no_answer_items": no_answer}
+
+
+def check_counts(payloads: list[dict]) -> dict:
+    """What the verification loop (checks.py) did, counts only: units re-judged, reason codes found before the re-judgement,
+    criteria left unstable. Results made before the loop existed count nothing."""
+    rejudged, unstable, found = 0, 0, {}
+    for p in payloads:
+        c = p.get("check") or {}
+        rejudged += bool(c.get("rejudged"))
+        unstable += sum("UNSTABLE" in codes for codes in (c.get("left") or {}).values())
+        for codes in (c.get("found") or {}).values():
+            for code in codes:
+                found[code] = found.get(code, 0) + 1
+    return {"rejudged_units": rejudged, "unstable_items": unstable, "check_found": found}
 
 
 async def load_unit(answer_id: UUID) -> tuple[InterviewQuestion, InterviewAnswer, JobPosting, Application]:

@@ -1,12 +1,15 @@
 """T2 question_generate (QST-01 bank top-up for COMPANY/JOB) and T3 resume_question (QST-03, AC-07).
 
-Generation attempts: at most 2 (one regeneration, T17/QST-07). The task returns only questions that passed the
-checks — possibly fewer than requested; the composer fills the rest by code (posting/experience fallbacks).
+One model answer per request (2026-11-11, T2 1.9.0 / T3 1.7.0): the task checks the answer and returns the questions that passed
+(maybe fewer than requested) together with the ones that failed and their failure codes (`failed`, at most FEEDBACK_MAX). The
+one regeneration is the composer's second request (questions/quality.py): its input carries `feedback` (the failed questions
+and their codes), rendered by `feedback_block`, and `existing` (the questions already picked). There is no regeneration inside the
+task any more, so a composition makes at most 2 requests x (1 + format_retries) model calls per area. `last_chance` (the second
+request) relaxes the rules a question made from the posting may break instead of a document (NEEDS_DOCUMENT, YES_NO).
 
-Regeneration (2026-11-10, T2 1.8.0 / T3 1.6.0): the questions that passed in the first answer are kept; the regeneration names
-each failed question with its failure codes (CHECK_TEXT) and asks only for the missing number. Every dropped question has a code
-(quote mismatch, unsupported term, shape, copied example, duplicate, same basis, level/type problems, and the clarity rules of
-textrules qc-1: foreign script, stacked conditions); the counts per code are returned in the flags (`rejects`), never the text.
+Every dropped question has a code (quote mismatch, unsupported term, shape, copied example, duplicate, same basis, level/type
+problems, and the clarity rules of textrules qc-1: foreign script, stacked conditions); the counts per code are returned in the
+flags (`rejects`), never the text.
 """
 import re
 from typing import Literal
@@ -115,32 +118,37 @@ CHECK_TEXT = {
     "YES_NO": "예·아니오로 답할 수 있는 질문은 안 된다. 무엇을 어떻게, 왜 했는지 묻는다.",
     "FOREIGN_SCRIPT": "한자·일본어 등 외국 문자를 섞지 말고 한국어로만 쓴다(기술 이름의 영문은 된다).",
     "NESTED": "질문 하나에 물음 하나, 조건은 하나까지만 둔다.",
+    "UNGROUNDED": "이력서·회사 자료·공고에 실제로 적힌 일(기간·학교·회사 이름이 아닌 한 일)을 근거로 묻는다.",
+    "NOT_CONCRETE": "회사 자료에 적힌 구체적인 이름·과제를 질문에 넣는다.",
+    "SAME_DOCUMENT": "질문마다 다른 회사 자료를 쓴다.",
+    "RAG_COPY": "참고 예시 질문을 베끼지 않는다.",
 }
+FEEDBACK_MAX = 6
 
 
-def _earlier(ctx: dict, p) -> list[dict]:
-    """Questions that passed in the earlier answers of this call (run_task keeps one ctx per call). They stay: a regeneration asks
-    only for what is missing instead of throwing them away with the rest."""
-    return [v for q, new, _codes in ctx.get("answers", []) if q is not p for v in new]
-
-
-def _remember(ctx: dict, p, new: list[dict], codes: list[tuple[int, list[str]]]) -> dict:
-    """Record this answer's accepted questions and failure codes (a check runs twice on the last answer: final=False, then True)."""
-    ctx["answers"] = [a for a in ctx.get("answers", []) if a[0] is not p] + [(p, new, codes)]
+def _counts(codes: list[tuple[int, list[str]]]) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for _q, _new, cs in ctx["answers"]:
-        for _i, per in cs:
-            for c in per:
-                counts[c] = counts.get(c, 0) + 1
+    for _i, per in codes:
+        for c in per:
+            counts[c] = counts.get(c, 0) + 1
     return counts
 
 
-def regen_feedback(codes: list[tuple[int, list[str]]], passed: list[int], kept: int, missing: int, rules: str = "") -> str:
-    """The one regeneration: which question of the last answer failed and why (by code), and how many new ones are wanted."""
-    lines = [f"- {i}번 질문: " + " ".join(f"[{c}] {CHECK_TEXT.get(c, '')}".strip() for c in per) for i, per in codes]
-    keep = f"통과한 질문({', '.join(f'{i}번' for i in passed)})은 그대로 쓴다. " if passed else ""
-    return (f"검증을 통과한 질문이 {kept}개다. {keep}아래 질문은 빠졌다.\n" + "\n".join(lines) +
-            f"\n{rules}통과한 질문과 다른 새 질문 {missing}개만 만들어라. 통과한 질문은 다시 쓰지 마라.")
+def feedback_block(inp: dict, nonce: str) -> str:
+    """The regeneration (the composer's second request): the questions of the first request that failed, each with its failure
+    codes and what the code asks for, and the questions already picked (not to be made again)."""
+    fb = [f for f in inp.get("feedback") or [] if isinstance(f, dict) and f.get("text")][:FEEDBACK_MAX]
+    if not fb:
+        return ""
+    reasons = "\n".join(f"- {n}번: " + " ".join(f"[{c}] {CHECK_TEXT.get(c, '')}".strip() for c in f.get("codes") or [])
+                        for n, f in enumerate(fb, start=1))
+    texts = "\n".join(f"{n}. {f['text']}" for n, f in enumerate(fb, start=1))
+    out = ("\n직전 시도에서 아래 질문은 검증을 통과하지 못해 빠졌다. 이유를 고쳐 새 질문을 만들어라. 같은 질문을 다시 쓰지 마라.\n"
+           + fence("REJECTED", texts, nonce) + "\n" + reasons)
+    existing = [e for e in inp.get("existing") or [] if isinstance(e, str) and e]
+    if existing:
+        out += "\n이미 정해진 질문(다시 쓰지 않는다):\n" + fence("PICKED", "\n".join(existing), nonce)
+    return out
 
 
 # ── T2 ─────────────────────────────────────────────────────────────────────────
@@ -157,12 +165,12 @@ class GenOut(BaseModel):
 
 class QuestionGenerate(TaskSpec):
     name = "question_generate"
-    version = "question_generate@1.8.0"
+    version = "question_generate@1.9.0"
     format_retries = 1  # llama.cpp grammar keeps the JSON valid; one repair (a cut answer) is enough
     lane = "INTERACTIVE"
     temperature = 0.7
     num_predict = 500
-    regen_limits = {"gen": 1}
+    regen_limits: dict = {}  # the regeneration is the composer's second request (questions/quality.py)
     out_model = GenOut
     system = ("너는 채용 면접 질문 작성기다. 주어진 공고·회사 소개·회사 자료에 실제로 적힌 내용만 근거로, 요청한 유형(COMPANY=회사의 프로젝트·기술과 "
               "지원자의 관심 연결, JOB=직무 지식·업무 수행)의 면접 질문을 만든다. 질문은 짧고 쉬운 한국어 한 문장(맨 앞에 주어진 지원자 수준의 글자 수 이내, 한자·외국 문자 없이), "
@@ -210,12 +218,11 @@ class QuestionGenerate(TaskSpec):
         used = [b for b in inp.get("used_basis") or [] if b]
         if used:
             user += "\n이미 쓴 근거(다시 근거로 쓰지 않는다):\n" + fence("USED", "\n".join(used), nonce)
-        return _level_block(inp) + user + examples_block(inp, nonce), {}
+        return _level_block(inp) + user + examples_block(inp, nonce) + feedback_block(inp, nonce), {}
 
     def check(self, inp: dict, p: GenOut, ctx: dict, final: bool) -> Check:
-        # `last_chance` (the second search round of the corrective RAG loop): no regeneration inside this call either, so the
-        # relaxed rules of the last attempt apply at once (compose's worst case stays at 1 + 1 + 1 generations, see rag_graph).
-        final = final or bool(inp.get("last_chance"))
+        # `last_chance` (the composer's second request, with the feedback): the relaxed rules of the last attempt.
+        final = bool(inp.get("last_chance"))
         parts, n = self._parts(inp), int(inp.get("n", 3))
         src = "\n".join(t for _, t in parts)
         level = inp.get("level") or "JUNIOR"
@@ -224,15 +231,12 @@ class QuestionGenerate(TaskSpec):
         # concrete; they do not decide its purpose or difficulty (ADR-0025): a new graduate's basic question may come from the posting.
         must_use_docs = ((inp["kind"] == "COMPANY" or level != "NEW")
                          and any(not k.get("shared") for k in inp.get("knowledge") or []))
-        kept = _earlier(ctx, p)
-        advanced_left = (sum(1 for d in inp.get("difficulties") or [] if d == "ADVANCED") if inp.get("difficulties") else n) \
-            - sum(1 for v in kept if v["difficulty"] == "ADVANCED")
+        advanced_left = sum(1 for d in inp.get("difficulties") or [] if d == "ADVANCED") if inp.get("difficulties") else n
         existing = list(inp.get("existing") or [])
         used_basis = [_compact(b) for b in inp.get("used_basis") or [] if b]
-        valid: list[dict] = list(kept)
-        new: list[dict] = []
+        valid: list[dict] = []
         codes: list[tuple[int, list[str]]] = []
-        passed: list[int] = []
+        failed: list[dict] = []
         for no, q in enumerate(p.questions, start=1):
             if len(valid) >= n:
                 break
@@ -241,18 +245,12 @@ class QuestionGenerate(TaskSpec):
                                     advanced_left)
             if bad:
                 codes.append((no, bad))
+                failed.append({"text": text[:QUESTION_MAX * 2], "codes": bad})
                 continue
             advanced_left -= item["difficulty"] == "ADVANCED"
             valid.append(item)
-            new.append(item)
-            passed.append(no)
-        counts = _remember(ctx, p, new, codes)
-        flags = {"valid": len(valid), "kept": len(kept), "rejects": counts}
-        if len(valid) < n and not final:
-            rules = "basis_quote는 원문 그대로, 회사 자료가 있으면 회사 자료 문장에서 고르고(질문마다 다른 자료), " if must_use_docs else \
-                "basis_quote는 원문 그대로 복사하고, "
-            return Check(feedback={"gen": regen_feedback(codes, passed, len(valid), n - len(valid), rules)}, flags=flags)
-        return Check(output={"questions": valid}, flags=flags)
+        flags = {"valid": len(valid), "rejects": _counts(codes)}
+        return Check(output={"questions": valid, "failed": failed[:FEEDBACK_MAX]}, flags=flags)
 
     def _judge(self, inp: dict, text: str, quote: str, parts: list, src: str, level: str, must_use_docs: bool, final: bool,
                existing: list[str], used_basis: list[str], valid: list[dict], advanced_left: int) -> tuple[list[str], dict | None]:
@@ -297,6 +295,16 @@ class QuestionGenerate(TaskSpec):
 
 
 # ── T3 ─────────────────────────────────────────────────────────────────────────
+# The fields of a resume row a question can be about: the work itself, not when or where it happened (2026-11-11: a question
+# "<학교> 과정에서 2016-2020 경험에 대해 여쭙겠습니다" was grounded in a period).
+_NO_WORK_FIELD = re.compile(r"\.(period|date|degree|issuer|name|school|major|company|role|title)$")
+
+
+def is_work_evidence(field: str | None, text: str | None) -> bool:
+    """A resume quote a question may stand on: from a field that describes work, with a word that is not a number or a date."""
+    words = {t for t in content_tokens(text or "") if not t.replace("-", "").replace(".", "").replace("~", "").isdigit()}
+    return bool(words) and not _NO_WORK_FIELD.search(field or "")
+
 class _Ev(BaseModel):
     model_config = ConfigDict(extra="forbid")
     field: str = Field(max_length=80)
@@ -340,11 +348,12 @@ def flatten_resume(resume: dict) -> tuple[str, list[tuple[str, int, int]]]:
 
 class ResumeQuestion(TaskSpec):
     name = "resume_question"
-    version = "resume_question@1.6.0"
+    version = "resume_question@1.7.0"
+    format_retries = 1  # as T2: the grammar keeps the JSON valid (2026-11-11: was 2; bounds the model calls per request)
     lane = "INTERACTIVE"
     temperature = 0.5
     num_predict = 500
-    regen_limits = {"gen": 1}
+    regen_limits: dict = {}  # the regeneration is the composer's second request (questions/quality.py)
     out_model = ResQOut
     system = ("너는 이력서 기반 면접 질문 작성기다. 이력서에 실제로 적힌 경험·프로젝트만 근거로, 지원자의 역할·행동·결과를 확인하는 질문을 "
               "3개 만든다. 질문은 짧고 쉬운 한 문장(맨 앞에 주어진 지원자 수준의 글자 수 이내)이고, 핵심 목적 하나만 묻는다.\n"
@@ -363,18 +372,16 @@ class ResumeQuestion(TaskSpec):
                 f"이력서 표준 항목:\n{fence('RESUME', flat, nonce)}{examples_block(inp, nonce)}")
         if inp.get("shared_terms"):
             user += f"\n공고와 이력서의 공통 항목: {', '.join(inp['shared_terms'])}"
-        return _level_block(inp) + user, {"flat": flat, "ranges": ranges}
+        return _level_block(inp) + user + feedback_block(inp, nonce), {"flat": flat, "ranges": ranges}
 
     def check(self, inp: dict, p: ResQOut, ctx: dict, final: bool) -> Check:
         flat, ranges, n = ctx["flat"], ctx["ranges"], int(inp.get("n", 2))
         level = inp.get("level") or "JUNIOR"
-        kept = _earlier(ctx, p)  # passed in the answer before the regeneration: kept, only the rest is asked again
-        advanced_left = (sum(1 for d in inp.get("difficulties") or [] if d == "ADVANCED") if inp.get("difficulties") else n) \
-            - sum(1 for v in kept if v["difficulty"] == "ADVANCED")
-        valid: list[dict] = list(kept)
-        new: list[dict] = []
+        final = bool(inp.get("last_chance"))  # the composer's second request: the relaxed rules of the last attempt
+        advanced_left = sum(1 for d in inp.get("difficulties") or [] if d == "ADVANCED") if inp.get("difficulties") else n
+        valid: list[dict] = []
         codes: list[tuple[int, list[str]]] = []
-        passed: list[int] = []
+        failed: list[dict] = []
         for no, q in enumerate(p.questions, start=1):
             if len(valid) >= n:
                 break
@@ -382,21 +389,15 @@ class ResumeQuestion(TaskSpec):
             bad, item = self._judge(inp, text, q.evidence, flat, ranges, level, final, valid, advanced_left)
             if bad:
                 codes.append((no, bad))
+                failed.append({"text": text[:QUESTION_MAX * 2], "codes": bad})
                 continue
             advanced_left -= item["difficulty"] == "ADVANCED"
             valid.append(item)
-            new.append(item)
-            passed.append(no)
-        counts = _remember(ctx, p, new, codes)
         shared = set(inp.get("shared_terms") or [])
         valid.sort(key=lambda v: not (shared & content_tokens(v["text"])))  # stable: what posting and resume share comes first
         valid = valid[:n]
-        flags = {"valid": len(valid), "kept": len(kept), "rejects": counts}
-        if len(valid) < n and not final:
-            rules = ("quote는 이력서 값에서 그대로 복사하고, 질문에 그 경험·프로젝트의 구체적인 상황 이름을 넣고, 반드시 '?'로 끝나는 의문문"
-                     "('~습니까?')으로 무엇을 어떻게 했는지 묻는다. 평서문과 예·아니오 질문은 안 된다. ")
-            return Check(feedback={"gen": regen_feedback(codes, passed, len(valid), n - len(valid), rules)}, flags=flags)
-        return Check(output={"questions": valid}, flags=flags)
+        flags = {"valid": len(valid), "rejects": _counts(codes)}
+        return Check(output={"questions": valid, "failed": failed[:FEEDBACK_MAX]}, flags=flags)
 
     @staticmethod
     def _judge(inp: dict, text: str, evs, flat: str, ranges, level: str, final: bool, valid: list[dict],
@@ -420,6 +421,9 @@ class ResumeQuestion(TaskSpec):
             evidence.append({"field": owner[0], "start": span.start - owner[1], "end": span.end - owner[1], "text": span.text})
         if not evidence:
             return out + ["QUOTE_MISMATCH"], None
+        evidence = [e for e in evidence if is_work_evidence(e["field"], e["text"])]
+        if not evidence:
+            return out + ["UNGROUNDED"], None  # a period, a school or a job title is not something the candidate did
         if not any(shares_content(text, e["text"]) for e in evidence):
             out.append("OFF_QUOTE")  # AC-07: the question must mention what the resume actually says
         if any(similar_question(text, v["text"]) for v in valid):

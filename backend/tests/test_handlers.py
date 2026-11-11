@@ -502,10 +502,11 @@ async def test_resume_questions_name_the_part_of_the_resume_they_are_about(clien
     _, app_id, cand = await setup_app(client, make_client, default_plan=True)
     qs = [x for x in await prepare_and_compose(cand, app_id) if x.slot_type == "PROJECT"]
     assert len(qs) == 3
+    assert any(x.source == "AI" for x in qs)
     for x in qs:
-        quote = x.grounding["evidence"][0]["text"]
         assert x.source in ("AI", "TEMPLATE")
         if x.source == "AI":
+            quote = x.grounding["evidence"][0]["text"]
             # "커머스랩 백엔드 개발자 업무에서 …하셨는데, <question>": the resume is never named or quoted
             assert "이력서" not in x.text and "‘" not in x.text and "적으신" not in x.text
             assert quote[:12] in x.text and x.grounding["asked"] and any(x.text.endswith(t) for t in RESUME_TAILS)  # the model's own wording is kept only as grounding.asked
@@ -521,7 +522,7 @@ def test_the_single_custom_question_takes_only_the_first_job_slot():
     assert len(plan) == 10 and jobs == [s.custom_question, None, None]
 
 
-async def test_a_yes_or_no_resume_question_is_asked_again_as_a_how_or_why_question(fake_ai):
+async def test_a_yes_or_no_resume_question_fails_with_its_code_and_passes_on_the_last_request(fake_ai):
     from app.ai.tasks import TASKS
     from app.ai.tasks.questions import ResumeQuestion
     assert isinstance(TASKS["resume_question"], ResumeQuestion)
@@ -536,7 +537,12 @@ async def test_a_yes_or_no_resume_question_is_asked_again_as_a_how_or_why_questi
     ])
     fake_ai.responses["resume_question"] = lambda inp, messages: next(replies)
     r = await fake_ai.llm("resume_question", {"resume": resume, "job_brief": "백엔드", "n": 1}, lane="INTERACTIVE")
-    assert r.status == "OK" and len(fake_ai.calls) == 1 and len(fake_ai.calls[0].messages) == 2  # asked a second time
+    # one answer per request: the yes/no question comes back with its code for the composer's second request (quality.fill)
+    assert r.status == "OK" and len(fake_ai.calls[0].messages) == 1 and r.output["questions"] == []
+    assert r.output["failed"][0]["codes"] == ["YES_NO"]
+    r = await fake_ai.llm("resume_question", {"resume": resume, "job_brief": "백엔드", "n": 1, "feedback": r.output["failed"],
+                                              "last_chance": True}, lane="INTERACTIVE")
+    assert "[YES_NO]" in fake_ai.calls[1].messages[0][-1]["content"]  # the reason is in the second request
     assert [x["text"] for x in r.output["questions"]] == ["주문 처리 API의 응답 지연을 줄일 때 왜 복합 인덱스를 선택했고 결과는 어땠습니까?"]
 
 

@@ -97,9 +97,9 @@ async def test_copied_questions_are_dropped(client, make_client, fake_ai, corpus
     finally:
         await _no_design_seeds(True)
     assert copy not in [x.text for x in qs]
-    gen = next(c for c in fake_ai.calls if c.task == "question_generate")
-    # one regeneration naming the failed question and its code, then the code-made fallback
-    assert len(gen.messages) == 2 and "1번 질문: [COPIES_EXAMPLE]" in gen.messages[1][-1]["content"]
+    gens = [c for c in fake_ai.calls if c.task == "question_generate" and c.input["kind"] == "JOB"][:2]
+    # one regeneration (the composer's second request) naming the failed question and its code, then the code-made fallback
+    assert len(gens) == 2 and "1번: [COPIES_EXAMPLE]" in gens[1].messages[0][-1]["content"]
     async with session_scope() as db:  # the embedding check catches near copies the lexical check lets through
         ex = await rag.find_examples(db, fake_ai, MODEL, "JOB", copy, 1)
         assert await rag.copied(db, fake_ai, MODEL, [copy.replace("어떻게", "어떻게 "), "전혀 다른 질문인가요?"], ex, 0.9) == {0}

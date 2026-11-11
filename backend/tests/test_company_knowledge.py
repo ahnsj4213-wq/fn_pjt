@@ -322,7 +322,7 @@ def _chunk(doc: uuid.UUID, title: str, body: str) -> knowledge.Chunk:
 
 
 async def test_review_wants_concrete_questions_from_different_documents_until_the_last_round():
-    from app.questions.rag_graph import _next, _review
+    from app.questions.rag_graph import _review
 
     a, b = _chunk(uuid.uuid4(), "정산 배치 재설계", DOC), _chunk(uuid.uuid4(), "결제 승인 서버", "결제 승인 서버의 장애 전환을 줄입니다.")
     seen = {str(x.id): x for x in (a, b)}
@@ -333,10 +333,9 @@ async def test_review_wants_concrete_questions_from_different_documents_until_th
     vague, good, same_doc = q(a, "어떤 경험을 살리시겠습니까?"), q(a, "정산 배치 재설계에서 멱등 키를 어떻게 설계하시겠습니까?"), q(a, "정산 배치 파티션을 어떻게 나누시겠습니까?")
     state = {"n": 2, "round": 1, "accepted": [], "used_docs": [], "chunks": [a, b], "seen": seen, "candidates": [vague, good, same_doc]}
     first = await _review(state, {})
-    assert first["accepted"] == [good]  # vague and second-from-the-same-document wait for another search
-    assert _next({**state, **first}) == "retrieve"
+    assert first["accepted"] == [good] and len(first["held"]) == 2  # vague and same-document wait for the second request
     last = await _review({**state, "round": 2}, {})
-    assert len(last["accepted"]) == 2 and _next({**state, "round": 2, **last}) != "retrieve"  # a grounded question beats the bank
+    assert len(last["accepted"]) == 2  # on the last round a grounded question beats a code-made one
 
 
 async def test_motivation_sentence_uses_a_project_name_but_not_a_company_document(client, make_client, fake_ai):

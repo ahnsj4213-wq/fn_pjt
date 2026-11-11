@@ -10,8 +10,11 @@ job, `thread_id` = eval:<application>:<job id>, checkpoints in PostgreSQL (app/i
                `pre_evaluate` still running), the coding submission (CodingNotGraded = wait, no attempt used). Every stored
                result goes through units.reuse_problems: reused, or put on the list with the reason (MISSING, SHAPE,
                RUBRIC_VERSION, STALE, QUOTE_MISMATCH, UNLINKED).
-  unit         T5 for the next unit on the list (units.judge: eval_samples judgements, median), sealed, stored in
-               answer_pre_evaluations with the run's marker. At most one fresh evaluation per unit per run.
+  unit         the next unit on the list (units.judge -> pipeline.evaluate_unit): the model's judgements (T5 x eval_samples,
+               median), the server's checks (checks.py: quote, score-reason-evidence, form, spread of the samples), at most
+               ONE re-judgement with the reasons as feedback, then settled on the system or the content side. Stored in
+               answer_pre_evaluations with the run's marker. At most one evaluation per unit per run, so at most
+               checks.unit_call_cap(eval_samples) model calls per unit per run.
   verify       every unit used is checked again; the outcomes are split into system side (evidence not linked or verified)
                and content side (too little in the answer). System side over SYSTEM_HOLD_RATIO of the judged items =
                EvidenceUnverifiable: the attempt fails, and EVL-06 holds the evaluation after the retry (ON_HOLD).
@@ -89,7 +92,7 @@ class State(TypedDict, total=False):
     manifest: str
     attempt_status: str
     todo: list[list[str]]  # [[answer id, reason], ...] still to evaluate
-    units: dict[str, dict]  # answer id -> {"src": PRE | FRESH, "why": reason, "llm_calls": n}
+    units: dict[str, dict]  # answer id -> {"src": PRE | FRESH, "why": reason, "llm_calls": n, "rejudged": bool}
     has_code: bool
     coding: dict | None  # passed / total / score / reached / limit_hit: numbers only
     quality: dict
@@ -273,6 +276,11 @@ async def prepare(state: State, config: RunnableConfig) -> dict:
     return {"units": done, "todo": todo, "coding": coding, "has_code": has_code, "attempt_status": attempt_status}
 
 
+def _fresh(why: str, payload: dict) -> dict:
+    return {"src": "FRESH", "why": why, "llm_calls": payload.get("llm_calls", 0),
+            "rejudged": bool((payload.get("check") or {}).get("rejudged"))}
+
+
 async def unit(state: State, config: RunnableConfig) -> dict:
     """One unit: T5 (eval_samples judgements), sealed and stored before the checkpoint says it is done. A crash between the
     two finds the stored result by its run marker and does not call the model again."""
@@ -283,7 +291,7 @@ async def unit(state: State, config: RunnableConfig) -> dict:
         row = await db.get(AnswerPreEvaluation, (aid, manifest))
     done = None
     if row is not None and row.payload.get("run_ref") == marker:
-        done = {"src": "FRESH", "why": why, "llm_calls": row.payload.get("llm_calls", 0)}
+        done = _fresh(why, row.payload)
     elif row is not None and why == "MISSING" and not units.reuse_problems(row.payload, a):
         done = {"src": "PRE"}  # its pre_evaluate job finished after prepare
     if done is None:
@@ -296,7 +304,7 @@ async def unit(state: State, config: RunnableConfig) -> dict:
             if not await _lease_ok(db, config):
                 raise LeaseLost(_conf(config).get("job_id"))
             await units.store(db, aid, manifest, payload, replace=True)
-        done = {"src": "FRESH", "why": why, "llm_calls": payload.get("llm_calls", 0)}
+        done = _fresh(why, payload)
     return {"todo": rest, "units": {**state.get("units", {}), aid_s: done}}
 
 
@@ -306,18 +314,17 @@ async def verify(state: State, config: RunnableConfig) -> dict:
     reasons: dict[str, int] = {}
     for aid_s, info in state["units"].items():
         aid = UUID(aid_s)
+        # Every result used went through the checks of its evaluation (settled); anything left here is a fault, not an outcome.
         problems = units.reuse_problems(L.units[aid], answers[aid])
-        # A fresh result may keep UNLINKED (T5 already asked once more); anything else here is a fault, not an outcome.
-        bad = [p for p in problems if not (info["src"] == "FRESH" and p == "UNLINKED")]
-        if bad:
-            raise EvaluationFailed(f"unit result {bad[0]}")
+        if problems:
+            raise EvaluationFailed(f"unit result {problems[0]}")
         if info.get("why"):
             reasons[info["why"]] = reasons.get(info["why"], 0) + 1
     counts = units.outcome_counts(list(L.units.values()))
     fresh = [i for i in state["units"].values() if i["src"] == "FRESH"]
     quality = {**counts, "reused": len(state["units"]) - len(fresh), "evaluated": len(fresh),
                "reevaluated": sum(1 for i in fresh if i.get("why") != "MISSING"), "reasons": reasons,
-               "hold_ratio": SYSTEM_HOLD_RATIO}
+               "hold_ratio": SYSTEM_HOLD_RATIO, **units.check_counts(list(L.units.values()))}
     held = counts["judged_items"] > 0 and counts["system_items"] / counts["judged_items"] > SYSTEM_HOLD_RATIO
     log_event(log, "evaluation_units_checked", application_id=state["application_id"],
               status="SYSTEM_FAILURE" if held else "OK", count=counts["judged_items"],

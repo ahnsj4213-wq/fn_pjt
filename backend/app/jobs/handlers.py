@@ -47,7 +47,6 @@ from app.models import (
     RecruiterReport,
     ResumeFile,
 )
-from app.questions import graph as compose_graph
 from app.questions import rag
 from app.resumes import ocr
 from app.resumes.schemas import from_ai_resume
@@ -99,8 +98,11 @@ async def compose_questions(ctx: JobCtx) -> None:
         if stale or (live is not None and live.settings_id == settings_id):
             await fenced_complete(db, ctx)  # already composed, or the attempt moved on: nothing to do
             return
-    # The composition graph (questions/graph.py) makes and writes the set; a retry continues at the node that stopped.
-    qset_id = await compose_graph.run(app_id, settings_id)
+    # The interview graph's COMPOSE entry (interview/graph.py, questions/steps.py) makes and writes the set; a retry continues
+    # at the node that stopped.
+    from app.interview import graph as interview_graph
+
+    qset_id = await interview_graph.compose(app_id, settings_id)
     await _prepare_coding_variant(app_id)
     async with session_scope() as db:
         count = await db.scalar(select(func.count()).select_from(InterviewQuestion).where(InterviewQuestion.question_set_id == qset_id))

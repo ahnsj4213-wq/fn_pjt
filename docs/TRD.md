@@ -1,6 +1,6 @@
-# AI 채용 플랫폼 TRD (기술 설계서) v2.0
+# AI 채용 플랫폼 TRD (기술 설계서) v2.1
 
-- 버전: **v2.0** · 날짜: 2026-11-11 · 기준: 현재 구현(커밋 eb404e8 이후 코드)
+- 버전: **v2.1** · 날짜: 2026-11-11 · 기준: 현재 구현(커밋 eb404e8 이후 코드)
 - **이 문서가 유일한 TRD다.** 이전 TRD(TRD_v1.4·v1.5, Final_Project_TRD v1.0~1.5, `docs/trd/01~08` 분할본)는 모두 이 문서로 대체됐다.
 - 무엇을·왜 만드는지는 [`docs/PRD.md`](PRD.md)(v2.0), 개별 결정의 근거는 [`docs/adr/`](adr/README.md)에 있다.
 - 장 번호는 예전 분할본 번호와 같다. 코드 주석의 "TRD 07 §12"는 이 문서 7장 12절을 뜻한다.
@@ -21,6 +21,7 @@
 
 | 버전 | 날짜 | 내용 |
 |---|---|---|
+| v2.1 | 2026-11-11 | ADR-0028 반영: LangGraph 두 개(면접 실행·평가), 질문·평가 품질 검증 루프, T2 1.9.0·T3 1.7.0·T5 2.2.0 |
 | v2.0 | 2026-11-11 | 분할본 8개를 한 파일로 통합, 현재 구현 기준으로 정리. 장 머리의 작성자·기준 줄을 현재 상태 줄로 교체, 컨테이너 8개·llama.cpp·BGE-M3·Next.js·Celery 반영, ADR-0016·0019·0022~0027 반영(이탈 = 종료, live 질문 기본, 질문·평가 그래프, rubric-v5·score-v3, 프롬프트 버전), 마이그레이션 head 0034·테이블 50개, 구현된 "(예정)/[미구현]" 표시 갱신, 장 간 링크를 문서 안 앵커로, 삭제된 설계안·리뷰 문서 참조 제거, 확인 못 한 서술은 [미확인] 표시 |
 | v1.x | 2026-10-26~11-10 | `docs/trd/01~08` 분할본(이전 기록은 git 이력) |
 
@@ -1343,7 +1344,7 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 
 ## 5장. AI 파이프라인 (LLM·STT·TTS·임베딩, 작업 계약, 평가)
 
-- 현재 상태(2026-11-11): 모델은 llama.cpp(llm-gpu GPU, ai CPU)로 서빙하고, 게이트웨이·작업 검증은 호출 프로세스 안에서 돈다(`app/ai/direct.py`). 작업 계약 버전은 코드 기준 T1 `resume_extract@1.2.0`, T2 `question_generate@1.8.0`, T3 `resume_question@1.6.0`, T4 `followup_decide@1.4.0`, T5 `evaluate_answer@2.1.0`, T6 `report_summary@1.1.0`, T7 `candidate_feedback@1.1.0`, T8 `code_review@2.1.0`, T9 `problem_rewrite@1.1.0`, T10 `custom_criteria@2.0.0`, T11 `posting_draft@1.0.0`, T12 `question_adapt@1.3.0`. 루브릭 `rubric-v5`, 점수 `score-v3`. 질문 생성·평가는 LangGraph 그래프(ADR-0016·0027).
+- 현재 상태(2026-11-11): 모델은 llama.cpp(llm-gpu GPU, ai CPU)로 서빙하고, 게이트웨이·작업 검증은 호출 프로세스 안에서 돈다(`app/ai/direct.py`). 작업 계약 버전은 코드 기준 T1 `resume_extract@1.2.0`, T2 `question_generate@1.9.0`, T3 `resume_question@1.7.0`, T4 `followup_decide@1.4.0`, T5 `evaluate_answer@2.2.0`, T6 `report_summary@1.1.0`, T7 `candidate_feedback@1.1.0`, T8 `code_review@2.1.0`, T9 `problem_rewrite@1.1.0`, T10 `custom_criteria@2.0.0`, T11 `posting_draft@1.0.0`, T12 `question_adapt@1.3.0`. 루브릭 `rubric-v5`, 점수 `score-v3`. LangGraph 그래프는 둘이다: 면접 실행(질문 생성+면접+코딩 진입·종료)과 평가(ADR-0028).
 - 관련 ADR: 0003(LLM 게이트웨이), 0004(음성·임베딩 모델), 0005(질문 구성·은행 범위), 0008(인용 검증), 0009(면접 런타임 프로토콜), 0014·0015(컨테이너 배치), 0016·0027(그래프), 0019(꼬리질문 판단 30초), 0020(회사 자료 RAG), 0022·0025(live 생성·수준·품질 검사), 0023·0026(평가 신뢰성·rubric-v5). 실시간 음성 흐름은 [6장](#ch06).
 - 표기: **[실측]** = `prototypes/results-*.txt`(2026-10-26, GTX 1660 SUPER 6GB 개발 장비), **[추정]** = 계산·경험값(실측 전), **[PRD]** = PRD 원문 수치, **[TRD]** = 이 문서가 정한 설정값(바꿀 수 있음, PRD 수치 아님).
 - X-11(모델 선정)은 PRD상 미결정이다. 아래 모델은 실측 기반 **기술적 임시 결정**(ADR-0004 "채택(임시)")이며 팀 확인 대상이다(OQ-03, OQ-29, OQ-30).
@@ -1442,7 +1443,7 @@ INT-14(면접 시작 전 AI 상태): `app`의 `GET /api/system/ai-health`가 `/v
 | T2 question_generate | IA | 0.7 | 400 | 2 | 생성 시도 최대 2(1회 재시도, T17) | 은행 대체(QST-07) |
 | T3 resume_question | IA | 0.5 | 500 | 2 | 생성 시도 최대 2 | 은행 대체(QST-03·07, OQ-37) |
 | T4 followup_decide | RT | 0.3 | 120 | 0(시간) | 0 | 건너뜀(6.2) |
-| T5 evaluate_answer | BATCH | 0 (seed 고정) | 420 | 2 | 근거 문장 재요청 1(EVL-02), P-8 재생성 1, 표본 3개 중앙값(ADR-0023) | 단위 실패 → 작업 시도 실패(EVL-06) |
+| T5 evaluate_answer | BATCH | 0 (seed 고정) | 420 | 2 | P-8 재생성 1, 표본 3개 중앙값(ADR-0023). 근거·일관성 문제는 단위 검사 뒤 사유 피드백으로 단위당 재판정 1회(ADR-0028, `evaluation/checks.py`) | 단위 실패 → 작업 시도 실패(EVL-06) |
 | T6 report_summary | BATCH | 0.2 | 600 | 2 | P-8 재생성 1 | 작업 시도 실패 |
 | T7 candidate_feedback | BATCH | 0.3 | 450 | 2 | 금지 표현 재생성 1 | 작업 시도 실패 |
 | T8 code_review | BATCH | 0 | 800 | 2 | 인용 재생성 1, P-8 재생성 1 | 작업 시도 실패(코딩 점수에 들어가므로 비워 두지 않음, ADR-0017) |
@@ -1510,6 +1511,7 @@ INT-14(면접 시작 전 AI 상태): `app`의 `GET /api/system/ai-health`가 `/v
    - 그래프 하나로 실행한다: `questions.graph.run` = `plan → project(T3) → motivation(T2+RAG) → job_skill(T2+RAG) → write`.
    - 회사 자료 RAG는 함수 루프다(최대 2라운드, 2라운드는 새 문서가 있을 때만).
    - 검증에 실패한 질문만 다시 만든다(통과분 고정, 재생성 1회). 그래도 모자라면 코드 대체 질문(`TEMPLATE`)으로 채운다.
+   - (ADR-0028) 검증은 `questions/quality.py`의 `judge` 하나가 한다: 근거(UNGROUNDED), 난이도(TOO_LONG·MANY_TOPICS·NUMBER·COPIES_FACT·PRESUMES_EXPERIENCE·TOO_HARD), 유형(NOT_MOTIVATION·NOT_JOB), 명확성(FOREIGN_SCRIPT·NESTED·NOT_A_QUESTION·FORBIDDEN), 중복(DUPLICATE·SAME_BASIS). 재생성은 `fill`의 요청 2(떨어진 질문과 사유를 `feedback`으로, 회사 자료 2라운드 검색 결과 포함) 하나뿐이고, T2·T3 안의 재생성은 없다. 상한: 영역(live는 슬롯)당 요청 2회·모델 호출 4회.
    - 모델 호출 중에는 DB 트랜잭션을 열지 않는다. live는 읽기 → 생성 → 짧은 쓰기(advisory lock 후 재확인) 순서다.
    - 최악 호출 수(10문항 upfront): LLM 20 → 14. 임베딩: 영역당 최대 10 → 3.
 
@@ -1727,7 +1729,9 @@ BGE-M3 CPU 임베딩(이전 `qwen3-embedding:0.6b`), 코사인 ≥ 0.85면 중�
 | 제출·만료 | `evaluate_application`(BATCH, EVL-06) | 같은 manifest의 단위 결과를 재사용하고 없거나 무효인 단위만 T5 → T6 → T7 → T8(코딩 켠 공고, P1) → 점수 계산(B `scoring.py`) → `answer_evaluations`·`recruiter_reports`·`candidate_feedback`를 펜싱 조건부로 반영 → DONE |
 | 재평가 | 새 `evaluate_application` | ON_HOLD → PENDING. 같은 manifest의 유효 단위는 재사용 |
 
-평가 작업은 LangGraph 그래프로 실행한다(ADR-0027, `evaluation/graph.py`, `thread_id=eval:<application>:<job>`).
+평가 작업은 LangGraph 그래프로 실행한다(ADR-0027·0028, `evaluation/graph.py`, `thread_id=eval:<application>:<job>`).
+
+- (ADR-0028) 단위 판정마다 서버 검사(`evaluation/checks.py`, `unit-check-1`): SHAPE, QUOTE_MISMATCH, NO_EVIDENCE(3점 이상인데 확인된 근거 없음), REASON_SCORE(이유는 부족인데 4점 이상), UNSTABLE(표본 편차 3점 이상). 걸린 단위만 사유를 피드백으로 넣어 단위당 1회 재판정하고, 남으면 시스템 쪽(근거 미연결·인용 불일치 → 보류 집계)과 내용 쪽(LOW_CONTENT, 최대 2점)으로 나눈다. 단위당 호출 상한 `unit_call_cap`(표본 3이면 20). AI는 항목별 점수 후보·이유·인용만, 검증·가중치·총점은 서버 코드. 코딩 정답은 테스트케이스 실행 결과만.
 
 - 흐름: `prepare → unit(단위별 순차) → verify → code_review(T8) → custom → score → summary(T6) → feedback(T7)`. 그 뒤 핸들러가 `finalize`(점수 재계산 확인)하고 펜싱 저장한다.
 - 사전 평가는 재사용 규칙(`SHAPE`·`RUBRIC_VERSION`·`STALE`·`QUOTE_MISMATCH`·`UNLINKED`)을 통과하면 재사용하고, 걸린 단위만 실행당 1회 재평가한다.
@@ -1847,6 +1851,8 @@ PRD 목표(8.2): 본질문 음성 1초 안, 자막 말 끊긴 뒤 2초 안, 답�
 
 ### 5. 서버 턴 상태 기계
 
+> **ADR-0028:** 면접 실행 그래프 하나(`app/interview/graph.py`, thread = 지원서 id)가 질문 구성(`start → plan → project → motivation → job_skill → write`), 면접 진행, 코딩 진입(`finish` → CODING)과 최종 제출(`coding_submit`)까지 맡는다. 입구는 `compose`(질문 구성 작업), `begin`/`resume`(면접), `submit_coding`(코딩 최종 제출)이고 `start` 노드가 DB 상태로 갈 길을 정한다. live 다음 질문은 노드 `compose_next`가 만든다(답변 중 미리 만들기는 유지).
+>
 > **ADR-0016·0027:** 아래 S1~S10의 순서는 LangGraph 그래프(`app/interview/graph.py`)가 진행한다. 노드는 `present`(S1) → `ask`(S1~S2b: 질문 이벤트, TTS, 생각 시간) → `wait_answer`(`interrupt`, S3~S6: 답변 창) → `transcribe`(S7: STT 마무리와 답변 확정) → `decide_followup`(S10) → `present`/`finish`다. 음성 세션과 텍스트 모드가 같은 그래프를 `TurnIO`(`ask`/`capture`/`finalized`)로 구동한다. 같은 단계가 다시 돌아도 효과는 한 번이다(꼬리질문 판단·답변 확정 1회, ADR-0027). 체크포인트는 PostgreSQL에 있고 답변 텍스트는 담지 않는다. (ADR-0016의 "끊긴 뒤 재접속하면 같은 문항을 새 제시로" 경로는 ADR-0024로 쓰지 않는다.)
 
 `interview_turns.state` = PRESENTING → ANSWERING → FINALIZING → CLOSED, 끊김 시 ABANDONED. `interviews.current_phase`는 같은 값 + DECIDING(꼬리질문 판단 중)·DONE으로 진행기를 비춘다. 진행 중 턴은 지원 건당 하나다(`ux_turn_live`).

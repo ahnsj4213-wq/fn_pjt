@@ -8,14 +8,19 @@ writes evidence text, so it cannot misquote or invent; a failed citation no long
 
 Evidence status per criterion (requirement 7 of 2026-11-09):
 - OK            the model's score with the sentence it named
-- UNLINKED      근거 미연결: the model scored 3 or more but named no sentence of the answer, asked once more, still none. The
-                model's score stays (the extraction failed, not the answer); no quote is shown and the report says so.
+- UNLINKED      근거 미연결: the model scored 3 or more but named no sentence of the answer. The model's score stays (the
+                extraction failed, not the answer); no quote is shown and the report says so. Asking again is no longer done
+                here (2.2.0): the unit's verification loop (app/evaluation/checks.py) asks once per unit with every reason
+                found, so the samples of one unit do not each spend their own re-ask.
 - INSUFFICIENT  내용 부족: LOW_CONTENT = the model scored 1~2 and named no sentence (nothing in the answer to point at), or the
                 rule before the model, TOO_SHORT (normalised < 15 chars or a no-content phrase, OQ-09): 1 point.
 - NO_ANSWER     답변 없음 (rule, 6.4): 1 point on every criterion.
 평가 불가 (the model gave nothing usable after its retries) is not a criterion status: the run fails and the report is held for
 re-evaluation (EVL-06), so no provisional score is ever shown.
 P-8 wording in a comment -> one regeneration -> the sentence is removed.
+
+`review` (optional input, 2.2.0): the reasons a server check found in the previous judgement of the same answer, written by code
+(checks.review_lines: criterion, reason, the earlier score). Only present in the one re-judgement of a unit.
 """
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -104,11 +109,11 @@ def _rule_items(status: str, reason: str | None) -> dict:
 
 class EvaluateAnswer(TaskSpec):
     name = "evaluate_answer"
-    version = "evaluate_answer@2.1.0"
+    version = "evaluate_answer@2.2.0"
     lane = "BATCH"
     temperature = 0.0
     num_predict = 420  # numbers instead of quotes: ~250 tokens with found and the sub-items, the margin keeps a long comment from being cut
-    regen_limits = {"evidence": 1, "p8": 1, "example": 1}
+    regen_limits = {"p8": 1, "example": 1}  # evidence: once per unit, app/evaluation/checks.py
     out_model = EvalOut
     grammar_model = EvalOutG
     system = ("너는 채용 면접 답변 평가기다. 아래 루브릭의 4개 항목을 각각 1~5점 정수로 판정한다.\n"
@@ -147,14 +152,17 @@ class EvaluateAnswer(TaskSpec):
             # Live coding (SC-A06): the code informs expertise/logic; the evidence sentence is still one of the spoken answer.
             user += (f"\n제출한 코드({inp.get('code_language') or '언어 미상'}, 실행하지 않음. 직무 전문성·논리성 판단에 참고하고, "
                      f"sent는 답변 문장 번호에서만 고른다):\n{fence('CODE', inp['code'], nonce)}")
-        return user, {"accepted": {}, "sentences": sents, "kind": kind}
+        if inp.get("review"):  # the one re-judgement of a unit (checks.py): reasons written by code, no answer text
+            user += ("\n\n같은 답변의 이전 판정을 서버가 검사한 결과(다시 판정할 이유):\n" + "\n".join(f"- {x}" for x in inp["review"])
+                     + "\n답변 문장 목록과 루브릭의 점수별 기준 문장을 다시 대조해 4개 항목을 모두 다시 판정하라. 점수는 답변 원문으로만 정한다.")
+        return user,{"accepted": {}, "sentences": sents, "kind": kind}
 
     def check(self, inp: dict, parsed: EvalOut, ctx: dict, final: bool) -> Check:
         answer, sents = inp["answer"], ctx["sentences"]
         accepted: dict = ctx["accepted"]
         flags = {"injection_suspected": injection_suspected(answer), "p8_filtered": ctx.get("p8_filtered", False),
                  "example_leak": ctx.get("example_leak", False)}
-        unlinked, bad_p8, bad_example = [], [], []
+        bad_p8, bad_example = [], []
         for key in rubric.KEYS:
             crit = rubric.KEY_TO_CRITERION[key]
             if crit in accepted:
@@ -179,22 +187,14 @@ class EvaluateAnswer(TaskSpec):
                 accepted[crit] = {"score": item.score, "evidence_status": "OK", "insufficient_reason": None,
                                   "quote": {"start": s.start, "end": s.end, "text": s.text, "sent": item.sent}, "comment": comment}
                 continue
-            # No sentence of the answer was named: 0, or a number the answer does not have.
-            if item.sent == 0 and item.score < LINK_MIN_SCORE:  # nothing to point at and a low score: the content is lacking
-                accepted[crit] = _lacking(item.score, comment)
-                continue
-            if not final:
-                unlinked.append(key)
-                continue
-            if item.score < LINK_MIN_SCORE:
+            # No sentence of the answer was named: 0, or a number the answer does not have. Settled here; the unit's
+            # verification loop (checks.py) asks again once for the whole unit when the score claims something (3+).
+            if item.score < LINK_MIN_SCORE:  # nothing to point at and a low score: the content is lacking
                 accepted[crit] = _lacking(item.score, comment)
             else:  # the score stays: a failed citation is not a weak answer
                 accepted[crit] = {"score": item.score, "evidence_status": "UNLINKED", "insufficient_reason": None,
                                   "quote": None, "comment": comment}
         feedback = {}
-        if unlinked:
-            feedback["evidence"] = (f"다음 항목의 sent가 0이거나 답변에 없는 번호다: {', '.join(unlinked)}. 답변 문장 목록(1~{len(sents)})에서 "
-                                    "그 점수의 근거가 드러난 문장 번호를 골라라. 정말 가리킬 문장이 없으면 sent 0과 함께 점수를 다시 판단하라.")
         if bad_p8:
             feedback["p8"] = f"다음 항목의 comment에 합격·불합격·채용 추천 표현이 있다: {', '.join(bad_p8)}. 그런 표현 없이 다시 써라."
         if bad_example:

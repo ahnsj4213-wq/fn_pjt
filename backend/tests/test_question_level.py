@@ -77,10 +77,11 @@ def test_generation_check_rejects_a_question_above_the_new_graduates_mix():
     hard = {"text": "주문 API 개발과 운영을 대용량 처리 구조로 어떻게 설계하시겠습니까?", "basis_quote": "주문 API 개발과 운영"}
     easy = {"text": "주문 API 개발과 운영에서 가장 먼저 점검할 것은 무엇입니까?", "basis_quote": "주문 API 개발과 운영"}
     t2, inp, out = _t2([hard], level="NEW", difficulties=["BASIC"])
-    first = t2.check(inp, out, {}, False)
-    assert first.feedback and "어렵다" in first.feedback["gen"]  # the reason goes back to the model
+    first = t2.check(inp, out, {}, False).output
+    assert first["questions"] == [] and "TOO_HARD" in first["failed"][0]["codes"]
+    assert "어렵다" in t2.build({**inp, "feedback": first["failed"]}, "n0")[0]  # the reason goes back to the model, once
     t2, inp, out = _t2([hard, easy], level="NEW", difficulties=["BASIC"])
-    kept = t2.check(inp, out, {}, True).output["questions"]
+    kept = t2.check(inp, out, {}, False).output["questions"]
     assert [q["text"] for q in kept] == [easy["text"]] and kept[0]["difficulty"] == "BASIC"
     assert "지원자 수준: 신입" in t2.build(inp, "n0")[0]
 

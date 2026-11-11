@@ -1,17 +1,19 @@
-"""The question generation graph (LangGraph, ADR-0016; revised 2026-11-10): one run per `compose_questions` job,
-`thread_id` = compose:<application>:<settings version>, checkpoints in PostgreSQL. The one entry point is `run(app_id, settings_id)`.
+"""The composition steps of the interview graph (interview/graph.py, ADR-0016; 2026-11-11: one graph per application, the
+composition is its first stage). A `compose_questions` job runs the graph with entry COMPOSE; the nodes are these functions:
 
-    START -> plan -> project -> motivation -> job_skill -> write -> END
+    start -> plan -> project -> motivation -> job_skill -> write -> END
                      (T3)       (T2 + corrective RAG, rag_graph.run)
 
   plan        the slots of the settings' plan (plan_slots: 인성2·동기1·직무3·경험3·협업1 by default), and every question that needs
               no model: custom questions asked as written (CUSTOM), 인성·협업 made by code from the resume or the posting (TEMPLATE).
               upfront (default, ADR-0025): every slot is composed in this run and voiced by tts_pregen before the interview.
-              live mode (ADR-0022): only the first slot is composed here; the plan is stored with the set and app.questions.live
-              composes each later question when the candidate reaches it, from the answers so far.
+              live mode (ADR-0022): only the first slot is composed here; the plan is stored with the set and the interview's
+              compose_next node composes each later question when the candidate reaches it, from the answers so far.
   project     T3 against the resume; what it cannot ground becomes an experience question by code (experience_fallback)
   motivation  T2 from the company's documents; what it cannot make, a posting question by code (posting_fallback)
   job_skill   T2 from the posting and the documents (difficulty per slot from the level), then posting_fallback
+              Every generated question passes the quality gate (questions/quality.py) and a slot gets at most one regeneration
+              with the failure reasons before its code-made question: at most quality.MAX_REQUESTS requests per node.
   write       T12 for questions taken from the question bank (none in the current sources: skipped, no embedding call), the
               verification (every slot exactly once, no two alike: ComposeError), then one short transaction: the live set of an
               older settings version is superseded, the READY set with its immutable MAIN rows is written, tts_pregen is queued.
@@ -24,18 +26,16 @@ Recovery: the nodes that call a model are the units of recovery. A retry of the 
 node that stopped; a node finds the slots still empty from the plan and what is picked, so a node run twice fills nothing twice.
 `write` is idempotent: a set already written for this settings version is returned as it is.
 
-State: ids, the live flag and the questions picked so far (slot, text, source, grounding). The plan is not kept (plan_slots is
+dict: ids, the live flag and the questions picked so far (slot, text, source, grounding). The plan is not kept (plan_slots is
 code over the settings version, recomputed by each node). The picked questions cannot live in the database before `write` without
 a new question-set state (the compose job treats a COMPOSING/READY set of the same version as done): that is an API/DB change left
-out on purpose. The state is deleted when the run ends and `purge_finished` removes the leftovers of attempts that are over.
+out on purpose. The state is cleared when the run ends and `purge_finished` removes the leftovers of attempts that are over.
 """
 import logging
 import time
 from dataclasses import asdict
-from typing import TypedDict
 from uuid import UUID
 
-from langgraph.graph import END, START, StateGraph
 from sqlalchemy import select
 
 from app.ai.client import get_ai_client
@@ -43,21 +43,12 @@ from app.core.config import get_settings
 from app.core.constants import Area
 from app.core.db import session_scope
 from app.core.logging import log_event
-from app.interview.checkpoint import get_checkpointer
 from app.jobs.queue import enqueue
 from app.models import Application, Company, JobPosting, PostingEvalSettings, QuestionSet
 from app.questions import compose as C
 from app.questions.dbio import ShortReads
 
 log = logging.getLogger("app.questions")
-
-
-class State(TypedDict, total=False):
-    application_id: str
-    settings_id: str
-    live: bool  # only the first question now; app.questions.live makes the others during the interview (ADR-0022)
-    picked: list[dict]  # C.Picked as plain data
-    qset_id: str | None
 
 
 # ── plain data <-> composer objects ────────────────────────────────────────────
@@ -71,7 +62,7 @@ def _picked_from_dict(d: dict) -> C.Picked:
     return C.Picked(**{**d, "bank_id": UUID(d["bank_id"]) if d.get("bank_id") else None})
 
 
-async def _load(state: State, with_problem: bool = False):
+async def _load(state: dict, with_problem: bool = False):
     """The context, read in one short transaction and closed before any model call. `c.db` reads one statement at a time."""
     async with session_scope() as db:
         app = await db.get(Application, UUID(state["application_id"]))
@@ -102,7 +93,7 @@ def _log_rejects(c: C._Ctx, stage: str) -> None:
 
 
 # ── nodes ──────────────────────────────────────────────────────────────────────
-async def plan(state: State) -> dict:
+async def plan(state: dict) -> dict:
     live = get_settings().question_mode == "live"
     c, slots, problem = await _load({**state, "picked": []}, with_problem=True)
     for sl in _wanted(slots, live):
@@ -122,7 +113,7 @@ async def plan(state: State) -> dict:
 
 
 def _model_node(area: Area, fill):
-    async def node(state: State) -> dict:
+    async def node(state: dict) -> dict:
         c, slots = await _load(state)
         empty = _empty(c, slots, bool(state.get("live")), area)
         if not empty:
@@ -156,7 +147,7 @@ def verify(picked: list[C.Picked], slots: list[C.Slot], live: bool) -> None:
             raise C.ComposeError(f"question {i + 1} repeats an earlier one")
 
 
-async def write(state: State) -> dict:
+async def write(state: dict) -> dict:
     app_id, settings_id = UUID(state["application_id"]), UUID(state["settings_id"])
     async with session_scope() as db:  # a short read: an earlier attempt may have written the set already
         done = (await db.execute(select(QuestionSet.id).where(QuestionSet.application_id == app_id, QuestionSet.settings_id == settings_id,
@@ -189,9 +180,9 @@ MODEL_NODES = (("project", Area.PROJECT, _fill_project), ("motivation", Area.MOT
                ("job_skill", Area.JOB_SKILL, _fill_job))
 
 
-def _timed(name: str, fn):
+def timed(name: str, fn):
     """Stage timing (ADR-0025): one `compose_stage` event per node with its duration; nothing of the questions."""
-    async def node(state: State) -> dict:
+    async def node(state: dict) -> dict:
         t0 = time.monotonic()
         try:
             return await fn(state)
@@ -202,44 +193,9 @@ def _timed(name: str, fn):
     return node
 
 
-def build() -> StateGraph:
-    g = StateGraph(State)
-    g.add_node("plan", _timed("plan", plan))
-    for name, area, fill in MODEL_NODES:
-        g.add_node(name, _timed(name, _model_node(area, fill)))
-    g.add_node("write", _timed("write", write))
-    chain = [START, "plan"] + [n for n, _a, _f in MODEL_NODES] + ["write", END]
-    for a, b in zip(chain, chain[1:]):
-        g.add_edge(a, b)
-    return g
+CHAIN = ["plan"] + [n for n, _a, _f in MODEL_NODES] + ["write"]
 
 
-_compiled = None
-
-
-async def get_graph():
-    global _compiled
-    if _compiled is None:
-        _compiled = build().compile(checkpointer=await get_checkpointer())
-    return _compiled
-
-
-def thread_id(app_id: UUID, settings_id: UUID) -> str:
-    return f"compose:{app_id}:{settings_id}"
-
-
-async def run(app_id: UUID, settings_id: UUID) -> UUID:
-    """Compose and write the question set; returns its id. A thread left by a failed attempt continues where it stopped."""
-    graph = await get_graph()
-    cfg = {"configurable": {"thread_id": thread_id(app_id, settings_id)}, "recursion_limit": 20}
-    snap = await graph.aget_state(cfg)
-    t0 = time.monotonic()
-    if snap.next:  # an earlier attempt stopped inside the run (crash, model down): carry on from that node
-        log.info("compose resumes at %s", snap.next[0])
-        await graph.ainvoke(None, cfg)
-    else:
-        await graph.ainvoke({"application_id": str(app_id), "settings_id": str(settings_id), "picked": [], "qset_id": None}, cfg)
-    qset_id = UUID((await graph.aget_state(cfg)).values["qset_id"])
-    log_event(log, "compose_stage", application_id=str(app_id), stage="total", duration_ms=int((time.monotonic() - t0) * 1000))
-    await (await get_checkpointer()).adelete_thread(thread_id(app_id, settings_id))
-    return qset_id
+def nodes() -> list[tuple[str, object]]:
+    """The composition nodes in order, each timed."""
+    return [("plan", timed("plan", plan))] + [(n, timed(n, _model_node(a, f))) for n, a, f in MODEL_NODES] + [("write", timed("write", write))]
