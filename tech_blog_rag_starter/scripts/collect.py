@@ -274,6 +274,41 @@ def text_of_html(html):
     return (text or BeautifulSoup(html, "html.parser").get_text("\n", strip=True)).strip()
 
 
+def nuxt_post(html):
+    """The post object a Nuxt page embeds in its own HTML (<script id="__NUXT_DATA__">, devalue format):
+    {title, content (HTML), releaseDate, categories}. None when the page has no such object."""
+    tag = BeautifulSoup(html, "html.parser").find("script", id="__NUXT_DATA__")
+    if tag is None or not tag.string:
+        return None
+    try:
+        arr = json.loads(tag.string)
+    except ValueError:
+        return None
+
+    def res(i, depth=0):
+        if depth > 8 or not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(arr):
+            return None
+        v = arr[i]
+        if isinstance(v, list):
+            if len(v) == 2 and v[0] in ("ShallowReactive", "Reactive", "Ref", "ShallowRef"):
+                return res(v[1], depth + 1)
+            return [res(x, depth + 1) for x in v]
+        if isinstance(v, dict):
+            return {k: res(x, depth + 1) for k, x in v.items()}
+        return v
+
+    for v in arr:
+        if isinstance(v, dict) and {"title", "content"} <= v.keys():
+            post = {k: res(v[k]) for k in ("title", "content", "releaseDate", "categories") if k in v}
+            if isinstance(post.get("content"), str) and isinstance(post.get("title"), str):
+                cats = []
+                for c in post.get("categories") or []:
+                    cats += [x for x in (c.values() if isinstance(c, dict) else [c]) if isinstance(x, str)]
+                post["categories"] = cats
+                return post
+    return None
+
+
 def tech_score(text, keywords):
     low = text.lower()
     return sum(1 for k in keywords if k.lower() in low)
@@ -285,15 +320,26 @@ def extract_article(client, url, company, settings, feed_item):
         return None, "not_html_or_blocked"
     html = decoded(r)
     soup = BeautifulSoup(html, "html.parser")
-    title = (soup.find("meta", property="og:title") or {}).get("content")
+    embedded = nuxt_post(html) if company.get("embedded_data") == "nuxt" else None
+    if company.get("embedded_data") and embedded is None:
+        return None, "no_embedded_post"
+    if embedded:
+        hit = {c.lower() for c in embedded["categories"]} & {c.lower() for c in company.get("exclude_categories", [])}
+        if hit:
+            return None, f"excluded_category({','.join(sorted(hit))})"
+    title = (embedded or {}).get("title") or (soup.find("meta", property="og:title") or {}).get("content")
     title = title or (feed_item or {}).get("title") or (soup.title.get_text(" ", strip=True) if soup.title else "")
     title = clean_title(title, company.get("title_suffixes", []))
     if not title:
         return None, "no_title"
     if any(term.lower() in title.lower() for term in settings["exclude_title_terms"]):
         return None, "excluded_title"
-    text = (trafilatura.extract(html, url=url, include_comments=False, include_tables=True, favor_precision=True) or "").strip()
-    method = "html"
+    if embedded:
+        # The body is drawn by script; the same HTML ships it as data. No feed or page text to compare with.
+        text, method = text_of_html(embedded["content"]), "embedded"
+    else:
+        text = (trafilatura.extract(html, url=url, include_comments=False, include_tables=True, favor_precision=True) or "").strip()
+        method = "html"
     if feed_item and feed_item.get("content_html"):
         feed_text = text_of_html(feed_item["content_html"])
         if len(feed_text) > len(text) * 1.1:  # the feed carries the full body (the page extraction lost parts)
@@ -301,10 +347,14 @@ def extract_article(client, url, company, settings, feed_item):
     text = strip_trailing_promo(text)
     if len(text) < settings["min_body_characters"]:
         return None, "short_or_empty_body"
+    if company.get("languages") and language_of(text) not in company["languages"]:
+        return None, f"language({language_of(text)})"  # e.g. an English copy of a Korean post
     score = tech_score(title + "\n" + text, settings["keywords"])
     if score < settings["min_tech_keywords"]:
         return None, f"not_technical(score={score})"
     date = (feed_item or {}).get("published_at")
+    m = re.match(r"(\d{4})\.(\d{2})\.(\d{2})", (embedded or {}).get("releaseDate") or "")
+    date = date or (f"{m[1]}-{m[2]}-{m[3]}" if m else None)  # the site gives a date only: no time zone invented
     for key, val in (("property", "article:published_time"), ("name", "date"), ("itemprop", "datePublished")):
         if date:
             break
@@ -317,6 +367,11 @@ def extract_article(client, url, company, settings, feed_item):
 def strip_trailing_promo(text):
     """Drop recruiting / follow-us lines at the very end of a post (not the article itself)."""
     lines = text.splitlines()
+    # A "related posts" block in the last third of a post is a link list, not the article.
+    for i in range(len(lines) - 1, int(len(lines) * 2 / 3) - 1, -1):
+        if re.fullmatch(r"\s*(관련\s*글(\s*목록)?|함께\s*읽으면\s*좋은\s*글|추천\s*글|Related\s*(posts|articles))\s*:?\s*", lines[i], re.I):
+            lines = lines[:i]
+            break
     while lines and len(lines) > 3 and re.search(r"채용|지원하기|구독하기|함께하실", lines[-1]) and len(lines[-1]) < 200:
         lines.pop()
     return "\n".join(lines).strip()
@@ -357,7 +412,8 @@ def remove_repeated_lines(docs, min_docs=3, ratio=0.3):
         freq.update({ln.strip() for ln in d["content"].splitlines() if ln.strip()})
     limit = max(min_docs, int(len(docs) * ratio))
     # Short lines ("}", "마치며") repeat by nature: only sentence-length lines count as boilerplate.
-    common = {ln for ln, c in freq.items() if c >= limit and 15 <= len(ln) < 300}
+    common = {ln for ln, c in freq.items() if c >= limit and 15 <= len(ln) < 300
+              and re.search(r"[A-Za-z가-힣]", ln)}  # table rules like |---|---| stay
     if common:
         LOG.info("공통 반복 줄 %d개 제거: %s", len(common), [c[:40] for c in list(common)[:5]])
     out = []
@@ -370,7 +426,7 @@ def remove_repeated_lines(docs, min_docs=3, ratio=0.3):
 def main():
     ap = argparse.ArgumentParser(description="기업 기술 블로그 후보 탐색 및 수집")
     ap.add_argument("--collect", action="store_true", help="원문 수집 실행 (기본: URL 후보 탐색만)")
-    ap.add_argument("--company", choices=["woowahan", "kurly", "toss"], help="특정 기업만 실행")
+    ap.add_argument("--company", help="특정 기업만 실행 (config/companies.yaml의 company_id)")
     ap.add_argument("--limit", type=int, help="기업별 문서 수 목표 덮어쓰기 (1~20)")
     args = ap.parse_args()
     if args.limit is not None and not (1 <= args.limit <= 20):
@@ -378,6 +434,9 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     cfg = yaml.safe_load((ROOT / "config" / "companies.yaml").read_text(encoding="utf-8"))
     st = cfg["settings"]
+    ids = [c["company_id"] for c in cfg["companies"]]
+    if args.company and args.company not in ids:
+        ap.error(f"--company는 {ids} 중 하나")
     (ROOT / "data" / "raw").mkdir(parents=True, exist_ok=True)
     (ROOT / "data" / "reports").mkdir(parents=True, exist_ok=True)
     LOG.info("TLS 인증서: %s", "운영체제 저장소(truststore)" if truststore else "certifi 번들")
@@ -393,6 +452,10 @@ def main():
         if args.company and args.company != comp["company_id"]:
             continue
         cid = comp["company_id"]
+        if comp.get("enabled", True) is False:
+            LOG.info("[%s] 제외된 기업: %s", cid, comp.get("disabled_reason", ""))
+            summary[cid] = {"company": cid, "status": "disabled", "reason": comp.get("disabled_reason"), "saved": 0, "target": 0}
+            continue
         target = args.limit or comp["target"]
         LOG.info("[%s] 시작 (목표 %d건)", cid, target)
         try:

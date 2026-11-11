@@ -3,6 +3,8 @@ companies:
     name: 우아한형제들
     base_url: https://techblog.woowahan.com/
     allowed_hosts: [techblog.woowahan.com]
+    enabled: false
+    disabled_reason: 'Cloudflare 403 on the collector (2026-11-11), not bypassed; replaced by kakao'
     delay_seconds: 5.0  # Cloudflare blocked this IP once (403) during probing: slower pace
     target: 20
     article_path: '^/\d+/?$'
@@ -33,6 +35,20 @@ companies:
     use_sitemap: false
     require_listing: true
     title_suffixes: []
+  - company_id: kakao
+    name: 카카오
+    base_url: https://tech.kakao.com/
+    allowed_hosts: [tech.kakao.com]
+    target: 20
+    article_path: '^/posts/\d+/?$'
+    # robots.txt: "Disallow:" (everything allowed) + sitemap.xml. The RSS feed (/feed) has summaries only and
+    # the post body is drawn by script, so the body is read from the post data the page embeds (__NUXT_DATA__).
+    feeds:
+      - https://tech.kakao.com/feed
+    embedded_data: nuxt
+    exclude_categories: [events]
+    languages: [ko]
+    title_suffixes: [' - tech.kakao.com']
 settings:
   delay_seconds: 2.0
   timeout_seconds: 20
@@ -97,3 +113,5 @@ settings:
     - 행사 안내
     - 세미나 안내
     - 공채
+    - 개최합니다
+    - 다시보기

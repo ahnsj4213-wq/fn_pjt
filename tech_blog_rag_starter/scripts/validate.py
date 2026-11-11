@@ -9,6 +9,7 @@ Exit code 0 only when every document passes AND every company reached its target
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 import argparse
 import hashlib
 import json
@@ -52,8 +53,11 @@ def main():
     ap.add_argument('--check-urls', action='store_true', help='출처 URL을 다시 요청해 200인지 확인')
     args = ap.parse_args()
     cfg = yaml.safe_load((ROOT / 'config' / 'companies.yaml').read_text(encoding='utf-8'))
-    targets = {c['company_id']: c['target'] for c in cfg['companies']}
+    active = [c for c in cfg['companies'] if c.get('enabled', True) is not False]
+    targets = {c['company_id']: c['target'] for c in active}
     names = {c['company_id']: c['name'] for c in cfg['companies']}
+    hosts = {c['company_id']: set(c['allowed_hosts']) for c in cfg['companies']}
+    disabled = {c['company_id']: c.get('disabled_reason', '') for c in cfg['companies'] if c not in active}
 
     counts = Counter()
     errors = []
@@ -69,8 +73,16 @@ def main():
                         raise ValueError(f'missing {key}')
                 if 'published_at' not in doc:
                     raise ValueError('missing published_at key (null is allowed)')
+                # One company per file, and every document really comes from that company's blog: a RAG search
+                # filtered by company_id must never return another company's post.
                 if doc['company_id'] != file.stem:
                     raise ValueError(f'company_id {doc["company_id"]} in {file.name}')
+                if doc['company_id'] not in targets:
+                    raise ValueError(f'company {doc["company_id"]} is not an active company in the config')
+                if doc['company_name'] != names[doc['company_id']]:
+                    raise ValueError(f'company_name {doc["company_name"]} != {names[doc["company_id"]]}')
+                if urlparse(doc['source_url']).hostname not in hosts[doc['company_id']]:
+                    raise ValueError(f'source_url host is not the blog of {doc["company_id"]}')
                 if doc.get('is_synthetic') is not False:
                     raise ValueError('is_synthetic must be false')
                 if doc['document_type'] != 'tech_blog':
@@ -116,13 +128,13 @@ def main():
     if shortfall:
         print('목표 미달:', shortfall)
 
-    write_report(docs, counts, targets, names, errors, rejected, summary, url_status, shortfall)
+    write_report(docs, counts, targets, names, errors, rejected, summary, url_status, shortfall, disabled)
     if errors or shortfall or url_failed:
         sys.exit(1)
     print('검증 통과')
 
 
-def write_report(docs, counts, targets, names, errors, rejected, summary, url_status, shortfall):
+def write_report(docs, counts, targets, names, errors, rejected, summary, url_status, shortfall, disabled):
     now = datetime.now(timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M %Z')
     out = [f'# 기술 블로그 수집 결과 보고서', '', f'생성: {now} (scripts/validate.py)', '',
            '## 요약', '', '| 기업 | 목표 | 실제 확보 | 검증 통과 | robots.txt | 추출 제외 | 상태 |', '|---|---:|---:|---:|---|---:|---|']
@@ -139,6 +151,8 @@ def write_report(docs, counts, targets, names, errors, rejected, summary, url_st
             f'- 검증 오류: {len(errors)}건' + (''.join(f'\n  - {e}' for e in errors)),
             f'- 출처 URL 재확인: ' + (f'{sum(1 for s in url_status.values() if s == "ok(200)")}/{len(url_status)} 정상 (HTTP 200)'
                                    if url_status else '실행 안 함 (`--check-urls`)')]
+    for cid, why in disabled.items():
+        out.append(f'- 수집 대상에서 제외: {names[cid]} ({cid}) — {why}')
     if shortfall:
         out.append(f'- **목표 미달**: ' + ', '.join(f'{names[c]} {n}건 부족' for c, n in shortfall.items()))
     out += ['', '## 수집 실패·제외 사유', '']

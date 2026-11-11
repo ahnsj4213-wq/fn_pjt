@@ -1,9 +1,10 @@
 # 국내 기업 기술 블로그 RAG 수집기 — 1차 60건
 
 ## 대상과 근거
-- 우아한형제들 (20건): https://techblog.woowahan.com/
 - 컬리 (20건): https://helloworld.kurly.com/
 - 토스 (20건): https://toss.tech/
+- 카카오 (20건): https://tech.kakao.com/ — 우아한형제들 대체
+- ~~우아한형제들~~: https://techblog.woowahan.com/ — 2026-11-11 Cloudflare가 수집기 요청에 403을 반환해 제외(`enabled: false`). 우회하지 않음.
 - 목록 출처: https://github.com/mabyoungg/awesome-korean-tech-blogs
 
 이 저장소는 **블로그 URL의 모음집**이며, 게시글 본문 데이터셋은 아닙니다.
@@ -19,6 +20,7 @@ python scripts/collect.py --company kurly --collect --limit 3  # 3건 시험
 python scripts/collect.py --collect        # 기업별 최대 20건
 python scripts/validate.py                # 파일 검증 + data/reports/collection_report.md 생성
 python scripts/validate.py --check-urls   # 출처 URL도 다시 요청해 200 확인
+python -m pytest tests -q                 # 오프라인 단위 테스트 (네트워크 없음)
 ```
 
 Linux/macOS에서는 `source .venv/bin/activate`를 사용합니다. 초기 탐색·수집에 시간이 걸릴 수 있습니다.
@@ -38,10 +40,14 @@ Linux/macOS에서는 `source .venv/bin/activate`를 사용합니다. 초기 탐�
 - **탐색 순서**: 공식 RSS/Atom → 설정의 공개 목록 페이지(`listing_urls`, `?page={n}`) → sitemap. 회사별 `article_path` 정규식에 맞는 글 URL만 후보.
   - 우아한형제들: RSS(`/feed/?paged=1~3`) + `post-sitemap.xml`
   - 컬리: `sitemap-index.xml` → `sitemap-0.xml` (RSS·`/sitemap.xml`은 403)
+  - 카카오: robots.txt 전체 허용 + `sitemap.xml`(`/posts/N`). RSS는 요약만 있고 본문은 스크립트로 그려지므로,
+    페이지 HTML에 함께 실린 글 데이터(`__NUXT_DATA__`)에서 본문을 읽음(`embedded_data: nuxt`). `events` 카테고리·영어판(`languages: [ko]`) 제외
   - 토스: robots.txt·sitemap 없음 → 공식 `rss.xml` + 공개 `/category/engineering?page=N`만 사용, 엔지니어링 목록에 있는 글만(`require_listing`)
 - **본문**: trafilatura(정밀 모드). 피드 본문이 페이지 추출보다 10% 넘게 길면 피드 본문 사용. 끝부분 채용·구독 안내 줄, 같은 블로그 글의 30% 이상에
   반복되는 15자 이상 줄(메뉴·푸터·공유 문구)은 제거. 기술 키워드가 `min_tech_keywords`(4)개 미만인 글은 `not_technical`로 제외.
 - **요청 예절**: 요청 간격 2초(우아한형제들 5초), 타임아웃 20초, 일시 오류(타임아웃·429·5xx)는 최대 2회 재시도 후 포기. 차단(403)은 우회하지 않습니다.
+- **회사 구분**: 회사마다 파일 하나(`data/raw/<company_id>.jsonl`). 검증 시 `company_id`=파일명, `company_name`=설정값,
+  `source_url` 호스트=그 회사 블로그인지 확인해 RAG 검색에서 타사 문서가 섞이지 않게 함.
 - **재실행**: 기존 JSONL을 읽어 같은 URL(정규화)·같은 본문 해시는 다시 저장하지 않습니다.
 
 ## 수집 원칙과 주의사항

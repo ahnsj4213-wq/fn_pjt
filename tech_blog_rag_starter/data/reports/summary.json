@@ -1,10 +1,10 @@
 [
   {
     "company": "woowahan",
-    "status": "robots_unavailable",
-    "error": "robots.txt 확인 실패: https://techblog.woowahan.com/robots.txt: HTTP 403",
+    "status": "disabled",
+    "reason": "Cloudflare 403 on the collector (2026-11-11), not bypassed; replaced by kakao",
     "saved": 0,
-    "target": 3
+    "target": 0
   },
   {
     "company": "kurly",
@@ -23,5 +23,14 @@
     "target": 20,
     "rejected": 0,
     "candidates": 60
+  },
+  {
+    "company": "kakao",
+    "status": "target_met",
+    "robots": "ok(200)",
+    "saved": 20,
+    "target": 20,
+    "rejected": 0,
+    "candidates": 150
   }
 ]
