@@ -1,0 +1,27 @@
+[
+  {
+    "company": "woowahan",
+    "status": "robots_unavailable",
+    "error": "robots.txt 확인 실패: https://techblog.woowahan.com/robots.txt: HTTP 403",
+    "saved": 0,
+    "target": 3
+  },
+  {
+    "company": "kurly",
+    "status": "target_met",
+    "robots": "ok(200)",
+    "saved": 20,
+    "target": 20,
+    "rejected": 0,
+    "candidates": 123
+  },
+  {
+    "company": "toss",
+    "status": "target_met",
+    "robots": "absent(404)",
+    "saved": 20,
+    "target": 20,
+    "rejected": 0,
+    "candidates": 60
+  }
+]

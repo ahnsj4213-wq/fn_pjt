@@ -1,0 +1,99 @@
+companies:
+  - company_id: woowahan
+    name: 우아한형제들
+    base_url: https://techblog.woowahan.com/
+    allowed_hosts: [techblog.woowahan.com]
+    delay_seconds: 5.0  # Cloudflare blocked this IP once (403) during probing: slower pace
+    target: 20
+    article_path: '^/\d+/?$'
+    feeds:
+      - https://techblog.woowahan.com/feed/
+      - https://techblog.woowahan.com/feed/?paged=2
+      - https://techblog.woowahan.com/feed/?paged=3
+    title_suffixes: [' | 우아한형제들 기술블로그']
+  - company_id: kurly
+    name: 컬리
+    base_url: https://helloworld.kurly.com/
+    allowed_hosts: [helloworld.kurly.com]
+    target: 20
+    article_path: '^/blog/[^/]+/?$'
+    title_suffixes: [' - 컬리 기술 블로그']
+  - company_id: toss
+    name: 토스
+    base_url: https://toss.tech/
+    allowed_hosts: [toss.tech]
+    target: 20
+    article_path: '^/article/[^/]+/?$'
+    # robots.txt returns 404 (no file). Discovery uses only the official RSS feed and the public
+    # engineering category pages; no generic crawling (and toss.tech has no sitemap.xml).
+    feeds:
+      - https://toss.tech/rss.xml
+    listing_urls:
+      - https://toss.tech/category/engineering?page={n}
+    use_sitemap: false
+    require_listing: true
+    title_suffixes: []
+settings:
+  delay_seconds: 2.0
+  timeout_seconds: 20
+  max_retries: 2
+  max_sitemap_urls_per_company: 2500
+  max_listing_pages_per_company: 12
+  max_candidates_per_company: 150
+  min_body_characters: 1000
+  min_tech_keywords: 4
+  user_agent: TechBlogRAGResearchBot/0.1 (+local research; polite fetch)
+  keywords:
+    - 아키텍처
+    - 데이터
+    - Kafka
+    - PostgreSQL
+    - MySQL
+    - Redis
+    - Elasticsearch
+    - 검색
+    - 파이프라인
+    - LLM
+    - RAG
+    - 인프라
+    - 백엔드
+    - 프론트엔드
+    - 서버
+    - 성능
+    - 장애
+    - 분산
+    - Kubernetes
+    - Docker
+    - MSA
+    - AI
+    - 머신러닝
+    - 모델
+    - 최적화
+    - 트랜잭션
+    - 캐시
+    - API
+    - 대용량
+    - 시스템
+    - 배포
+    - 모니터링
+    - 쿼리
+    - 데이터베이스
+    - 테스트
+    - 코드
+    - Spring
+    - Kotlin
+    - Java
+    - Python
+    - TypeScript
+    - React
+    - 클라우드
+    - AWS
+  exclude_title_terms:
+    - 채용
+    - 모집
+    - 밋업
+    - 컨퍼런스 안내
+    - 후기 이벤트
+    - 행사 안내
+    - 세미나 안내
+    - 공채
