@@ -1,0 +1,78 @@
+[
+  {
+    "source_url": "https://tech.kakao.com/posts/842",
+    "reason": "excluded_title"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/836",
+    "reason": "excluded_category(events)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/835",
+    "reason": "excluded_category(events)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/833",
+    "reason": "excluded_category(events)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/834",
+    "reason": "not_technical(score=3)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/832",
+    "reason": "short_or_empty_body"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/830",
+    "reason": "excluded_title"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/828",
+    "reason": "language(en)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/825",
+    "reason": "not_technical(score=2)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/818",
+    "reason": "excluded_category(events)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/820",
+    "reason": "not_technical(score=1)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/819",
+    "reason": "excluded_category(events)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/814",
+    "reason": "excluded_title"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/813",
+    "reason": "excluded_title"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/811",
+    "reason": "excluded_category(events)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/823",
+    "reason": "manual_review(a non-developer's AI tool essay, not a tech case)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/816",
+    "reason": "manual_review(new-hire onboarding retrospective)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/815",
+    "reason": "manual_review(new-hire onboarding retrospective)"
+  },
+  {
+    "source_url": "https://tech.kakao.com/posts/809",
+    "reason": "excluded_title"
+  }
+]
