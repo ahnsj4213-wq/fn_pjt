@@ -70,6 +70,8 @@ def remove_stt_noise(text: str, question: str = "") -> str:
         # cannot safely be declared noise.
         if len(trailing) >= 3 and len(short) == len(trailing) and social:
             drop.update(short)
+    if not drop:
+        return text or ""  # nothing to drop: the evaluation copy keeps the transcript's own line breaks and spacing
     remaining = [s for i, s in enumerate(chunks) if i not in drop]
     return " ".join(remaining) if remaining else text or ""
 

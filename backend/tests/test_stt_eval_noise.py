@@ -39,3 +39,11 @@ def test_name_redaction_remains_after_voice_cleanup():
     assert "김철수" not in clean
     assert "[지원자]" in clean
     assert "안녕" not in clean
+
+
+def test_a_voice_answer_without_artifacts_keeps_its_line_breaks():
+    raw = "첫째로 실행 계획을 확인했습니다.
+둘째로 인덱스를 추가했습니다.
+결과적으로 응답이 빨라졌습니다."
+    assert remove_stt_noise(raw, "쿼리 성능") == raw
+    assert make_eval_text(raw, question="쿼리 성능", voice=True) == make_eval_text(raw, question="쿼리 성능", voice=False)
