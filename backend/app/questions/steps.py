@@ -28,7 +28,7 @@ node that stopped; a node finds the slots still empty from the plan and what is 
 
 dict: ids, the live flag and the questions picked so far (slot, text, source, grounding). The plan is not kept (plan_slots is
 code over the settings version, recomputed by each node). The picked questions cannot live in the database before `write` without
-a new question-set state (the compose job treats a COMPOSING/READY set of the same version as done): that is an API/DB change left
+a new question-set state (only a READY set of the same version counts as done; COMPOSING is never written and is superseded): that is an API/DB change left
 out on purpose. The state is cleared when the run ends and `purge_finished` removes the leftovers of attempts that are over.
 """
 import logging
@@ -151,7 +151,7 @@ async def write(state: dict) -> dict:
     app_id, settings_id = UUID(state["application_id"]), UUID(state["settings_id"])
     async with session_scope() as db:  # a short read: an earlier attempt may have written the set already
         done = (await db.execute(select(QuestionSet.id).where(QuestionSet.application_id == app_id, QuestionSet.settings_id == settings_id,
-                                                              QuestionSet.status.in_(["COMPOSING", "READY"])))).scalar_one_or_none()
+                                                              QuestionSet.status == "READY"))).scalar_one_or_none()
     if done is not None:
         return {"qset_id": str(done)}
     c, slots = await _load(state)
@@ -162,14 +162,21 @@ async def write(state: dict) -> dict:
     picked = sorted(c.picked, key=lambda p: p.seq)
     verify(picked, slots, live)
     async with session_scope() as db:  # a second writer of the same set fails on the live-set unique index; its retry finds it
+        # The application is locked first (interview start locks it too) and must still be before its interview: a composition
+        # that ends after the interview began never supersedes the set in use nor writes an unused one (PR #2 review).
+        app = await db.get(Application, app_id, with_for_update=True)
         current =(await db.execute(select(QuestionSet).where(QuestionSet.application_id == app_id,
                                                               QuestionSet.status.in_(["COMPOSING", "READY"])))).scalar_one_or_none()
-        if current is not None and current.settings_id == settings_id:  # written meanwhile
+        if app is None or app.attempt_status not in ("READY", "PREPARING"):
+            log_event(log, "compose_stale_write_skipped", application_id=str(app_id))
+            return {"qset_id": None}  # nothing written by this run (the set in use, if any, stays as it is)
+        if current is not None and current.settings_id == settings_id and current.status == "READY":  # written meanwhile
             return {"qset_id": str(current.id)}
         if current is not None:
-            current.status = "SUPERSEDED"  # weights/custom question changed before the interview (start() re-enqueues)
+            # weights/custom question changed before the interview (start() re-enqueues), or a COMPOSING set (never written by
+            # this code: sets are written READY with their rows in one transaction) that would otherwise block the live index
+            current.status = "SUPERSEDED"
             await db.flush()
-        app = await db.get(Application, app_id)
         settings = await db.get(PostingEvalSettings, settings_id)
         qset = await C.write_set(db, app, settings, slots, picked, live=live)
         await enqueue(db, "tts_pregen", {"question_set_id": str(qset.id)}, application_id=app_id, dedupe_key=f"tts:{qset.id}")

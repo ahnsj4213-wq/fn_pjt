@@ -79,8 +79,8 @@ def reuse_problems(payload: dict | None, answer: InterviewAnswer) -> list[str]:
 
 def seal_fresh(payload: dict, answer: InterviewAnswer) -> dict:
     """A result just made by T5 (its own regeneration budget is spent): what still fails is settled here, never asked again.
-    UNLINKED stays (the model's score, no quote); a quote that is not a span of the answer becomes 근거 부족 with the
-    reason QUOTE_MISMATCH (system side, not 내용 부족). A wrong shape or rubric version cannot be settled: EvaluationFailed."""
+    UNLINKED stays (the model's score, no quote); a quote that is not a span of the answer becomes UNLINKED too (system
+    side, the model's score stays: an extraction failure never makes the score, ADR-0023). A wrong shape or rubric version cannot be settled: EvaluationFailed."""
     problems = reuse_problems(payload, answer)
     hard = [p for p in problems if p in ("SHAPE", "RUBRIC_VERSION", "STALE")]
     if hard:
@@ -88,8 +88,8 @@ def seal_fresh(payload: dict, answer: InterviewAnswer) -> dict:
     text = answer.eval_text or ""
     items = {}
     for crit, it in payload["items"].items():
-        if it["evidence_status"] == "OK" and _item_problem(it, text) == "QUOTE_MISMATCH":
-            it = {**it, "score": 1, "evidence_status": "INSUFFICIENT", "insufficient_reason": "QUOTE_MISMATCH", "quote": None}
+        if it["evidence_status"] == "OK" and _item_problem(it, text) == "QUOTE_MISMATCH":  # unverified evidence: score stays
+            it = {**it, "evidence_status": "UNLINKED", "insufficient_reason": None, "quote": None}
         items[crit] = it
     return {**payload, "items": items}
 

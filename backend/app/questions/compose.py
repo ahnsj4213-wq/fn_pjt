@@ -638,7 +638,9 @@ async def plan_slots(db: AsyncSession, posting: JobPosting, settings: PostingEva
 async def _fill_common(db: AsyncSession, c: _Ctx, kind: str, slots: list[tuple[int, str]], about: str = "") -> None:
     """인성·협업: made from the candidate's resume or the posting by code (common_fallback), not taken from the question bank."""
     if slots:
+        start = len(c.picked)
         common_fallback(c, slots, kind)
+        quality.check_fallback(c, start)
 
 
 ADAPT_DOCUMENTS = 4

@@ -1,0 +1,14 @@
+[
+  {
+    "source_url": "https://toss.tech/article/toss-frontend-ai-docs-eng",
+    "reason": "manual_review(English translation of an earlier Korean post)"
+  },
+  {
+    "source_url": "https://toss.tech/article/technical-writing-2-eng",
+    "reason": "language(en)"
+  },
+  {
+    "source_url": "https://toss.tech/article/technical-writing-1-eng",
+    "reason": "language(en)"
+  }
+]

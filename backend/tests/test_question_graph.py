@@ -177,7 +177,7 @@ async def test_a_crash_after_the_write_committed_reruns_write_without_a_second_s
     with pytest.raises(RuntimeError):
         await G.compose(aid, sid)
     graph = await G.get_graph()
-    snap = await graph.aget_state({"configurable": {"thread_id": G.thread_id(aid)}})
+    snap = await graph.aget_state({"configurable": {"thread_id": G.thread_id(aid, G.COMPOSE, sid)}})
     assert snap.next == ("write",)  # the checkpoint says write has not run; the database says it has
     before = len(fake_ai.calls)
     qset = await G.compose(aid, sid)

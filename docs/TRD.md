@@ -1731,7 +1731,7 @@ BGE-M3 CPU 임베딩(이전 `qwen3-embedding:0.6b`), 코사인 ≥ 0.85면 중�
 
 평가 작업은 LangGraph 그래프로 실행한다(ADR-0027·0028, `evaluation/graph.py`, `thread_id=eval:<application>:<job>`).
 
-- (ADR-0028) 단위 판정마다 서버 검사(`evaluation/checks.py`, `unit-check-1`): SHAPE, QUOTE_MISMATCH, NO_EVIDENCE(3점 이상인데 확인된 근거 없음), REASON_SCORE(이유는 부족인데 4점 이상), UNSTABLE(표본 편차 3점 이상). 걸린 단위만 사유를 피드백으로 넣어 단위당 1회 재판정하고, 남으면 시스템 쪽(근거 미연결·인용 불일치 → 보류 집계)과 내용 쪽(LOW_CONTENT, 최대 2점)으로 나눈다. 단위당 호출 상한 `unit_call_cap`(표본 3이면 20). AI는 항목별 점수 후보·이유·인용만, 검증·가중치·총점은 서버 코드. 코딩 정답은 테스트케이스 실행 결과만.
+- (ADR-0028) 단위 판정마다 서버 검사(`evaluation/checks.py`, `unit-check-2`): SHAPE, QUOTE_MISMATCH, NO_EVIDENCE(3점 이상인데 확인된 근거 없음), REASON_SCORE(이유는 부족인데 4점 이상), UNSTABLE(표본 편차 3점 이상). 걸린 단위만 사유를 피드백으로 넣어 단위당 1회 재판정하고, 남은 QUOTE_MISMATCH·NO_EVIDENCE·REASON_SCORE는 UNLINKED(모델 점수 유지, 시스템 쪽 → 50% 초과 시 보류)로 둔다. 근거 실패·단어 맞추기로 점수를 깎지 않는다. 내용 부족은 규칙 결과(짧음·무응답)와 모델 자신의 1~2점에서만 나온다. 단위당 호출 상한 `unit_call_cap`(표본 3이면 20). AI는 항목별 점수 후보·이유·인용만, 검증·가중치·총점은 서버 코드. 코딩 정답은 테스트케이스 실행 결과만.
 
 - 흐름: `prepare → unit(단위별 순차) → verify → code_review(T8) → custom → score → summary(T6) → feedback(T7)`. 그 뒤 핸들러가 `finalize`(점수 재계산 확인)하고 펜싱 저장한다.
 - 사전 평가는 재사용 규칙(`SHAPE`·`RUBRIC_VERSION`·`STALE`·`QUOTE_MISMATCH`·`UNLINKED`)을 통과하면 재사용하고, 걸린 단위만 실행당 1회 재평가한다.
@@ -1851,7 +1851,7 @@ PRD 목표(8.2): 본질문 음성 1초 안, 자막 말 끊긴 뒤 2초 안, 답�
 
 ### 5. 서버 턴 상태 기계
 
-> **ADR-0028:** 면접 실행 그래프 하나(`app/interview/graph.py`, thread = 지원서 id)가 질문 구성(`start → plan → project → motivation → job_skill → write`), 면접 진행, 코딩 진입(`finish` → CODING)과 최종 제출(`coding_submit`)까지 맡는다. 입구는 `compose`(질문 구성 작업), `begin`/`resume`(면접), `submit_coding`(코딩 최종 제출)이고 `start` 노드가 DB 상태로 갈 길을 정한다. live 다음 질문은 노드 `compose_next`가 만든다(답변 중 미리 만들기는 유지).
+> **ADR-0028:** 면접 실행 그래프 하나(`app/interview/graph.py`, thread = 지원서 id)가 질문 구성(`start → plan → project → motivation → job_skill → write`), 면접 진행, 코딩 진입(`finish` → CODING)과 최종 제출(`coding_submit`)까지 맡는다. 입구는 `compose`(질문 구성 작업), `begin`/`resume`(면접), `submit_coding`(코딩 최종 제출)이고 `start` 노드가 DB 상태로 갈 길을 정한다. 체크포인트 thread는 입구마다 따로다(면접 `<지원서>`, 구성 `compose:<지원서>:<설정>`, 제출 `submit:<지원서>`). 질문 세트 완료 판정은 READY만이다. 코드가 만든 대체 질문도 품질 검사를 거치고, 걸리면 고정 안전 문장(`SAFE_TEXT`)으로 바꾼다. live 다음 질문은 노드 `compose_next`가 만든다(답변 중 미리 만들기는 유지).
 >
 > **ADR-0016·0027:** 아래 S1~S10의 순서는 LangGraph 그래프(`app/interview/graph.py`)가 진행한다. 노드는 `present`(S1) → `ask`(S1~S2b: 질문 이벤트, TTS, 생각 시간) → `wait_answer`(`interrupt`, S3~S6: 답변 창) → `transcribe`(S7: STT 마무리와 답변 확정) → `decide_followup`(S10) → `present`/`finish`다. 음성 세션과 텍스트 모드가 같은 그래프를 `TurnIO`(`ask`/`capture`/`finalized`)로 구동한다. 같은 단계가 다시 돌아도 효과는 한 번이다(꼬리질문 판단·답변 확정 1회, ADR-0027). 체크포인트는 PostgreSQL에 있고 답변 텍스트는 담지 않는다. (ADR-0016의 "끊긴 뒤 재접속하면 같은 문항을 새 제시로" 경로는 ADR-0024로 쓰지 않는다.)
 

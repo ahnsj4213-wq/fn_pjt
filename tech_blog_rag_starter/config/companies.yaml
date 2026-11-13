@@ -1,0 +1,135 @@
+companies:
+  - company_id: woowahan
+    name: 우아한형제들
+    base_url: https://techblog.woowahan.com/
+    allowed_hosts: [techblog.woowahan.com]
+    enabled: false
+    disabled_reason: 'Cloudflare 403 on the collector (2026-11-11), not bypassed; replaced by kakao'
+    delay_seconds: 5.0  # Cloudflare blocked this IP once (403) during probing: slower pace
+    target: 20
+    article_path: '^/\d+/?$'
+    feeds:
+      - https://techblog.woowahan.com/feed/
+      - https://techblog.woowahan.com/feed/?paged=2
+      - https://techblog.woowahan.com/feed/?paged=3
+    title_suffixes: [' | 우아한형제들 기술블로그']
+  - company_id: kurly
+    name: 컬리
+    base_url: https://helloworld.kurly.com/
+    allowed_hosts: [helloworld.kurly.com]
+    target: 20
+    article_path: '^/blog/[^/]+/?$'
+    title_suffixes: [' - 컬리 기술 블로그']
+    # Manual sample review (PR #4 review 1): posts about team culture or programs, not a tech case. Replaced.
+    exclude_urls:
+      - url: https://helloworld.kurly.com/blog/2025-delivery-debug-study/
+        reason: team study program, not a tech case
+  - company_id: toss
+    name: 토스
+    base_url: https://toss.tech/
+    allowed_hosts: [toss.tech]
+    target: 20
+    article_path: '^/article/[^/]+/?$'
+    # robots.txt returns 404 (no file). Discovery uses only the official RSS feed and the public
+    # engineering category pages; no generic crawling (and toss.tech has no sitemap.xml).
+    feeds:
+      - https://toss.tech/rss.xml
+    listing_urls:
+      - https://toss.tech/category/engineering?page={n}
+    use_sitemap: false
+    require_listing: true
+    languages: [ko]
+    title_suffixes: []
+    exclude_urls:
+      - url: https://toss.tech/article/toss-frontend-ai-docs-eng
+        reason: English translation of an earlier Korean post
+  - company_id: kakao
+    name: 카카오
+    base_url: https://tech.kakao.com/
+    allowed_hosts: [tech.kakao.com]
+    target: 20
+    article_path: '^/posts/\d+/?$'
+    # robots.txt: "Disallow:" (everything allowed) + sitemap.xml. The RSS feed (/feed) has summaries only and
+    # the post body is drawn by script, so the body is read from the post data the page embeds (__NUXT_DATA__).
+    feeds:
+      - https://tech.kakao.com/feed
+    embedded_data: nuxt
+    exclude_categories: [events]
+    languages: [ko]
+    title_suffixes: [' - tech.kakao.com']
+    exclude_urls:
+      - url: https://tech.kakao.com/posts/823
+        reason: a non-developer's AI tool essay, not a tech case
+      - url: https://tech.kakao.com/posts/816
+        reason: new-hire onboarding retrospective
+      - url: https://tech.kakao.com/posts/815
+        reason: new-hire onboarding retrospective
+settings:
+  delay_seconds: 2.0
+  timeout_seconds: 20
+  max_retries: 2
+  max_sitemap_urls_per_company: 2500
+  max_listing_pages_per_company: 12
+  max_candidates_per_company: 150
+  min_body_characters: 1000
+  min_tech_keywords: 4
+  # Boilerplate lines found inside bodies during the manual review (image captions with the copyright notice).
+  drop_line_patterns:
+    - '^(©|\(c\))\s*\d{4}.{0,40}all rights? reserved\.?(\s*(©|\(c\)).{0,60})?$'
+  user_agent: TechBlogRAGResearchBot/0.1 (+local research; polite fetch)
+  keywords:
+    - 아키텍처
+    - 데이터
+    - Kafka
+    - PostgreSQL
+    - MySQL
+    - Redis
+    - Elasticsearch
+    - 검색
+    - 파이프라인
+    - LLM
+    - RAG
+    - 인프라
+    - 백엔드
+    - 프론트엔드
+    - 서버
+    - 성능
+    - 장애
+    - 분산
+    - Kubernetes
+    - Docker
+    - MSA
+    - AI
+    - 머신러닝
+    - 모델
+    - 최적화
+    - 트랜잭션
+    - 캐시
+    - API
+    - 대용량
+    - 시스템
+    - 배포
+    - 모니터링
+    - 쿼리
+    - 데이터베이스
+    - 테스트
+    - 코드
+    - Spring
+    - Kotlin
+    - Java
+    - Python
+    - TypeScript
+    - React
+    - 클라우드
+    - AWS
+  exclude_title_terms:
+    - 채용
+    - 모집
+    - 밋업
+    - 컨퍼런스 안내
+    - 후기 이벤트
+    - 행사 안내
+    - 세미나 안내
+    - 공채
+    - 개최합니다
+    - 다시보기

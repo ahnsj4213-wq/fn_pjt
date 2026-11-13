@@ -19,11 +19,14 @@ inside the task (no regeneration inside the task any more: the second request he
 format_retries 1 that is MAX_MODEL_CALLS = 4 model calls, where the earlier design allowed 5 for T2 (two RAG rounds, one
 in-task regeneration) and 4 for T3.
 
-Custom questions and live-coding problems are the company's own and are never judged. Code-made questions are judged too (the
-fallbacks are written to pass); a fallback is still used when it does not, since a slot must not stay empty (QST-07).
+Custom questions and live-coding problems are the company's own and are never judged. Code-made questions (TEMPLATE) pass the
+same gate (check_fallback): one that fails (a posting line with foreign script, a repeat) is replaced by a fixed safe sentence of
+its area (SAFE_TEXT, no company or candidate text in it); when none of those passes either, the composition fails explicitly
+(ComposeError) instead of asking a question that failed the gate (PR #2 review).
 Nothing here scores or decides anything about a candidate, and the reasons are logged as counts, never with the text.
 """
 import re
+from dataclasses import replace
 
 from app.ai.tasks import TASKS
 from app.ai.tasks.questions import FEEDBACK_MAX, flatten_resume, is_work_evidence, shape_problem, similar_question
@@ -147,6 +150,47 @@ def take(c, p) -> bool:
     return False
 
 
+# Fixed sentences a failed code-made question is replaced by: no company or candidate text, checked by tests to pass judge.
+SAFE_TEXT = {
+    Area.PERSONALITY.value: ("스스로 세운 목표를 이루기 위해 꾸준히 노력했던 경험을 말씀해 주시겠습니까?",
+                             "실수를 했던 경험이 있다면, 그 뒤에 무엇을 바꾸셨습니까?"),
+    Area.COLLABORATION.value: ("함께 일하는 사람과 생각이 달랐던 경험이 있다면, 어떻게 풀어 가셨습니까?",
+                               "팀에서 맡은 역할을 끝까지 해내기 위해 어떤 노력을 하셨습니까?"),
+    Area.MOTIVATION.value: ("이 회사에 지원하게 된 가장 큰 이유는 무엇입니까?",
+                            "입사한다면 이 회사에서 가장 먼저 해 보고 싶은 일은 무엇입니까?"),
+    Area.JOB_SKILL.value: ("지원하신 직무에서 가장 중요하다고 생각하는 역량은 무엇이며, 그 이유는 무엇입니까?",
+                           "지원하신 직무의 일을 처음 맡게 된다면 무엇부터 확인하시겠습니까?",
+                           # a third: the default plan has three 직무 and three 경험 slots (a posting or resume whose every line
+                           # has foreign script would otherwise fail the composition at the third slot)
+                           "지원하신 직무를 잘 해내기 위해 지금 준비하고 있는 것은 무엇입니까?"),
+    Area.PROJECT.value: ("지금까지 해 본 일 가운데 가장 어려웠던 문제는 무엇이었고, 어떻게 해결하셨습니까?",
+                         "지금까지 해 본 일 가운데 가장 기억에 남는 일은 무엇이었고, 본인은 어떤 역할을 맡았습니까?",
+                         "직접 맡아서 끝까지 마무리했던 일 하나를 골라, 그 과정을 말씀해 주시겠습니까?"),
+}
+
+
+def check_fallback(c, start: int) -> None:
+    """The code-made questions picked since index `start` pass the same gate as generated ones. A failing one is replaced by a
+    SAFE_TEXT sentence of its area that passes; with none left, ComposeError (never a question that failed the gate)."""
+    from app.questions.compose import ComposeError  # compose imports this module
+
+    for i in range(start, len(c.picked)):
+        p = c.picked[i]
+        reasons = judge(c, p)
+        if not reasons:
+            continue
+        for r in reasons:
+            c.reject(r)
+        others = [o for o in c.picked if o is not p]
+        for alt in SAFE_TEXT.get(p.slot, ()):
+            q = replace(p, text=alt, grounding={"sources": [{"type": "TEMPLATE"}], "fallback": "SAFE"})
+            if not judge(c, q, others):
+                c.picked[i] = q
+                break
+        else:
+            raise ComposeError(f"{p.slot}: no code-made question passes the quality gate for seq {p.seq}")
+
+
 async def fill(c, slots: list[tuple[int, str]], attempt, fallback) -> None:
     """Fill `slots` (one area): `attempt(c, empty)` makes one model request and passes each candidate through `take`;
     whatever is still empty after MAX_REQUESTS requests (or a timeout) is made by `fallback(c, empty)` (code, no model)."""
@@ -164,4 +208,6 @@ async def fill(c, slots: list[tuple[int, str]], attempt, fallback) -> None:
     c.attempt, c.feedback, c.failed = 0, [], []
     rest = [s for s in slots if s[0] not in {p.seq for p in c.picked}]
     if rest:
+        start = len(c.picked)
         fallback(c, rest)
+        check_fallback(c, start)
