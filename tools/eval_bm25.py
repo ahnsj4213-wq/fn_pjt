@@ -14,8 +14,8 @@ Metrics per document (a chunk counts for the post it belongs to), top 5:
   Recall@5  relevant posts found / relevant posts           근거 정확도  results that belong to a relevant post / results
   p50/p95   wall time of one search, embedding call included (ms)
   혼입      results from another company (must be 0)
-The weights and the BM25 coverage floor are chosen on split=tune (best MRR@5, then 근거 정확도, then Hit@5, then p95) and reported
-on split=val. `--configs` reruns a few configurations with more timed rounds.
+The weights and the BM25 coverage floor are chosen on split=tune among the configurations whose 근거 정확도 stays within
+PRECISION_SLACK of legacy (best MRR@5, then 근거 정확도, then Hit@5, then p95) and reported on split=val. `--configs` reruns a few configurations with more timed rounds.
 """
 import argparse
 import asyncio
@@ -41,6 +41,7 @@ WEIGHTS = [(1.0, 0.0), (0.7, 0.3), (0.6, 0.4), (0.5, 0.5), (0.4, 0.6), (0.0, 1.0
 COVERAGES = [0.0, 0.3, 0.5, 0.7]  # rag_bm25_min_coverage: no BM25 floor, then stricter ones (100:0 has no BM25 list)
 GRID = ["legacy"] + [(wv, wb, c) for wv, wb in WEIGHTS for c in (COVERAGES if wb > 0 else [0.0])]
 QUERIES = Path(__file__).with_name("bm25_eval_queries.json")
+PRECISION_SLACK = 0.02  # a configuration may lose at most this much evidence precision against legacy on split=tune
 
 
 def label(cfg) -> str:
@@ -176,8 +177,12 @@ async def main() -> None:
                        ("paraphrase", lambda r: r["kind"] == "paraphrase")):
         report["tables"][part] = {name: measure([r for r in rs if pick(r)]) for name, rs in rows.items()}
     tune = report["tables"]["tune"]
-    # accuracy first (MRR, then evidence precision, then Hit), latency only to break a tie
-    best = max((c for c in tune if c != "legacy"),
+    # Guardrail (PR #6 review): T2 reads all k chunks, so a configuration may not lose more than PRECISION_SLACK of the legacy
+    # evidence precision. Among the rest: accuracy first (MRR, then evidence precision, then Hit), latency only to break a tie.
+    base = tune["legacy"]["근거정확도"] if "legacy" in tune else 0.0
+    ok = [c for c in tune if c != "legacy" and tune[c]["근거정확도"] >= base - PRECISION_SLACK]
+    report["guardrail"] = {"legacy_precision": base, "slack": PRECISION_SLACK, "passed": ok}
+    best = max(ok or ["100:0/c0.0"],
                key=lambda c: (tune[c]["mrr@5"], tune[c]["근거정확도"], tune[c]["hit@5"], -tune[c]["p95_ms"]))
     report["chosen_on_tune"] = best
     report["per_query_first_rank"] = {name: {r["id"]: r["first_rank"] for r in rs} for name, rs in rows.items()}

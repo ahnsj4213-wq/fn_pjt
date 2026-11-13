@@ -117,23 +117,40 @@ async def hybrid(db, ai: AIClient | None, model: str, *, company_id: uuid.UUID, 
         if vectors is None and ai is not None:
             vectors = await embed_queries(ai, queries, kind)
         if vectors and len(vectors) == len(queries) and all(len(v) == EMBED_DIM for v in vectors):
-            for vec in vectors:
-                lists.append((s.rag_weight_vector, await _vector_list(db, vec, model, company_id=company_id, posting_id=posting_id, n=n,
-                                                                      floor=floor, exclude_docs=exclude_docs, shared=shared,
-                                                                      company_wide_only=company_wide_only)))
-            ran["vector"] = True
+            try:
+                found = await _isolated(db, lambda: _all(vectors, lambda vec: _vector_list(
+                    db, vec, model, company_id=company_id, posting_id=posting_id, n=n, floor=floor, exclude_docs=exclude_docs,
+                    shared=shared, company_wide_only=company_wide_only)))
+                lists += [(s.rag_weight_vector, x) for x in found]
+                ran["vector"] = True
+            except Exception as e:  # noqa: BLE001 - the pgvector query failed (not the model): BM25 still answers
+                log_event(log, "rag_degraded", kind=f"KNOWLEDGE:{kind}", company_id=str(company_id), reason=f"vector_{type(e).__name__}")
         else:
             log_event(log, "rag_degraded", kind=f"KNOWLEDGE:{kind}", company_id=str(company_id), reason="vector_unavailable")
     if s.rag_weight_bm25 > 0:
         try:
-            for q in queries:
-                lists.append((s.rag_weight_bm25, await _bm25_list(db, q, company_id=company_id, posting_id=posting_id, n=n,
-                                                                  exclude_docs=exclude_docs, shared=shared,
-                                                                  company_wide_only=company_wide_only)))
+            found = await _isolated(db, lambda: _all(queries, lambda q: _bm25_list(
+                db, q, company_id=company_id, posting_id=posting_id, n=n, exclude_docs=exclude_docs, shared=shared,
+                company_wide_only=company_wide_only)))
+            lists += [(s.rag_weight_bm25, x) for x in found]
             ran["bm25"] = True
         except Exception as e:  # noqa: BLE001 - the vector lists still answer; the error type is logged, never the query
             log_event(log, "rag_degraded", kind=f"KNOWLEDGE:{kind}", company_id=str(company_id), reason=f"bm25_{type(e).__name__}")
     return fuse(lists), ran
+
+
+async def _all(items, one) -> list[list[Chunk]]:
+    return [await one(x) for x in items]
+
+
+async def _isolated(db, run):
+    """run() so that a failing statement does not take the other method down with it (PR #6 review). On a session the method runs in
+    a SAVEPOINT: a failed query rolls back to it and the caller's transaction stays usable. ShortReads runs every statement in its own
+    short transaction already. A database that is down altogether fails both methods: the caller takes its usual fallback."""
+    if isinstance(db, AsyncSession):
+        async with db.begin_nested():
+            return await run()
+    return await run()
 
 
 def _log_result(out: list[Chunk], *, kind: str, company_id, posting_id, ran: dict) -> None:
@@ -186,13 +203,25 @@ async def search_many(db: AsyncSession, ai: AIClient, model: str, *, company_id:
         vectors = None
     ranked, ran = await hybrid(db, ai, model, company_id=company_id, posting_id=posting_id, queries=queries, k=k, floor=floor, kind=kind,
                                exclude_docs=exclude_docs, shared=shared, vectors=vectors, use_vector=use_vector)
-    first, rest, titles = [], [], set()
-    for ch in ranked:
-        (rest if ch.title in titles else first).append(ch)
-        titles.add(ch.title)
-    out = (first + rest)[:k]
+    out = diverse(ranked)[:k]
     _log_result(out, kind=kind, company_id=company_id, posting_id=posting_id, ran=ran)
     return out
+
+
+def diverse(ranked: list[Chunk]) -> list[Chunk]:
+    """One chunk per document title first, then the rest, each part in fused order.
+
+    Only a chunk the vector search found above its floor (similarity > 0) is moved up for being the first of its title. A chunk only
+    BM25 found keeps its fused place: measured (ADR-0030, PR #6 review) the move put another post that merely shares a word with the
+    query ahead of the second chunk of the right post, and the evidence precision fell from 0.76 to 0.62. When the vector search found
+    nothing (or is down) every chunk is BM25's and the rule applies to them as before."""
+    vector_found = any(ch.similarity > 0 for ch in ranked)
+    first, rest, titles = [], [], set()
+    for ch in ranked:
+        new_title = ch.title not in titles
+        titles.add(ch.title)
+        (first if new_title and (ch.similarity > 0 or not vector_found) else rest).append(ch)
+    return first + rest
 
 
 async def has_tech_blog(db, company_id: uuid.UUID) -> bool:

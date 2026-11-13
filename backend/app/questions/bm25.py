@@ -14,7 +14,7 @@ Tokens (no morphological analyser: no new dependency, measured enough in ADR-003
   - a Hangul spelling of a technology also gives the latin name (카프카 -> kafka), from a short fixed list
 
 The index is built from the database per pool (one company, or the shared pool of the other companies' non-blog documents),
-kept in this process and rebuilt when the pool's rows change (count, text length, newest row). Every search still filters by
+kept in this process and rebuilt when the pool's rows change (row count and a hash of every indexed column). Every search still filters by
 company, posting and excluded documents at scoring time, so a chunk outside the caller's scope is never returned.
 """
 import math
@@ -137,12 +137,18 @@ _POOL_SQL = {
 }
 
 
+# What the index depends on, per row: every column it tokenizes or filters by. A content hash, not count/length/newest row: a chunk
+# edited in place (same length, new title, moved to another posting) must not keep its old tokens or scope (PR #6 review).
+# Measured on the live pools (about 500 chunks each): a few ms, far below the embedding call of the same search.
+_FINGERPRINT = ("coalesce(md5(string_agg(md5(concat_ws(chr(31), id, company_id, posting_id, doc_id, doc_type, origin, title, text)), "
+                "'' ORDER BY id)), '')")
+
+
 async def _index(db, pool: str, company_id: uuid.UUID) -> Index:
     """The pool's index, rebuilt only when its rows changed (two short reads, no transaction held across them)."""
     where = _POOL_SQL[pool]
     params = {"c": company_id} if pool == "company" else {}
-    sig = tuple((await db.execute(text(
-        f"SELECT count(*), coalesce(sum(length(text)), 0), max(created_at) {where}"), params)).one())
+    sig = tuple((await db.execute(text(f"SELECT count(*), {_FINGERPRINT} {where}"), params)).one())
     key = (pool, company_id if pool == "company" else None)
     hit = _cache.get(key)
     if hit and hit[0] == sig:

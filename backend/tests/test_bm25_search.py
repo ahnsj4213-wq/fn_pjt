@@ -170,3 +170,69 @@ async def test_the_index_follows_new_chunks(client, make_client, fake_ai):
     assert [c.id for c in await _hybrid(company, posting, "Airflow DAG 재처리", ai=fake_ai)] == [added]
     fake_ai.down.discard("embed")
     assert (await q("SELECT count(*) FROM company_knowledge WHERE company_id = :c", c=company))[0][0] == 2
+
+
+# ── PR #6 review ───────────────────────────────────────────────────────────────
+async def test_the_index_follows_a_chunk_edited_in_place(client, make_client, fake_ai):
+    """Same length, new title, moved to another posting: the cached index must not keep the old tokens or the old scope."""
+    _, app_id, _ = await setup_app(client, make_client)
+    company, posting = await _posting_of(app_id)
+    other_posting = (await client.post("/api/recruiter/postings", json={"title": "다른 공고", "job_family": "DEV"})).json()["id"]
+    chunk = await _add(company, "Airflow 운영", "Airflow DAG 재처리 절차를 정리했습니다.")
+    fake_ai.down.add("embed")  # BM25 alone, so the cache is what is under test
+    assert [c.id for c in await _hybrid(company, posting, "Airflow DAG", ai=fake_ai)] == [chunk]
+    old = "Airflow DAG 재처리 절차를 정리했습니다."
+    new = "Celery Beat 재처리 절차를 정리했습니다."[: len(old)].ljust(len(old), ".")
+    assert len(new) == len(old)
+    async with session_scope() as db:
+        await db.execute(text("UPDATE company_knowledge SET text = :t, title = 'Celery 운영' WHERE id = :i"), {"t": new, "i": chunk})
+    assert await _hybrid(company, posting, "Airflow DAG", ai=fake_ai) == []  # the old words are gone from the index
+    found = await _hybrid(company, posting, "Celery Beat", ai=fake_ai)
+    assert [(c.id, c.title, c.text) for c in found] == [(chunk, "Celery 운영", new)]  # and the returned text is the new one
+    async with session_scope() as db:
+        await db.execute(text("UPDATE company_knowledge SET posting_id = :p WHERE id = :i"), {"p": other_posting, "i": chunk})
+    assert await _hybrid(company, posting, "Celery Beat", ai=fake_ai) == []  # moved out of this posting's scope
+    fake_ai.down.discard("embed")
+
+
+async def test_a_failing_vector_query_leaves_bm25_and_the_callers_transaction(client, make_client, fake_ai, monkeypatch):
+    """The pgvector query itself fails (not the embedding model): BM25 answers, and the caller's session still works."""
+    _, app_id, _ = await setup_app(client, make_client)
+    company, posting = await _posting_of(app_id)
+    target = await _add(company, "GPU 클러스터", "쿠버네티스 위 GPU 클러스터 스케줄링을 개선했습니다. " * 3)
+    await _embed(fake_ai)
+    real_sql = knowledge._vector_sql
+    monkeypatch.setattr(knowledge, "_vector_sql", lambda *a: real_sql(*a).replace("1 - (embedding", "1/0 - (embedding"))
+    async with session_scope() as db:  # a real session: the failed statement must not abort its transaction
+        found = await knowledge.search_many(db, fake_ai, MODEL, company_id=company, posting_id=posting, queries=["GPU 클러스터 스케줄링"],
+                                            k=5, floor=get_settings().rag_knowledge_min_similarity)
+        assert [c.id for c in found] == [target]
+        assert (await db.execute(text("SELECT count(*) FROM company_knowledge WHERE company_id = :c"), {"c": company})).scalar() == 1
+    from app.questions.dbio import ShortReads
+    found = await knowledge.search_many(ShortReads(), fake_ai, MODEL, company_id=company, posting_id=posting,
+                                        queries=["GPU 클러스터 스케줄링"], k=5, floor=get_settings().rag_knowledge_min_similarity)
+    assert [c.id for c in found] == [target]
+
+
+def test_the_two_weights_must_add_up_to_one():
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+    for wv, wb in ((0.5, 0.3), (0.0, 0.0), (1.0, 1.0)):
+        with pytest.raises(ValidationError, match="must be 1"):
+            Settings(rag_weight_vector=wv, rag_weight_bm25=wb)
+    for wv, wb in ((1.0, 0.0), (0.0, 1.0), (0.7, 0.3), (0.6, 0.4)):
+        Settings(rag_weight_vector=wv, rag_weight_bm25=wb)
+
+
+def test_only_vector_found_chunks_move_up_as_the_first_of_their_post():
+    """PR #6 review: a post that only BM25 found (it shares a word with the query) must not push out the second chunk of the post
+    the vector search found; when the vector search found nothing, BM25's chunks get the rule as before."""
+    def ch(title, sim):
+        return knowledge.Chunk(uuid.uuid4(), title, title, sim)
+    a1, a2, a3 = ch("nginx", 0.8), ch("nginx", 0.7), ch("nginx", 0.6)
+    other_v, other_b = ch("kafka", 0.55), ch("mysql", 0.0)  # found by the vector search / only by BM25
+    fused = [a1, a2, other_v, a3, other_b]
+    assert [c.title for c in knowledge.diverse(fused)] == ["nginx", "kafka", "nginx", "nginx", "mysql"]
+    bm25_only = [ch("gson", 0.0), ch("gson", 0.0), ch("nginx", 0.0)]
+    assert [c.title for c in knowledge.diverse(bm25_only)] == ["gson", "nginx", "gson"]

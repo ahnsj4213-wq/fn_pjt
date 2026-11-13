@@ -81,8 +81,9 @@ class Settings(BaseSettings):
     rag_knowledge_count: int = Field(4, ge=0, le=10)  # company documents shown to T2 (T4 gets fewer, ADR-0020)
     rag_knowledge_min_similarity: float = Field(0.5, ge=0, le=1)  # measured: ADR-0020
     # Hybrid company-document search (ADR-0030): pgvector and BM25 run independently, fused by weighted RRF
-    # sum(weight / (rag_rrf_k + rank)), rank from 1, 0 when a list does not hold the chunk. 70:30 chosen on the tuning set of
-    # tools/bm25_eval_queries.json (2026-11-13; 60:40 started it): same hits as 60:40..40:60, the best evidence precision.
+    # sum(weight / (rag_rrf_k + rank)), rank from 1, 0 when a list does not hold the chunk; the two weights add up to 1. 70:30 chosen
+    # on the tuning set of tools/bm25_eval_queries.json (2026-11-13; 60:40 started it) among the settings that keep the legacy
+    # evidence precision: the best MRR@5 with 60:40 and 50:50, the best evidence precision of the three.
     rag_weight_vector: float = Field(0.7, ge=0, le=1)
     rag_weight_bm25: float = Field(0.3, ge=0, le=1)
     rag_rrf_k: int = Field(60, ge=1, le=1000)
@@ -178,6 +179,9 @@ class Settings(BaseSettings):
         from app.voice.netcfg import validate_announce_ips
 
         validate_announce_ips(self.rtc_announce_ips)
+        if abs(self.rag_weight_vector + self.rag_weight_bm25 - 1.0) > 1e-6:
+            # ADR-0030: the two weights share one budget; 0+0 would silently switch the company-document search off
+            raise ValueError("rag_weight_vector + rag_weight_bm25 must be 1")
         if self.env == "prod":
             if self.tester_email_set:
                 raise ValueError("tester_emails is for dev/test only: it deletes the tester's earlier applications")
