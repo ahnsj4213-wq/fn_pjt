@@ -212,10 +212,6 @@ async def start(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: A
         posting.settings_locked_at = now  # JOB-06 / OQ-05: first interview locks weights and coding settings
     app.attempt_status, app.eval_settings_id, app.interview_started_at = "INTERVIEWING", posting.current_settings_id, now
     iv.question_set_id, iv.started_at, iv.last_heartbeat_at = qset.id, now, now
-    await db.execute(text(
-        "UPDATE question_bank SET usage_count = usage_count + 1, last_used_at = now() WHERE id IN "
-        "(SELECT bank_question_id FROM interview_questions WHERE question_set_id = :q AND bank_question_id IS NOT NULL)"),
-        {"q": qset.id})
     await db.commit()
     state = await interview_state(db, app)
     if not ai["tts"]:

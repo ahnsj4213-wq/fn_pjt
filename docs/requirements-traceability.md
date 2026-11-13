@@ -55,13 +55,13 @@
 
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
-| QST-01 | 질문은행(직무·유형별), 덜 쓴 질문부터, 부족하면 AI 생성 후 은행에 추가, 유사 질문 중복 저장 금지 | P0 | questions | `app/questions/bank.py` | T-QST-01 | 미착수 | 유사도는 로컬 임베딩 (ADR-0005). 생성 시 RAG 예시 3개(`app/questions/rag.py`, `tests/test_question_rag.py`) **ADR-0020: 동기·직무는 회사 자료 기반 생성 우선, 은행은 대체 경로로 순서 변경.** `app/questions/knowledge.py`, `tests/test_company_knowledge.py` |
+| QST-01 | 질문은행(직무·유형별), 덜 쓴 질문부터, 부족하면 AI 생성 후 은행에 추가, 유사 질문 중복 저장 금지 | P0 | questions | `app/questions/bank.py` | T-QST-01 | 미착수 | 유사도는 로컬 임베딩 (ADR-0005). 생성 시 RAG 예시 3개(`app/questions/rag.py`, `tests/test_question_rag.py`) **ADR-0020: 동기·직무는 회사 자료 기반 생성 우선, 은행은 대체 경로로 순서 변경.** `app/questions/knowledge.py`, `tests/test_company_knowledge.py`  **ADR-0031(2026-11-13): 질문은행 사용 중단, `question_bank_backup_20261113`으로 보관.** `tests/test_question_bank_retired.py` |
 | QST-02 | 면접 시작 전 본질문 10개 구성 (6.1) | P0 | questions / 준비 단계 작업 | `app/questions/compose.py` | T-QST-02 | 미착수 | 인성2·이력서2·기업2·직무4, 순서 고정 **2026-11-07 변경(ADR-0022, 사용자 결정): 시작 전에는 첫 질문만, 이후는 면접 중 답변을 반영해 한 문항씩 생성. `AIHIRE_QUESTION_MODE=upfront`로 원래 방식** **2026-11-09 ADR-0025: 기본값을 upfront로 되돌림(본질문·TTS를 면접 전 준비, 면접 중 LLM은 꼬리질문만). 지원자 수준별 난이도 배분과 질문 품질 코드 검사 추가 (`app/questions/level.py`, tests/test_question_level.py)** |
 | QST-03 | 이력서 질문은 이력서에 실제 적힌 경험·프로젝트만 근거, 근거 없으면 버리고 은행 질문으로 | P0 | questions | `app/questions/resume_q.py` | T-QST-03, AC-07 | 미착수 | 근거 문장을 스냅샷 원문과 코드로 대조 ADR-0020: 근거를 `grounding.sources`(RESUME_SNAPSHOT)로 추적, 공고·회사 자료와 겹치는 항목 우선 |
 | QST-04 | 공고별 커스텀 질문(1개), 비우면 자동 채움 | P1 | postings / 평가 설정 API | `app/postings` | T-QST-04 | 미착수 | ADM-05(P0)가 커스텀 질문 설정을 포함 → 우선순위 불일치 OQ-02 |
 | QST-05 | 답변에 따른 꼬리질문 (6.2) | P0 | interview | `app/interview/followup.py` | T-QST-05, AC-12 | 미착수 | ADR-0020: 앞선 답변·회사 자료를 입력에 추가, 근거를 `grounding.sources`로 추적 |
 | QST-06 | 출제 질문은 변경 불가 스냅샷 | P0 | questions / DB 트리거 | `migrations` | T-QST-06 | 미착수 | UPDATE 금지 트리거 |
-| QST-07 | 생성 실패 시 1회 재시도 후 질문은행 대체 | P0 | questions | `app/questions/compose.py` | T-QST-07 | 미착수 | |
+| QST-07 | 생성 실패 시 1회 재시도 후 질문은행 대체 | P0 | questions | `app/questions/compose.py` | T-QST-07 | 미착수 | **(변경, ADR-0031)** 대체는 공고·이력서 기반 코드 질문(`TEMPLATE`). 질문은행 대체 없음 |
 | QST-08 | JD에서 질문 후보 자동 추출·담당자 선택 | P2 | — | — | — | 미착수 | |
 
 ### 5.5 AI 면접 (INT)
