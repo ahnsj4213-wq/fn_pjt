@@ -1,6 +1,6 @@
-# AI 채용 플랫폼 TRD (기술 설계서) v2.1
+# AI 채용 플랫폼 TRD (기술 설계서) v2.2
 
-- 버전: **v2.1** · 날짜: 2026-11-11 · 기준: 현재 구현(커밋 eb404e8 이후 코드)
+- 버전: **v2.2** · 날짜: 2026-11-13 · 기준: 현재 구현(커밋 eb404e8 이후 코드)
 - **이 문서가 유일한 TRD다.** 이전 TRD(TRD_v1.4·v1.5, Final_Project_TRD v1.0~1.5, `docs/trd/01~08` 분할본)는 모두 이 문서로 대체됐다.
 - 무엇을·왜 만드는지는 [`docs/PRD.md`](PRD.md)(v2.0), 개별 결정의 근거는 [`docs/adr/`](adr/README.md)에 있다.
 - 장 번호는 예전 분할본 번호와 같다. 코드 주석의 "TRD 07 §12"는 이 문서 7장 12절을 뜻한다.
@@ -21,6 +21,7 @@
 
 | 버전 | 날짜 | 내용 |
 |---|---|---|
+| v2.2 | 2026-11-13 | ADR-0029 반영: 마이그레이션 0035(`job_postings.is_virtual`·`source_doc_ids`, 숨김 사유 ARCHIVE·마감 사유 ARCHIVED, `company_knowledge` origin TECH_BLOG·`source_url`·`published_at`), 기존 테스트 공고 보관, 기술 블로그 테스트용 가상 공고, 공개 공고 API `is_virtual`·`sources`. 버그 수정: 텍스트 답변(`text-answer`)이 턴을 다시 읽어 연 트랜잭션을 그래프 실행(꼬리질문 판단·다음 질문 생성, CPU 30초 이상) 동안 유지해 `idle_in_transaction` 30초에 끊기던 문제 |
 | v2.1 | 2026-11-11 | ADR-0028 반영: LangGraph 두 개(면접 실행·평가), 질문·평가 품질 검증 루프, T2 1.9.0·T3 1.7.0·T5 2.2.0 |
 | v2.0 | 2026-11-11 | 분할본 8개를 한 파일로 통합, 현재 구현 기준으로 정리. 장 머리의 작성자·기준 줄을 현재 상태 줄로 교체, 컨테이너 8개·llama.cpp·BGE-M3·Next.js·Celery 반영, ADR-0016·0019·0022~0027 반영(이탈 = 종료, live 질문 기본, 질문·평가 그래프, rubric-v5·score-v3, 프롬프트 버전), 마이그레이션 head 0034·테이블 50개, 구현된 "(예정)/[미구현]" 표시 갱신, 장 간 링크를 문서 안 앵커로, 삭제된 설계안·리뷰 문서 참조 제거, 확인 못 한 서술은 [미확인] 표시 |
 | v1.x | 2026-10-26~11-10 | `docs/trd/01~08` 분할본(이전 기록은 git 이력) |
@@ -243,7 +244,7 @@ final_test/
 │  │  ├─ ai/                       # AI 클라이언트(direct/service/fake), 작업 계약(tasks/), 루브릭, manifest
 │  │  ├─ aisvc/                    # 게이트웨이, llama.cpp·Ollama 백엔드, STT·TTS 서버
 │  │  └─ main.py, cli.py, audit.py, models.py, celery_app.py
-│  ├─ migrations/versions/         # 0001~0034 (head 0034)
+│  ├─ migrations/versions/         # 0001~0035 (head 0035)
 │  ├─ scripts/                     # prepare_models, ai_entrypoint.sh, seed_demo, eval_calibration 등
 │  └─ tests/                       # pytest 57개 파일
 ├─ frontend/                       # Next.js 16 + React 19 + TS (src/, e2e/)
@@ -466,11 +467,11 @@ PRD 11.2 X-11(LLM·STT·TTS·임베딩 모델 선정)은 **미결정**이다. �
 
 ## 3장. 데이터 모델
 
-- 현재 상태(2026-11-11): 마이그레이션 head는 `0034`(`20261110_0034_question_source_template.py`)다. 1~11절은 0001 기준 설계에 이후 마이그레이션의 주요 변경을 덧붙였고, 13·14절과 아래 "0001 이후 변경 요약"이 0006~0034를 다룬다.
+- 현재 상태(2026-11-13): 마이그레이션 head는 `0035`(`20261113_0035_tech_blog_postings.py`, ADR-0029)다. 1~11절은 0001 기준 설계에 이후 마이그레이션의 주요 변경을 덧붙였고, 13·14절과 아래 "0001 이후 변경 요약"이 0006~0034를 다룬다.
 - 관련 ADR: ADR-0006(상태·큐), ADR-0011(API 규약), ADR-0013(Redis), ADR-0016(체크포인트), ADR-0020(회사 자료), ADR-0021(코딩 문제은행), ADR-0022(live 질문 계획), ADR-0023(근거 상태), ADR-0024(이탈 = 종료), ADR-0027(평가 그래프).
 - **원천**: `backend/migrations/versions/`의 0001~0034(원시 SQL, CHECK·트리거·시드 포함)가 유일한 원천이다. `backend/app/models.py`는 그중 앱이 쓰는 칼럼만 매핑한다. 이 문서와 마이그레이션이 다르면 마이그레이션이 맞다. 바꿔야 할 점은 12절 "변경 제안"에만 적었다.
 - 규모(0034 기준, 마이그레이션 upgrade의 CREATE TABLE로 셈): 앱 테이블 50개(+ `alembic_version`, LangGraph 체크포인트 테이블 4개 `checkpoints`·`checkpoint_blobs`·`checkpoint_writes`·`checkpoint_migrations`는 체크포인터가 만든다), 시퀀스 1개(`job_lease_token_seq`). 트리거 함수 수는 [미확인](0001 기준 5개).
-- 0001 이후 변경 요약(코드로 확인한 것만): `jobs.resource`에 `LLM_EVAL`(0005). `interview_questions`의 seq별 유형 고정 CHECK·MAIN 60초/FOLLOWUP 45초 CHECK·`ux_iq_custom` 삭제, 유형에 MOTIVATION·JOB_SKILL·PROJECT·COLLABORATION 추가, 답변 시간 30~180초, `answer_mode`(SPEECH/CODE/WHITEBOARD)·`think_sec` 추가, `source`에 PROBLEM(0007)·TEMPLATE(0034). `question_sets`에 `main_count`·`followup_max`(0007)·`plan`(0032, live 생성 계획). `question_bank.kind`에 COLLABORATION(0007). `answer_evaluations.evidence_status`에 UNLINKED, 사유에 LOW_CONTENT(0033).
+- 0001 이후 변경 요약(코드로 확인한 것만): `jobs.resource`에 `LLM_EVAL`(0005). `interview_questions`의 seq별 유형 고정 CHECK·MAIN 60초/FOLLOWUP 45초 CHECK·`ux_iq_custom` 삭제, 유형에 MOTIVATION·JOB_SKILL·PROJECT·COLLABORATION 추가, 답변 시간 30~180초, `answer_mode`(SPEECH/CODE/WHITEBOARD)·`think_sec` 추가, `source`에 PROBLEM(0007)·TEMPLATE(0034). `question_sets`에 `main_count`·`followup_max`(0007)·`plan`(0032, live 생성 계획). `question_bank.kind`에 COLLABORATION(0007). `answer_evaluations.evidence_status`에 UNLINKED, 사유에 LOW_CONTENT(0033). `job_postings`에 `is_virtual`·`source_doc_ids`, 가상 공고만 마감일 없이 게시 가능, `hidden_by`에 ARCHIVE·`close_reason`에 ARCHIVED, `company_knowledge.origin`에 TECH_BLOG·`source_url`·`published_at`(0035, ADR-0029).
 - 공통 규칙
   - 외부에 노출되는 ID는 UUID(`gen_random_uuid()`)다. 로그·큐·이력 ID는 `bigint identity`다.
   - 시각은 모두 `timestamptz`이고 DB 세션 TZ는 UTC다(`app/core/db.py`).
@@ -894,7 +895,8 @@ FROM next WHERE j.id=next.id RETURNING j.*;
 | `posting_id` | NULL이면 회사 전체, 값이 있으면 그 공고만. `(posting_id, company_id)` 복합 외래키로 다른 회사의 공고를 거부 |
 | `doc_id`, `chunk_no` | 문서와 조각 순서. 유일 |
 | `doc_type` | `PROJECT`, `TECH`, `COMPANY`(0030: 회사 소개·서비스와 고객) |
-| `origin` | `RECRUITER`, `SYNTHETIC`(가상 기업) |
+| `origin` | `RECRUITER`, `SYNTHETIC`(가상 기업), `TECH_BLOG`(0035: 회사 공식 기술 블로그 글, ADR-0029). TECH_BLOG는 다른 회사 검색(`shared`)에 나오지 않고, TECH_BLOG가 있는 회사는 다른 회사 자료를 빌리지 않는다 |
+| `source_url`, `published_at` | 0035. TECH_BLOG는 `source_url`(https) 필수, `published_at`은 블로그에 없으면 NULL |
 | `embedding`, `embedding_model` | `index_company_knowledge` 작업이 채움 |
 
 색인은 `(company_id, posting_id)` B-tree만 둔다. 회사 범위 안에서 정확 검색한다. 이를 위해 `job_postings`에 `UNIQUE (id, company_id)`를 추가했다. 질문의 근거는 `interview_questions.grounding.sources`에 남고, 문서를 지워도 이미 만든 질문은 인용 문장을 유지한다.
@@ -1050,10 +1052,10 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | 메서드·경로 | 요청 → 응답 | 오류 |
 |---|---|---|
 | `GET /api/job-families` (구현) | → `[{code, label}]`(BACKEND·FRONTEND·DATA·AI_ML·DEVOPS·MOBILE·QA·PM) | 401 |
-| `GET /api/postings?q=&job_family=` (구현) | → `[PostingPublicOut]`. OPEN·마감 전·삭제 안 됨, 모든 회사, 마감 임박 순. `q`(100자 이하)는 제목·업무·요건 부분 일치(JOB-08). 지원자는 `has_applied`가 채워진다 | 401, 422 |
+| `GET /api/postings?q=&job_family=` (구현) | → `[PostingPublicOut]`. OPEN·마감 전(가상 공고는 마감일 없음 허용)·삭제·숨김(보관 포함) 안 됨, 모든 회사, 마감 임박 순(마감일 없는 공고는 뒤). `q`(100자 이하)는 제목·업무·요건 부분 일치(JOB-08). 지원자는 `has_applied`가 채워진다 | 401, 422 |
 | `GET /api/postings/{pid}` (구현) | → `PostingPublicOut`. DRAFT·삭제는 404. CLOSED는 그 공고에 지원한 지원자에게만 보이고 그 밖에는 404 | 404 |
 
-`PostingPublicOut` = `{id, title, company_name, company_intro, job_family, job_family_label, requirements, preferred, duties, headcount, deadline_date, deadline_at, is_open, coding_enabled, coding_language, coding_time_limit_min, has_applied}`. **가중치·커스텀 질문·코딩 문제 ID·제목은 없다**(SEC-04, 면접 전 노출 방지). 담당자는 `has_applied`가 항상 false이고, [지원하기]를 누르면 지원 API가 403 `ROLE_FORBIDDEN`을 준다(AC-02).
+`PostingPublicOut` = `{id, title, company_name, company_intro, job_family, job_family_label, requirements, preferred, duties, headcount, deadline_date, deadline_at, is_open, coding_enabled, coding_language, coding_time_limit_min, has_applied, is_virtual, sources}`. `is_virtual`: 기술 블로그로 만든 테스트용 가상 공고(실제 채용공고 아님, ADR-0029). `sources`: `[{title, url, published_date}]` 공고 근거 블로그 글(`published_date`는 없으면 null). **가중치·커스텀 질문·코딩 문제 ID·제목은 없다**(SEC-04, 면접 전 노출 방지). 담당자는 `has_applied`가 항상 false이고, [지원하기]를 누르면 지원 API가 403 `ROLE_FORBIDDEN`을 준다(AC-02).
 
 #### 3.3 동의·이력서·지원 (지원자)
 

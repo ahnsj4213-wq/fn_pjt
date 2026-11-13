@@ -197,7 +197,7 @@ async def job_families(db: AsyncSession = Depends(get_db)) -> list[dict]:
 def _listed() -> tuple:
     """Postings on the main page: published, not deleted, deadline ahead."""
     return (JobPosting.status == "OPEN", JobPosting.deleted_at.is_(None), JobPosting.hidden_at.is_(None),
-            JobPosting.deadline_at > utcnow())
+            service.deadline_ahead())
 
 
 async def _applied(db: AsyncSession, p: Principal | None, posting_ids: list[UUID]) -> set[UUID]:
@@ -214,7 +214,7 @@ async def list_public(q: str | None = Query(None, max_length=100), job_family: s
                       p: Principal | None = Depends(get_optional_principal),
                       db: AsyncSession = Depends(get_db)) -> list[PostingPublicOut]:
     """No login needed (SC-A02)."""
-    stmt = select(JobPosting).where(*_listed()).order_by(JobPosting.deadline_at)
+    stmt = select(JobPosting).where(*_listed()).order_by(JobPosting.deadline_at.asc().nulls_last(), JobPosting.title)
     if job_family:
         stmt = stmt.where(JobPosting.job_family == job_family)  # JOB-08
     if q:

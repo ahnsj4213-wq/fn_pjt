@@ -2,14 +2,14 @@
 import secrets
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import DEFAULT_WEIGHTS_CODING, DEFAULT_WEIGHTS_NO_CODING, WEIGHT_TOTAL
 from app.core.errors import AppError, conflict
 from app.core.timeutil import kst_end_of_day, to_kst_date, utcnow
-from app.models import Application, CodingProblem, Company, JobPosting, PostingEvalSettings
+from app.models import Application, CodingProblem, Company, CompanyKnowledge, JobPosting, PostingEvalSettings
 from app.postings.schemas import (
     InterviewSettings,
     DEFAULT_QUESTION_AREAS, JOB_FAMILIES, QUESTION_AREAS, RUBRIC_VERSION, EvalSettingsOut, PostingDetailOut, PostingIn, PostingPublicOut, PostingSummaryOut,
@@ -19,7 +19,28 @@ SETTINGS_LOCKED = ("SETTINGS_LOCKED", "첫 응시가 시작된 공고는 코딩�
 
 
 def is_open(p: JobPosting) -> bool:
-    return p.status == "OPEN" and p.deleted_at is None and p.deadline_at is not None and p.deadline_at > utcnow()
+    """A virtual test posting (ADR-0029) has no closing date to invent: it stays open until it is closed by hand."""
+    if p.status != "OPEN" or p.deleted_at is not None:
+        return False
+    if p.deadline_at is None:
+        return bool(p.is_virtual)
+    return p.deadline_at > utcnow()
+
+
+def deadline_ahead():
+    """SQL twin of is_open's date rule: deadline in the future, or a virtual posting without one."""
+    return or_(JobPosting.deadline_at > utcnow(), and_(JobPosting.is_virtual, JobPosting.deadline_at.is_(None)))
+
+
+async def sources_of(db: AsyncSession, p: JobPosting) -> list[dict]:
+    """The public blog posts a virtual posting was written from (first chunk of each document): title, URL, date."""
+    if not p.source_doc_ids:
+        return []
+    rows = (await db.execute(select(CompanyKnowledge.doc_id, CompanyKnowledge.title, CompanyKnowledge.source_url, CompanyKnowledge.published_at)
+                             .where(CompanyKnowledge.company_id == p.company_id, CompanyKnowledge.doc_id.in_(p.source_doc_ids),
+                                    CompanyKnowledge.chunk_no == 1, CompanyKnowledge.source_url.is_not(None)))).all()
+    by_doc = {d: {"title": t, "url": u, "published_date": to_kst_date(at)} for d, t, u, at in rows}
+    return [by_doc[d] for d in p.source_doc_ids if d in by_doc]
 
 
 def effective_status(p: JobPosting) -> str:
@@ -132,7 +153,7 @@ async def counts(db: AsyncSession, posting_ids: list[UUID]) -> dict[UUID, tuple[
 def summary_out(p: JobPosting, c: tuple[int, int]) -> dict:
     return dict(id=p.id, title=p.title, job_family=p.job_family, status=p.status, effective_status=effective_status(p),
                 deadline_date=to_kst_date(p.deadline_at), headcount=p.headcount, experience_level=p.experience_level,
-                employment_type=p.employment_type, location=p.location, view_count=p.view_count, hidden=p.hidden_at is not None,
+                employment_type=p.employment_type, location=p.location, view_count=p.view_count, hidden=p.hidden_at is not None, is_virtual=p.is_virtual,
                 coding_enabled=p.coding_enabled, applicant_count=c[0], completed_count=c[1], updated_at=p.updated_at)
 
 
@@ -158,7 +179,8 @@ async def public_out(db: AsyncSession, p: JobPosting, has_applied: bool = False)
                         if c in QUESTION_AREAS],
         deadline_date=to_kst_date(p.deadline_at), deadline_at=p.deadline_at, is_open=is_open(p),
         coding_enabled=p.coding_enabled, coding_language=p.coding_language if p.coding_enabled else None,
-        coding_time_limit_min=p.coding_time_limit_min if p.coding_enabled else None, has_applied=has_applied)
+        coding_time_limit_min=p.coding_time_limit_min if p.coding_enabled else None, has_applied=has_applied,
+        is_virtual=p.is_virtual, sources=await sources_of(db, p))
 
 
 def _apply_fields(p: JobPosting, body: PostingIn) -> bool:

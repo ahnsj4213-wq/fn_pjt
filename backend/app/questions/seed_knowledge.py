@@ -1,7 +1,8 @@
 """Load the virtual companies (data/synthetic_companies.json, ADR-0020): python -m app.questions.seed_knowledge
 
 The longer story in data/company_profiles/<key>.json (the same text as docs/synthetic-companies/*.pdf) is loaded as more documents.
-Run by hand, never by a migration or the worker: a production database must not get these companies by accident. Everything in
+Run by hand, never by a migration or the worker: a production database must not get these companies by accident. Retired by
+ADR-0029: it refuses to run on a database whose old test postings were archived (app/postings/archive.py). Everything in
 the file is invented; each name ends in (가상) and each chunk has origin SYNTHETIC. Running it again adds what is missing and rewrites an invented posting nobody has applied to; nothing else that exists changes.
 A company gets one disabled recruiter that cannot log in (a posting needs an author) and one open posting.
 `--demo-login <key>` turns that one recruiter on with a new random password, printed once, to try a company's screens.
@@ -115,8 +116,12 @@ async def demo_login(db, key: str) -> tuple[str, str]:
 
 
 async def main() -> None:
+    from app.postings.archive import archived_exists
+
     rows = load_file()
     async with session_scope() as db:
+        if await archived_exists(db):  # ADR-0029: the old test companies were archived here; they must not come back
+            raise SystemExit("이 DB의 기존 테스트 공고는 보관 처리되었습니다. 가상 회사 시드는 실행하지 않습니다 (ADR-0029).")
         for row in rows:
             await seed(db, row)
     async with sessionmaker()() as db:

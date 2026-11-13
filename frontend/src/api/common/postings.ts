@@ -36,6 +36,16 @@ export interface PostingPublic {
   coding_language: string | null;
   coding_time_limit_min: number | null;
   has_applied: boolean;
+  /** A test posting written from the company's public tech blog — not a posting the company published (ADR-0029). */
+  is_virtual: boolean;
+  /** The blog posts it was written from; published_date is null when the blog does not show one. */
+  sources: PostingSource[];
+}
+
+export interface PostingSource {
+  title: string;
+  url: string;
+  published_date: string | null;
 }
 
 export const fetchJobFamilies = () => apiFetch<JobFamily[]>('/api/job-families');

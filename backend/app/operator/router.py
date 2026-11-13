@@ -178,6 +178,8 @@ async def hide_posting(posting_id: uuid.UUID, p: Principal = Depends(require_ope
 @router.post("/postings/{posting_id}/show")
 async def show_posting(posting_id: uuid.UUID, p: Principal = Depends(require_operator), db: AsyncSession = Depends(get_db)) -> dict:
     post = await _posting(db, posting_id)
+    if post.hidden_by == "ARCHIVE":  # an archived test posting comes back only from its backup (postings/archive.py --restore)
+        raise AppError(409, "POSTING_ARCHIVED", "보관 처리된 테스트 공고는 다시 보이게 할 수 없습니다.")
     company = await db.get(Company, post.company_id)
     if company.suspended_at is not None:
         raise AppError(409, "COMPANY_SUSPENDED", "정지된 기업의 공고는 정지를 풀어야 다시 보이게 할 수 있습니다.")

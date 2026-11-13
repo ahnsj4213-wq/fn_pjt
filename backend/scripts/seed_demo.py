@@ -26,7 +26,11 @@ async def seed_demo(app, *, title: str, recruiter_email: str = RECRUITER_EMAIL) 
     from app.core.config import get_settings
     from app.core.db import session_scope
 
+    from app.postings.archive import archived_exists
+
     async with session_scope() as db:
+        if await archived_exists(db):  # ADR-0029: old test postings were archived in this database; do not make new ones
+            raise SystemExit("이 DB의 기존 테스트 공고는 보관 처리되었습니다. 데모 시드는 실행하지 않습니다 (ADR-0029).")
         if (await db.execute(text("SELECT 1 FROM users WHERE email = :e"), {"e": recruiter_email})).first():
             return False
         cid = await create_company(db, name="이투이테크", intro="사내 결제 플랫폼을 만드는 회사입니다.")
