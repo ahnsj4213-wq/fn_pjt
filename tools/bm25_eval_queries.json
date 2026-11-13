@@ -1,0 +1,669 @@
+{
+ "about": "Search evaluation set for ADR-0030 (BM25 + pgvector). Written by Claude from each post's title and one excerpt, 2026-11-13. kind=term: one to three words, a technology or product name only, as a candidate answer names it (vector search is weakest here); kind=keyword: the query names a technology or a term of the post; kind=paraphrase: it describes the same work without those terms. split=tune picks the weights, split=val checks them. relevant = titles of the posts that answer the query (same company).",
+ "queries": [
+  {
+   "id": "kurly-01",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "Kafka Streams 윈도우 집계로 준실시간 정산 처리",
+   "relevant": [
+    "Kafka Streams 윈도우 도입기"
+   ]
+  },
+  {
+   "id": "kurly-02",
+   "company": "컬리",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "배치로 모아 처리하던 정산을 이벤트가 들어올 때마다 일정 시간 단위로 묶어 거의 실시간으로 처리한 경험",
+   "relevant": [
+    "Kafka Streams 윈도우 도입기"
+   ]
+  },
+  {
+   "id": "kurly-03",
+   "company": "컬리",
+   "split": "val",
+   "kind": "keyword",
+   "query": "Kafka Consumer 오프셋을 옮겨 메시지를 재처리하는 방법",
+   "relevant": [
+    "분산 시스템 환경에서 Kafka Consumer 오프셋 이동하기"
+   ]
+  },
+  {
+   "id": "kurly-04",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "다른 조직이 관리하는 메시지 클러스터의 관리자 권한 없이 이미 읽은 배송 메시지를 다시 처리해야 했던 상황",
+   "relevant": [
+    "분산 시스템 환경에서 Kafka Consumer 오프셋 이동하기"
+   ]
+  },
+  {
+   "id": "kurly-05",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "후기 검색을 위한 OpenSearch 도입과 MySQL 데이터 마이그레이션",
+   "relevant": [
+    "후기 서비스 AWS Opensearch 도입기"
+   ]
+  },
+  {
+   "id": "kurly-06",
+   "company": "컬리",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "상품 리뷰 서비스의 원천 데이터베이스를 분리하면서 무중단으로 데이터를 옮기고 검색 엔진을 붙인 과정",
+   "relevant": [
+    "후기 서비스 AWS Opensearch 도입기"
+   ]
+  },
+  {
+   "id": "kurly-07",
+   "company": "컬리",
+   "split": "val",
+   "kind": "keyword",
+   "query": "Airflow를 관리형 서버리스에서 K8S 환경으로 전환",
+   "relevant": [
+    "서버리스에서 쿠버네티스로 - Airflow 운영 경험기"
+   ]
+  },
+  {
+   "id": "kurly-08",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "데이터 파이프라인 스케줄러를 관리형 서비스에서 직접 운영하는 컨테이너 오케스트레이션 환경으로 옮겨 비용을 줄인 경험",
+   "relevant": [
+    "서버리스에서 쿠버네티스로 - Airflow 운영 경험기"
+   ]
+  },
+  {
+   "id": "kurly-09",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "엑셀 업로드 Zip Bomb 에러 방어",
+   "relevant": [
+    "엑셀 업로드 중 발생한 Zip Bomb 에러 파헤치기! 🥊"
+   ]
+  },
+  {
+   "id": "kurly-10",
+   "company": "컬리",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "사용자가 올린 압축된 문서 파일을 여는 순간 메모리와 디스크가 폭증하는 공격을 막은 경험",
+   "relevant": [
+    "엑셀 업로드 중 발생한 Zip Bomb 에러 파헤치기! 🥊"
+   ]
+  },
+  {
+   "id": "kurly-11",
+   "company": "컬리",
+   "split": "val",
+   "kind": "keyword",
+   "query": "nginx 설정 없이 서비스 점검 모드 처리",
+   "relevant": [
+    "nginx 설정 없이 우아하게 서비스 점검하기 (上)",
+    "nginx 설정 없이 우아하게 서비스 점검하기 (下)"
+   ]
+  },
+  {
+   "id": "kurly-12",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "DB 점검 시간에 사용자 요청을 막고 안내 화면을 보여 주는 기능을 인프라 변경 없이 애플리케이션에서 구현",
+   "relevant": [
+    "nginx 설정 없이 우아하게 서비스 점검하기 (上)",
+    "nginx 설정 없이 우아하게 서비스 점검하기 (下)"
+   ]
+  },
+  {
+   "id": "kurly-13",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "Spring Boot 버전업 중 Java 캡슐화 정책 때문에 생긴 Gson 오류",
+   "relevant": [
+    "Spring Boot 버전업 중 알게된 Java 버전별 캡슐화 정책 강화"
+   ]
+  },
+  {
+   "id": "kurly-14",
+   "company": "컬리",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "언어 런타임 버전을 올렸더니 JSON 직렬화 라이브러리가 날짜 필드에 접근하지 못해 예외가 난 문제",
+   "relevant": [
+    "Spring Boot 버전업 중 알게된 Java 버전별 캡슐화 정책 강화"
+   ]
+  },
+  {
+   "id": "kurly-15",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "배송 기사가 찍은 사진에서 포장 상태를 AI로 판별해 사람이 일일이 확인하던 비용을 줄인 프로젝트",
+   "relevant": [
+    "배송 완료 사진 속 객체 탐지를 통한 수기 검수 비용 줄이기"
+   ]
+  },
+  {
+   "id": "kurly-16",
+   "company": "컬리",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "에러가 나면 관련 로그를 찾아 원인을 설명해 주는 봇으로 장애 대응 시간을 줄인 경험",
+   "relevant": [
+    "우리 팀에도 Jarvis 가 생겼다 – 생성형 AI 로 만든 에러 분석가 이야기"
+   ]
+  },
+  {
+   "id": "toss-01",
+   "company": "토스",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "Milvus 벡터 DB 사이징 기준",
+   "relevant": [
+    "CPU 뼛속까지 써먹고, Milvus 사이징 기준을 만들기까지"
+   ]
+  },
+  {
+   "id": "toss-02",
+   "company": "토스",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "벡터 검색 워크로드마다 차원과 갱신 빈도가 달라 장비별 처리량과 지연을 직접 측정해 용량 기준을 세운 경험",
+   "relevant": [
+    "CPU 뼛속까지 써먹고, Milvus 사이징 기준을 만들기까지"
+   ]
+  },
+  {
+   "id": "toss-03",
+   "company": "토스",
+   "split": "val",
+   "kind": "keyword",
+   "query": "Oracle RAC 커밋 대기와 NIC 인터럽트",
+   "relevant": [
+    "평균 CPU는 여유로운데, 커밋은 왜 느릴까?"
+   ]
+  },
+  {
+   "id": "toss-04",
+   "company": "토스",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "평균 사용률은 낮은데 트랜잭션 확정이 가끔 0.1초 넘게 걸리던 원인을 하드웨어 배치에서 찾은 경험",
+   "relevant": [
+    "평균 CPU는 여유로운데, 커밋은 왜 느릴까?"
+   ]
+  },
+  {
+   "id": "toss-05",
+   "company": "토스",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "GPU-native 쿠버네티스 클러스터 운영",
+   "relevant": [
+    "토스증권이 GPU-aware를 넘어 GPU-native 클러스터를 구축한 방법"
+   ]
+  },
+  {
+   "id": "toss-06",
+   "company": "토스",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "그래픽 연산 장치를 여러 팀이 나눠 쓰도록 노드 상태 점검과 자원 분할을 플랫폼에서 처리한 경험",
+   "relevant": [
+    "토스증권이 GPU-aware를 넘어 GPU-native 클러스터를 구축한 방법"
+   ]
+  },
+  {
+   "id": "toss-07",
+   "company": "토스",
+   "split": "val",
+   "kind": "keyword",
+   "query": "Spark Connect Operator로 Control Plane 구성",
+   "relevant": [
+    "Spark Connect on Kubernetes #2: Operator로 만드는 Control Plane"
+   ]
+  },
+  {
+   "id": "toss-08",
+   "company": "토스",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "분석 엔진 서버 여러 대를 하나의 서비스처럼 운영하며 드라이버 메모리 문제를 다룬 경험",
+   "relevant": [
+    "Spark Connect on Kubernetes #2: Operator로 만드는 Control Plane"
+   ]
+  },
+  {
+   "id": "toss-09",
+   "company": "토스",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "TopK 최적화로 추천 전환율 개선",
+   "relevant": [
+    "추천 후보는 많을수록 좋을까? TopK를 최적화해 전환율을 높인 방법"
+   ]
+  },
+  {
+   "id": "toss-10",
+   "company": "토스",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "쇼핑 추천에서 보여 줄 후보 수를 절반으로 줄이면서도 사용자당 주문을 늘린 조합 최적화와 온라인 실험",
+   "relevant": [
+    "추천 후보는 많을수록 좋을까? TopK를 최적화해 전환율을 높인 방법"
+   ]
+  },
+  {
+   "id": "toss-11",
+   "company": "토스",
+   "split": "val",
+   "kind": "keyword",
+   "query": "TASTE 추천 파운데이션 플랫폼",
+   "relevant": [
+    "TASTE, 토스의 추천 파운데이션 플랫폼"
+   ]
+  },
+  {
+   "id": "toss-12",
+   "company": "토스",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "여러 서비스의 예측 모델이 같은 사용자 정보를 각자 다시 학습하던 비효율을 공통 기반 모델로 해결",
+   "relevant": [
+    "TASTE, 토스의 추천 파운데이션 플랫폼"
+   ]
+  },
+  {
+   "id": "toss-13",
+   "company": "토스",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "Toss Benchmark로 LLM 성능 평가",
+   "relevant": [
+    "리더보드 1등 LLM, 토스에서도 1등일까? - Toss Benchmark 구축기"
+   ]
+  },
+  {
+   "id": "toss-14",
+   "company": "토스",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "공개 순위가 높은 언어모델이 실제 사내 업무에서도 잘하는지 직접 평가 기준을 만든 경험",
+   "relevant": [
+    "리더보드 1등 LLM, 토스에서도 1등일까? - Toss Benchmark 구축기"
+   ]
+  },
+  {
+   "id": "toss-15",
+   "company": "토스",
+   "split": "val",
+   "kind": "keyword",
+   "query": "LoRA Fine-Tuning으로 LLM 비용 절감",
+   "relevant": [
+    "손가락을 튕기기로 LLM 비용 줄이기"
+   ]
+  },
+  {
+   "id": "toss-16",
+   "company": "토스",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "망분리된 내부망에서 에이전트가 만든 코드를 샌드박스에 격리 실행하고 이전 작업 세션을 이어 가는 구조",
+   "relevant": [
+    "실행은 격리하고, 세션은 이어간다: 망분리 환경의 Agent Platform 설계기"
+   ]
+  },
+  {
+   "id": "kakao-01",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "Kanana-O 음성 모델 서빙 최적화와 스트리밍 지연",
+   "relevant": [
+    "음성 AI 모델을 프로덕션에 올리기까지: Kanana-O 서빙 최적화 여정"
+   ]
+  },
+  {
+   "id": "kakao-02",
+   "company": "카카오",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "음성 대화 모델이 첫 응답을 수백 밀리초 안에 내도록 텍스트 생성과 오디오 합성을 동시에 흘려보낸 경험",
+   "relevant": [
+    "음성 AI 모델을 프로덕션에 올리기까지: Kanana-O 서빙 최적화 여정"
+   ]
+  },
+  {
+   "id": "kakao-03",
+   "company": "카카오",
+   "split": "val",
+   "kind": "keyword",
+   "query": "Kanana-2 MoE 아키텍처 Pre-training 의사결정",
+   "relevant": [
+    "Kanana-2 개발기 (1): Pre-training에서의 의사결정들을 중심으로"
+   ]
+  },
+  {
+   "id": "kakao-04",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "전체 파라미터는 크지만 추론할 때는 일부 전문가만 켜는 구조로 학습과 운용 비용을 낮춘 모델 사전학습",
+   "relevant": [
+    "Kanana-2 개발기 (1): Pre-training에서의 의사결정들을 중심으로"
+   ]
+  },
+  {
+   "id": "kakao-05",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "Airflow 개인 테스트 환경 AirZone 구축",
+   "relevant": [
+    "개인화된 Airflow 테스트 환경 구축 및 운영 경험"
+   ]
+  },
+  {
+   "id": "kakao-06",
+   "company": "카카오",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "데이터 파이프라인을 시험할 때마다 반복되던 준비 작업을 없애려고 개발자마다 분리된 실행 환경을 만든 경험",
+   "relevant": [
+    "개인화된 Airflow 테스트 환경 구축 및 운영 경험"
+   ]
+  },
+  {
+   "id": "kakao-07",
+   "company": "카카오",
+   "split": "val",
+   "kind": "keyword",
+   "query": "메시징 시스템 경쟁 조건으로 사라진 리포트",
+   "relevant": [
+    "잃어버린 리포트를 찾아서: 카카오 메시징 시스템의 경쟁 조건 문제와 안티 패턴 제거 과정"
+   ]
+  },
+  {
+   "id": "kakao-08",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "문자 발송 결과 보고가 동시에 처리되다가 사라지던 문제를 찾아 잘못된 설계 습관을 걷어 낸 과정",
+   "relevant": [
+    "잃어버린 리포트를 찾아서: 카카오 메시징 시스템의 경쟁 조건 문제와 안티 패턴 제거 과정"
+   ]
+  },
+  {
+   "id": "kakao-09",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "KRIS 배포 리스크 감지 에이전트",
+   "relevant": [
+    "같은 장애를 두 번 겪지 않기 위해, 배포 전에 리뷰합니다 — KRIS 개발기"
+   ]
+  },
+  {
+   "id": "kakao-10",
+   "company": "카카오",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "릴리스 전에 변경 내용을 검토해 예전과 같은 장애가 반복될 위험을 판정하는 도구",
+   "relevant": [
+    "같은 장애를 두 번 겪지 않기 위해, 배포 전에 리뷰합니다 — KRIS 개발기"
+   ]
+  },
+  {
+   "id": "kakao-11",
+   "company": "카카오",
+   "split": "val",
+   "kind": "keyword",
+   "query": "국제 MO 메시지 수신 문제와 KIMS",
+   "relevant": [
+    "문자를 보냈다는데 왜 안 오죠? 길 잃은 국제 MO 메시지 구출 작전"
+   ]
+  },
+  {
+   "id": "kakao-12",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "해외 사용자가 보낸 인증용 문자가 서비스에 도착하지 않던 문제를 추적한 경험",
+   "relevant": [
+    "문자를 보냈다는데 왜 안 오죠? 길 잃은 국제 MO 메시지 구출 작전"
+   ]
+  },
+  {
+   "id": "kakao-13",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "keyword",
+   "query": "메시징 서버 스트레스 테스트와 부하 클라이언트",
+   "relevant": [
+    "메시징 서버의 스트레스 테스트 노하우와 AI가 덜어 준 부분"
+   ]
+  },
+  {
+   "id": "kakao-14",
+   "company": "카카오",
+   "split": "val",
+   "kind": "paraphrase",
+   "query": "상시로 돌아가는 부하 시험 환경을 꾸리고 결과 분석 일부를 AI에게 맡긴 경험",
+   "relevant": [
+    "메시징 서버의 스트레스 테스트 노하우와 AI가 덜어 준 부분"
+   ]
+  },
+  {
+   "id": "kakao-15",
+   "company": "카카오",
+   "split": "val",
+   "kind": "keyword",
+   "query": "개인화 추천 랭킹 모델 개발",
+   "relevant": [
+    "개인화 추천을 위한 랭킹 모델 개발기"
+   ]
+  },
+  {
+   "id": "kakao-16",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "paraphrase",
+   "query": "수억 건의 로그 속에서 대응할 가치가 있는 위협 신호만 골라내도록 탐지 방식을 바꾼 경험",
+   "relevant": [
+    "수억 건의 보안 신호 속 진짜 위협 찾기 — AI로 보안 모니터링의 패러다임을 바꾸다"
+   ]
+  },
+  {
+   "id": "kurly-17",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "term",
+   "query": "Ground Truth 라벨링",
+   "relevant": [
+    "AWS Sagemaker Ground Truth로 훈련용 이미지를 편하게 분류하자"
+   ]
+  },
+  {
+   "id": "kurly-18",
+   "company": "컬리",
+   "split": "val",
+   "kind": "term",
+   "query": "아웃박스 패턴",
+   "relevant": [
+    "컬리의 입고 시스템이 외부 인입 데이터를 안전하게 동기화하는 방법"
+   ]
+  },
+  {
+   "id": "kurly-19",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "term",
+   "query": "Gson 예외",
+   "relevant": [
+    "Spring Boot 버전업 중 알게된 Java 버전별 캡슐화 정책 강화"
+   ]
+  },
+  {
+   "id": "kurly-20",
+   "company": "컬리",
+   "split": "val",
+   "kind": "term",
+   "query": "Jarvis",
+   "relevant": [
+    "우리 팀에도 Jarvis 가 생겼다 – 생성형 AI 로 만든 에러 분석가 이야기"
+   ]
+  },
+  {
+   "id": "kurly-21",
+   "company": "컬리",
+   "split": "tune",
+   "kind": "term",
+   "query": "LLM Wiki",
+   "relevant": [
+    "AI에게 도메인을 가르치다 두 번 갈아엎은 이야기 — LLM Wiki + RAG 혼합기"
+   ]
+  },
+  {
+   "id": "kurly-22",
+   "company": "컬리",
+   "split": "val",
+   "kind": "term",
+   "query": "QA AI Hub",
+   "relevant": [
+    "기획서 하나로 결함 등록까지, QA AI Hub를 만들며 배운 것"
+   ]
+  },
+  {
+   "id": "toss-17",
+   "company": "토스",
+   "split": "tune",
+   "kind": "term",
+   "query": "토스닥터",
+   "relevant": [
+    "쉼 없이 도는 테스트, 사람이 어디까지 돌봐야 할까요? - 토스닥터(Toss Doctor)"
+   ]
+  },
+  {
+   "id": "toss-18",
+   "company": "토스",
+   "split": "val",
+   "kind": "term",
+   "query": "TOI 어드민",
+   "relevant": [
+    "AI가 만든 코드가 어드민이 되기까지"
+   ]
+  },
+  {
+   "id": "toss-19",
+   "company": "토스",
+   "split": "tune",
+   "kind": "term",
+   "query": "LoRA 어댑터",
+   "relevant": [
+    "손가락을 튕기기로 LLM 비용 줄이기"
+   ]
+  },
+  {
+   "id": "toss-20",
+   "company": "토스",
+   "split": "val",
+   "kind": "term",
+   "query": "Spark Connect",
+   "relevant": [
+    "Spark Connect on Kubernetes #2: Operator로 만드는 Control Plane"
+   ]
+  },
+  {
+   "id": "toss-21",
+   "company": "토스",
+   "split": "tune",
+   "kind": "term",
+   "query": "MCP Gateway",
+   "relevant": [
+    "실행은 격리하고, 세션은 이어간다: 망분리 환경의 Agent Platform 설계기",
+    "서비스 개발에 집중할 수 있는 AI 플랫폼 만들기"
+   ]
+  },
+  {
+   "id": "toss-22",
+   "company": "토스",
+   "split": "val",
+   "kind": "term",
+   "query": "ESM 패키지",
+   "relevant": [
+    "토스뱅크가 패키지를 관리하는 방식 #1: 패키지를 ESM으로만 제공하기로 했어요"
+   ]
+  },
+  {
+   "id": "kakao-17",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "term",
+   "query": "AirZone",
+   "relevant": [
+    "개인화된 Airflow 테스트 환경 구축 및 운영 경험"
+   ]
+  },
+  {
+   "id": "kakao-18",
+   "company": "카카오",
+   "split": "val",
+   "kind": "term",
+   "query": "KRIS",
+   "relevant": [
+    "같은 장애를 두 번 겪지 않기 위해, 배포 전에 리뷰합니다 — KRIS 개발기"
+   ]
+  },
+  {
+   "id": "kakao-19",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "term",
+   "query": "KoPDFBench",
+   "relevant": [
+    "한국 문화 이해부터 화면 조작까지: Kanana-V 기능 확장의 모든 것"
+   ]
+  },
+  {
+   "id": "kakao-20",
+   "company": "카카오",
+   "split": "val",
+   "kind": "term",
+   "query": "SMS 벤더사",
+   "relevant": [
+    "잃어버린 리포트를 찾아서: 카카오 메시징 시스템의 경쟁 조건 문제와 안티 패턴 제거 과정"
+   ]
+  },
+  {
+   "id": "kakao-21",
+   "company": "카카오",
+   "split": "tune",
+   "kind": "term",
+   "query": "KIMS",
+   "relevant": [
+    "잃어버린 리포트를 찾아서: 카카오 메시징 시스템의 경쟁 조건 문제와 안티 패턴 제거 과정",
+    "문자를 보냈다는데 왜 안 오죠? 길 잃은 국제 MO 메시지 구출 작전"
+   ]
+  },
+  {
+   "id": "kakao-22",
+   "company": "카카오",
+   "split": "val",
+   "kind": "term",
+   "query": "MO 번호",
+   "relevant": [
+    "문자를 보냈다는데 왜 안 오죠? 길 잃은 국제 MO 메시지 구출 작전"
+   ]
+  }
+ ]
+}

@@ -80,6 +80,14 @@ class Settings(BaseSettings):
     rag_copy_cosine: float = Field(0.9, gt=0, le=1)
     rag_knowledge_count: int = Field(4, ge=0, le=10)  # company documents shown to T2 (T4 gets fewer, ADR-0020)
     rag_knowledge_min_similarity: float = Field(0.5, ge=0, le=1)  # measured: ADR-0020
+    # Hybrid company-document search (ADR-0030): pgvector and BM25 run independently, fused by weighted RRF
+    # sum(weight / (rag_rrf_k + rank)), rank from 1, 0 when a list does not hold the chunk. 70:30 chosen on the tuning set of
+    # tools/bm25_eval_queries.json (2026-11-13; 60:40 started it): same hits as 60:40..40:60, the best evidence precision.
+    rag_weight_vector: float = Field(0.7, ge=0, le=1)
+    rag_weight_bm25: float = Field(0.3, ge=0, le=1)
+    rag_rrf_k: int = Field(60, ge=1, le=1000)
+    # share of the query's IDF weight a BM25 hit must hold (ADR-0030). 0 = off: 0.3 already lost a post only BM25 found.
+    rag_bm25_min_coverage: float = Field(0.0, ge=0, le=1)
 
     # EVL-02 / OQ-09
     # T5 runs this many independent judgements per answer and keeps, per criterion, the median one (ADR-0023): the same answer
