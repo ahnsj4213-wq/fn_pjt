@@ -121,7 +121,7 @@ async def main() -> None:
     rows = load_file()
     async with session_scope() as db:
         if await archived_exists(db):  # ADR-0029: the old test companies were archived here; they must not come back
-            raise SystemExit("이 DB의 기존 테스트 공고는 보관 처리되었습니다. 가상 회사 시드는 실행하지 않습니다 (ADR-0029).")
+            raise SystemExit("이 DB는 기술 블로그 테스트 공고로 바뀌었습니다(기존 테스트 공고 보관·삭제). 가상 회사 시드는 실행하지 않습니다 (ADR-0029).")
         for row in rows:
             await seed(db, row)
     async with sessionmaker()() as db:

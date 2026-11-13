@@ -174,13 +174,22 @@ async def test_old_seeds_refuse_to_run_after_archiving(client, fake_ai, tmp_path
     await create_posting(client, title="화면 확인용 임시 공고")
     async with session_scope() as db:
         await archive.apply(db, await archive.survey(db), set(), tmp_path)
-    with pytest.raises(SystemExit, match="보관 처리"):
+    with pytest.raises(SystemExit, match="ADR-0029"):
         await seed_knowledge.main()
     from scripts.seed_demo import seed_demo
     from app.main import create_app
-    with pytest.raises(SystemExit, match="보관 처리"):
+    with pytest.raises(SystemExit, match="ADR-0029"):
         await seed_demo(create_app(), title="백엔드 개발자")
     assert (await q("SELECT count(*) FROM companies WHERE name LIKE '%(가상)' OR name = '이투이테크'"))[0][0] == 0
+
+
+async def test_old_seeds_still_refuse_once_the_archived_postings_were_deleted(fake_ai, tmp_path):
+    """The archived postings may later be deleted for good (2026-11-13): the tech blog postings alone keep the seeds off."""
+    await tech_blog.load(_raw(tmp_path), _config())
+    assert (await q("SELECT count(*) FROM job_postings WHERE hidden_by = 'ARCHIVE'"))[0][0] == 0
+    with pytest.raises(SystemExit, match="ADR-0029"):
+        await seed_knowledge.main()
+    assert (await q("SELECT count(*) FROM companies WHERE name LIKE '%(가상)'"))[0][0] == 0
 
 
 async def test_only_a_virtual_posting_may_be_open_without_a_deadline(client, fake_ai):

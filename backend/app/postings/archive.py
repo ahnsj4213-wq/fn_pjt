@@ -151,8 +151,9 @@ async def _main(args) -> int:
 
 
 async def archived_exists(db) -> bool:
-    """True once old test postings were archived here: the old seed scripts then refuse to run, so they never come back."""
-    return await db.scalar(text("SELECT EXISTS (SELECT 1 FROM job_postings WHERE hidden_by = 'ARCHIVE')")) is True
+    """True once this database moved to the tech blog test postings: old postings were archived here, or the tech blog
+    postings are loaded (the archived ones may since have been deleted). The old seed scripts then refuse to run."""
+    return await db.scalar(text("SELECT EXISTS (SELECT 1 FROM job_postings WHERE hidden_by = 'ARCHIVE' OR is_virtual)")) is True
 
 
 if __name__ == "__main__":
