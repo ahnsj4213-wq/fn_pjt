@@ -1,5 +1,5 @@
 """Interview-question quality with the real models, by company-document search (ADR-0030, PR #6 review). Read-only: the
-question-bank insert is stubbed and nothing else is written.
+composer writes nothing (the question bank is retired, ADR-0031).
 
     docker compose -p aihire -f deploy/docker-compose.yml run --rm --no-deps -v "<repo>/backend:/srv/backend"         -v "<repo>/tools:/srv/tools" api python /srv/tools/eval_question_rag.py [repetitions]
 
@@ -50,9 +50,6 @@ def old_diverse(ranked):
 
 CONFIGS = {"legacy": (legacy_hybrid, old_diverse), "hybrid_old": (real_hybrid, old_diverse), "hybrid_fixed": (real_hybrid, real_diverse)}
 
-async def no_bank(db, c, kind, gs, model):
-    return [None] * len(gs)
-C._add_to_bank = no_bank
 
 async def one(posting_id, cfg):
     knowledge.hybrid, knowledge.diverse = CONFIGS[cfg]
