@@ -118,25 +118,3 @@ def test_problems_catch_a_copied_fact_and_a_new_graduates_figure():
                                     basis="정답률 60~80% 구간 문제를 추천합니다")
 
 
-async def test_bank_questions_near_the_posting_take_turns():
-    """2026-11-09: relevance alone put the same API latency question into every back-end interview."""
-    from types import SimpleNamespace
-
-    from app.core.constants import EMBED_DIM
-    from app.questions import compose
-
-    rows = [SimpleNamespace(text=f"q{i}", usage_count=u) for i, u in enumerate([3, 0, 1, 0, 2, 0, 0, 0])]
-
-    class AI:
-        async def embed(self, texts):  # q0..q5 about as near as each other (q0 nearest), q6 and q7 far
-            near = [1.0, 0.99, 0.98, 0.97, 0.96, 0.95, 0.5, 0.4]
-            return [[1.0] + [0.0] * (EMBED_DIM - 1)] + [[c, (1 - c * c) ** 0.5] + [0.0] * (EMBED_DIM - 2) for c in near[: len(texts) - 1]]
-
-    firsts = set()
-    for _ in range(30):
-        out = await compose._rank_by_relevance(SimpleNamespace(ai=AI()), rows, "백엔드 API")
-        assert sorted(r.text for r in out) == sorted(r.text for r in rows)
-        assert out[0].usage_count == 0 and out[0].text in {"q1", "q3", "q5"}  # least used among the near ones, not q0
-        assert [r.text for r in out[6:]] == ["q6", "q7"]  # a far question never jumps ahead
-        firsts.add(out[0].text)
-    assert len(firsts) > 1  # ties at random

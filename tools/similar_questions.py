@@ -1,4 +1,4 @@
-"""Find the questions closest (cosine) to any sentence, in question_examples and question_bank.
+"""Find the questions closest (cosine) to any sentence, in question_examples and the retired question bank (question_bank_backup_20261113).
 
     cd deploy
     docker compose exec -T worker python - "찾을 문장" [개수] < ../tools/similar_questions.py
@@ -27,7 +27,7 @@ async def main(sentence: str, n: int) -> None:
              "SELECT kind, origin AS src, text, 1 - (embedding <=> CAST(:v AS vector)) AS sim FROM question_examples "
              "WHERE embedding IS NOT NULL AND embedding_model = :m ORDER BY embedding <=> CAST(:v AS vector) LIMIT :n"),
             ("question_bank (질문은행)",
-             "SELECT kind, source AS src, text, 1 - (embedding <=> CAST(:v AS vector)) AS sim FROM question_bank "
+             "SELECT kind, source AS src, text, 1 - (embedding <=> CAST(:v AS vector)) AS sim FROM question_bank_backup_20261113 "
              "WHERE embedding IS NOT NULL AND embedding_model = :m ORDER BY embedding <=> CAST(:v AS vector) LIMIT :n"),
         ):
             print(f"\n== {title}")

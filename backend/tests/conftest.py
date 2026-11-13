@@ -32,7 +32,7 @@ from app.main import create_app  # noqa: E402
 
 BACKEND = Path(__file__).resolve().parents[1]
 ORIGIN = "http://localhost:5173"
-KEEP = {"state_transitions", "periodic_tasks", "alembic_version", "consent_documents", "question_bank", "coding_problems", "coding_testcases", "checkpoint_migrations"}
+KEEP = {"state_transitions", "periodic_tasks", "alembic_version", "consent_documents", "question_bank_backup_20261113", "coding_problems", "coding_testcases", "checkpoint_migrations"}
 
 
 async def _recreate_db() -> None:
@@ -57,17 +57,14 @@ async def clean_tables(database):
     yield
     async with session_scope() as db:
         rows = (await db.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))).scalars()
-        # `companies` is deleted, not truncated: TRUNCATE ... CASCADE on it would also empty question_bank
-        # (company-scoped AI questions reference it) and wipe the seed questions for every later test.
+        # `companies` is deleted, not truncated: TRUNCATE ... CASCADE on it would also empty question_bank_backup_20261113
+        # (the retired question bank, ADR-0031: kept as it was, never written).
         names = [n for n in rows if n not in KEEP and n != "companies"]
         await db.execute(text(f"TRUNCATE {', '.join(names)} RESTART IDENTITY CASCADE"))
         # Per-application variants are test data too (templates stay): they are tied to applications that no longer exist.
         await db.execute(text("DELETE FROM coding_testcases WHERE problem_id IN (SELECT id FROM coding_problems WHERE variant_of IS NOT NULL)"))
         await db.execute(text("DELETE FROM coding_problems WHERE variant_of IS NOT NULL"))
-        # Seeds stay; rows created by tests in kept tables do not.
-        await db.execute(text("DELETE FROM question_bank WHERE source <> 'SEED'"))
         await db.execute(text("DELETE FROM companies"))
-        await db.execute(text("UPDATE question_bank SET usage_count = 0, last_used_at = NULL"))
     await _flush_redis()
 
 

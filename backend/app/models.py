@@ -316,22 +316,6 @@ class InterviewSlot(Base):
     lease_expires_at: Mapped[datetime] = mapped_column(TS)
 
 
-class QuestionBank(Base):
-    __tablename__ = "question_bank"
-    id: Mapped[uuid.UUID] = _pk()
-    kind: Mapped[str] = mapped_column(Text)
-    job_family: Mapped[str | None] = mapped_column(Text)
-    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    text: Mapped[str] = mapped_column(Text)
-    text_norm_hash: Mapped[bytes] = mapped_column(LargeBinary)
-    source: Mapped[str] = mapped_column(Text)
-    usage_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_used_at: Mapped[datetime | None] = mapped_column(TS)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))  # pgvector, BGE-M3 (migration 0004)
-    embedding_model: Mapped[str | None] = mapped_column(Text)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-
 class InterviewSchedule(Base):
     """SC-A15: an interview date the company sent by mail, with the candidate's answer (migration 0011)."""
     __tablename__ = "interview_schedules"

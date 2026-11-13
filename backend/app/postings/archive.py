@@ -8,7 +8,8 @@ A posting is archived only with evidence that it is test data (`classify`); one 
 alone unless named with --include. Archiving keeps the row and everything that refers to it (applications, answers, evaluations,
 coding results): it sets hidden_by=ARCHIVE (off the list, detail and apply screens; applicants who applied keep their history) and
 closes an OPEN posting with close_reason=ARCHIVED, without expiring anyone's application. Tech blog postings (is_virtual) are never
-archived here. The backup file holds each posting row as it was, so --restore puts back exactly those columns.
+archived here. The backup file holds each posting row as it was; --restore puts back its status and visibility columns with a
+newer row_version, and leaves a posting that changed after archiving alone (reported as a conflict).
 """
 import argparse
 import asyncio
@@ -27,7 +28,6 @@ from app.core.timeutil import utcnow
 
 TEST_TITLE = re.compile(r"테스트|임시|확인용|\btest\b|\d{3,}\s*$", re.I)
 TEST_DOMAIN = re.compile(r"\.(example|invalid|test|localhost)$", re.I)  # RFC 2606 / 6761 reserved names: never a real mailbox
-ARCHIVED_COLUMNS = ("status", "closed_at", "close_reason", "hidden_at", "hidden_by", "updated_at", "row_version")
 
 
 def classify(row: dict) -> tuple[str, list[str]]:
@@ -55,7 +55,7 @@ def classify(row: dict) -> tuple[str, list[str]]:
 async def survey(db) -> list[dict]:
     rows = (await db.execute(text("""
         SELECT p.id, p.company_id, c.name AS company_name, p.title, p.status, p.is_virtual, p.deleted_at, p.hidden_at, p.hidden_by,
-               p.created_at,
+               p.created_at, p.row_version,
                ARRAY(SELECT lower(split_part(u.email, '@', 2)) FROM users u WHERE u.company_id = p.company_id AND u.role = 'RECRUITER')
                  AS recruiter_domains,
                (SELECT count(*) FROM applications a WHERE a.posting_id = p.id) AS applications,
@@ -79,9 +79,30 @@ def _json(v):
     raise TypeError(type(v))
 
 
-async def apply(db, rows: list[dict], include: set[str], backup_dir: Path) -> tuple[Path, list[dict]]:
-    """Backs up first (the whole posting row + what refers to it), then archives. Returns the backup path and what was archived."""
-    targets = [r for r in rows if r["class"] in ("SEED_SYNTHETIC", "TEST") or (r["class"] == "UNCLEAR" and str(r["id"]) in include)]
+def _is_target(r: dict, include: set[str]) -> bool:
+    return r["class"] in ("SEED_SYNTHETIC", "TEST") or (r["class"] == "UNCLEAR" and str(r["id"]) in include)
+
+
+async def apply(db, rows: list[dict], include: set[str], backup_dir: Path) -> tuple[Path, list[dict], list[dict]]:
+    """Backs up first (the whole posting row + what refers to it), then archives. Returns the backup path, what was archived and
+    what was skipped because it changed after `rows` was surveyed.
+
+    `rows` is a report that may be minutes old (PR #5 review): the target postings are locked (FOR UPDATE, in id order) and
+    surveyed again inside this transaction. A posting is archived only if it is still a target and its row_version is the one
+    surveyed; one that a recruiter edited, that became a real posting, or that someone else archived meanwhile is skipped and
+    reported. The lock holds until the caller's transaction ends, so nothing changes between this check and the update."""
+    wanted = [r for r in rows if _is_target(r, include)]
+    await db.execute(text("SELECT id FROM job_postings WHERE id = ANY(:i) ORDER BY id FOR UPDATE"), {"i": [r["id"] for r in wanted]})
+    now_rows = {r["id"]: r for r in await survey(db)}
+    targets, skipped = [], []
+    for r in wanted:
+        cur = now_rows.get(r["id"])
+        if cur is None or not _is_target(cur, include) or cur["row_version"] != r["row_version"]:
+            skipped.append({"id": r["id"], "title": r["title"], "surveyed_class": r["class"],
+                            "now_class": cur["class"] if cur else "GONE",
+                            "row_version": [r["row_version"], cur["row_version"] if cur else None]})
+        else:
+            targets.append(cur)
     ids = [r["id"] for r in targets]
     full = (await db.execute(text("SELECT row_to_json(p) FROM job_postings p WHERE id = ANY(:i)"), {"i": ids})).scalars().all()
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -100,29 +121,45 @@ async def apply(db, rows: list[dict], include: set[str], backup_dir: Path) -> tu
               close_reason = CASE WHEN status = 'OPEN' THEN 'ARCHIVED' ELSE close_reason END,
               status = CASE WHEN status = 'OPEN' THEN 'CLOSED' ELSE status END,
               updated_at = :now, row_version = row_version + 1
-            WHERE id = :i AND NOT is_virtual"""), {"i": r["id"], "now": now})
+            WHERE id = :i AND NOT is_virtual AND row_version = :v"""), {"i": r["id"], "now": now, "v": r["row_version"]})
         await audit(db, action="POSTING_ARCHIVE", target_type="posting", target_id=r["id"], actor_id=None, actor_role="OPERATOR_CLI",
                     company_id=r["company_id"], reason=r["class"], backup=path.name)
-    return path, targets
+    return path, targets, skipped
 
 
-async def restore(db, backup: Path) -> int:
-    """Puts back the archived columns of every posting in the backup that is still archived. Other columns are not touched."""
+RESTORED_COLUMNS = ("status", "closed_at", "close_reason", "hidden_at", "hidden_by")
+
+
+async def restore(db, backup: Path) -> tuple[int, list[dict]]:
+    """Puts back the status and visibility columns of every posting in the backup that is still as archiving left it.
+    Returns (restored, conflicts).
+
+    The version moves forward, never back (PR #5 review): row_version + 1 and updated_at = now, so optimistic locking and change
+    tracking see the restore as one more change. A posting changed after it was archived (its row_version is no longer the one
+    archiving wrote: the backup's + 1) is not restored: it is reported as a conflict for a person to look at, and left as it is."""
     data = json.loads(backup.read_text(encoding="utf-8"))
-    n = 0
+    n, conflicts = 0, []
+    now = utcnow()
     for row in data["rows"]:
-        values = {c: row[c] for c in ARCHIVED_COLUMNS}
-        for c in ("closed_at", "hidden_at", "updated_at"):
+        values = {c: row[c] for c in RESTORED_COLUMNS}
+        for c in ("closed_at", "hidden_at"):
             values[c] = datetime.fromisoformat(values[c]) if values[c] else None
         res = await db.execute(text(
             "UPDATE job_postings SET status = :status, closed_at = :closed_at, close_reason = :close_reason, hidden_at = :hidden_at, "
-            "hidden_by = :hidden_by, updated_at = :updated_at, row_version = :row_version WHERE id = :id AND hidden_by = 'ARCHIVE'"),
-            {"id": uuid.UUID(row["id"]), **values})
+            "hidden_by = :hidden_by, updated_at = :now, row_version = row_version + 1 "
+            "WHERE id = :id AND hidden_by = 'ARCHIVE' AND row_version = :archived_version"),
+            {"id": uuid.UUID(row["id"]), "now": now, "archived_version": row["row_version"] + 1, **values})
         if res.rowcount:
             n += 1
             await audit(db, action="POSTING_ARCHIVE_RESTORE", target_type="posting", target_id=row["id"], actor_id=None,
                         actor_role="OPERATOR_CLI", company_id=row["company_id"], backup=backup.name)
-    return n
+        else:
+            cur = (await db.execute(text("SELECT hidden_by, row_version FROM job_postings WHERE id = :i"),
+                                    {"i": uuid.UUID(row["id"])})).first()
+            conflicts.append({"id": row["id"], "title": row.get("title"),
+                              "reason": "GONE" if cur is None else ("NOT_ARCHIVED" if cur[0] != "ARCHIVE" else "CHANGED_AFTER_ARCHIVE"),
+                              "row_version": {"backup": row["row_version"], "now": cur[1] if cur else None}})
+    return n, conflicts
 
 
 def _report(rows: list[dict]) -> dict:
@@ -138,15 +175,17 @@ def _report(rows: list[dict]) -> dict:
 async def _main(args) -> int:
     async with session_scope() as db:
         if args.restore:
-            print(json.dumps({"restored": await restore(db, Path(args.restore))}))
+            restored, conflicts = await restore(db, Path(args.restore))
+            print(json.dumps({"restored": restored, "conflicts": conflicts}, ensure_ascii=False, default=_json))
             return 0
         rows = await survey(db)
         report = _report(rows)
         if not args.apply:
             print(json.dumps(report, ensure_ascii=False, indent=1))
             return 0
-        path, done = await apply(db, rows, set(args.include or []), Path(args.backup_dir))
-        print(json.dumps({"backup": str(path), "archived": len(done), "before": report["by_class"]}, ensure_ascii=False))
+        path, done, skipped = await apply(db, rows, set(args.include or []), Path(args.backup_dir))
+        print(json.dumps({"backup": str(path), "archived": len(done), "skipped_changed": skipped, "before": report["by_class"]},
+                         ensure_ascii=False, default=_json))
     return 0
 
 

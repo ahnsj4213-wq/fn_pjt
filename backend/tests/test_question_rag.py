@@ -5,7 +5,6 @@ import json
 from collections import Counter
 
 import pytest
-from sqlalchemy import text
 
 from app.ai.client import AIUnavailable
 from app.core.db import session_scope, sessionmaker
@@ -31,12 +30,6 @@ def corpus(tmp_path, monkeypatch):
 async def _sync(ai, model: str = MODEL):
     async with sessionmaker()() as db:
         return await rag.sync_examples(db, ai, model)
-
-
-async def _no_design_seeds(on: bool) -> None:
-    async with session_scope() as db:  # make the job slot go to T2 (DESIGN has seed questions otherwise)
-        await db.execute(text("UPDATE question_bank SET is_active = :on WHERE source = 'SEED' AND job_family = 'DESIGN'"),
-                         {"on": on})
 
 
 async def test_sync_loads_embeds_and_resumes(fake_ai, corpus):
@@ -65,13 +58,9 @@ async def test_periodic_sync_enqueues_the_index_job(fake_ai, corpus):
 
 async def test_generation_gets_nearest_examples_of_the_same_kind(client, make_client, fake_ai, corpus):
     await _sync(fake_ai)
-    await _no_design_seeds(False)
-    try:
-        _, app_id, cand = await setup_app(client, make_client, job_family="DESIGN", title="QA 엔지니어",
-                                          duties="회귀 테스트 자동화 범위 설계. 릴리스 품질 지표 관리")
-        await prepare_and_compose(cand, app_id)
-    finally:
-        await _no_design_seeds(True)
+    _, app_id, cand = await setup_app(client, make_client, job_family="DESIGN", title="QA 엔지니어",
+                                      duties="회귀 테스트 자동화 범위 설계. 릴리스 품질 지표 관리")
+    await prepare_and_compose(cand, app_id)
     gen = next(c for c in fake_ai.calls if c.task == "question_generate")
     assert len(gen.input["examples"]) == 3 and set(gen.input["examples"]) <= set(JOB_EXAMPLES)
     assert gen.input["examples"][0] in JOB_EXAMPLES[:2]  # nearest to the QA posting comes first
@@ -89,13 +78,9 @@ async def test_copied_questions_are_dropped(client, make_client, fake_ai, corpus
         return {"questions": [{"text": copy, "basis_quote": "회귀 테스트 자동화 범위 설계"}]}
 
     fake_ai.responses["question_generate"] = reply
-    await _no_design_seeds(False)
-    try:
-        _, app_id, cand = await setup_app(client, make_client, job_family="DESIGN", title="QA 엔지니어",
-                                          duties="회귀 테스트 자동화 범위 설계. 릴리스 품질 지표 관리")
-        qs = await prepare_and_compose(cand, app_id)
-    finally:
-        await _no_design_seeds(True)
+    _, app_id, cand = await setup_app(client, make_client, job_family="DESIGN", title="QA 엔지니어",
+                                      duties="회귀 테스트 자동화 범위 설계. 릴리스 품질 지표 관리")
+    qs = await prepare_and_compose(cand, app_id)
     assert copy not in [x.text for x in qs]
     gens = [c for c in fake_ai.calls if c.task == "question_generate" and c.input["kind"] == "JOB"][:2]
     # one regeneration (the composer's second request) naming the failed question and its code, then the code-made fallback

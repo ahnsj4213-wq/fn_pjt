@@ -133,7 +133,8 @@ async def test_old_test_postings_are_backed_up_archived_and_restorable(client, m
     assert by_title["백엔드 엔지니어 (테스트)"]["class"] == "VIRTUAL_TECH_BLOG"
 
     async with session_scope() as db:
-        backup, done = await archive.apply(db, await archive.survey(db), set(), tmp_path / "backups")
+        backup, done, skipped = await archive.apply(db, await archive.survey(db), set(), tmp_path / "backups")
+    assert skipped == []
     assert {r["title"] for r in done} == {"AI 백엔드 개발자 (질문 테스트)", "백엔드 개발자"}
     saved = json.loads(backup.read_text(encoding="utf-8"))
     assert {r["id"] for r in saved["rows"]} == {old["id"], unclear["id"]} and all(r["status"] == "OPEN" for r in saved["rows"])
@@ -153,7 +154,7 @@ async def test_old_test_postings_are_backed_up_archived_and_restorable(client, m
     assert r.status_code == 409 and r.json()["error"]["code"] == "POSTING_ARCHIVED"
 
     async with session_scope() as db:
-        assert await archive.restore(db, backup) == 2
+        assert await archive.restore(db, backup) == (2, [])
     assert old["id"] in {p["id"] for p in (await client.get("/api/postings")).json()}
     assert (await q("SELECT status, close_reason, hidden_by FROM job_postings WHERE id = :i", i=old["id"])) == [("OPEN", None, None)]
 
@@ -165,7 +166,7 @@ async def test_a_posting_without_evidence_is_left_alone(client, fake_ai, tmp_pat
     async with session_scope() as db:
         rows = await archive.survey(db)
         assert [r["class"] for r in rows] == ["UNCLEAR"]
-        _, done = await archive.apply(db, rows, set(), tmp_path)
+        _, done, _ = await archive.apply(db, rows, set(), tmp_path)
     assert done == [] and p["id"] in {x["id"] for x in (await client.get("/api/postings")).json()}
 
 
@@ -225,3 +226,63 @@ async def test_an_embedding_timeout_is_retried_and_what_is_left_is_reported(fake
         await db.execute(text("UPDATE company_knowledge SET embedding = NULL"))
     total = (await q("SELECT count(*) FROM company_knowledge"))[0][0]
     assert total > 0 and (await tech_blog.load(_raw(tmp_path), _config()))["embedding_pending"] == total
+
+
+# ── PR #5 review: archiving against a stale report, restoring a changed posting ──
+async def _two_test_postings(client):
+    await recruiter(client)
+    a = await create_posting(client, title="질문 테스트 공고 A")
+    b = await create_posting(client, title="질문 테스트 공고 B")
+    return a, b
+
+
+async def _version(pid) -> int:
+    return (await q("SELECT row_version FROM job_postings WHERE id = :i", i=pid))[0][0]
+
+
+async def test_a_posting_changed_after_the_survey_is_not_archived(client, fake_ai, tmp_path):
+    a, b = await _two_test_postings(client)
+    async with session_scope() as db:
+        report = await archive.survey(db)  # the operator reads the report ...
+    async with session_scope() as db:  # ... a recruiter edits posting B meanwhile ...
+        await db.execute(text("UPDATE job_postings SET duties = '바뀐 업무', row_version = row_version + 1 WHERE id = :i"), {"i": b["id"]})
+    v_b = await _version(b["id"])
+    async with session_scope() as db:  # ... then the stale report is applied
+        _, done, skipped = await archive.apply(db, report, set(), tmp_path)
+    assert [str(r["id"]) for r in done] == [a["id"]]
+    assert [str(r["id"]) for r in skipped] == [b["id"]] and skipped[0]["row_version"] == [v_b - 1, v_b]
+    assert (await q("SELECT hidden_by FROM job_postings WHERE id = :i", i=b["id"])) == [(None,)]  # left as the recruiter made it
+    assert (await q("SELECT hidden_by FROM job_postings WHERE id = :i", i=a["id"])) == [("ARCHIVE",)]
+
+
+async def test_archiving_locks_its_postings_until_it_commits(client, fake_ai, tmp_path):
+    a, _ = await _two_test_postings(client)
+    async with session_scope() as db:
+        _, done, _ = await archive.apply(db, await archive.survey(db), set(), tmp_path)
+        assert len(done) == 2
+        # while the archiving transaction is open, an edit of its posting waits for it (here: gives up after 300 ms)
+        from sqlalchemy.exc import DBAPIError
+        with pytest.raises(DBAPIError, match="lock"):
+            async with session_scope() as other:
+                await other.execute(text("SET LOCAL lock_timeout = '300ms'"))
+                await other.execute(text("UPDATE job_postings SET duties = 'x' WHERE id = :i"), {"i": a["id"]})
+    assert (await q("SELECT hidden_by FROM job_postings WHERE id = :i", i=a["id"])) == [("ARCHIVE",)]
+
+
+async def test_restore_moves_the_version_forward_and_leaves_a_changed_posting_alone(client, fake_ai, tmp_path):
+    a, b = await _two_test_postings(client)
+    v_a0 = await _version(a["id"])
+    async with session_scope() as db:
+        backup, done, _ = await archive.apply(db, await archive.survey(db), set(), tmp_path)
+    assert await _version(a["id"]) == v_a0 + 1
+    async with session_scope() as db:  # B is changed after archiving
+        await db.execute(text("UPDATE job_postings SET duties = '보관 후 수정', row_version = row_version + 1 WHERE id = :i"), {"i": b["id"]})
+    async with session_scope() as db:
+        restored, conflicts = await archive.restore(db, backup)
+    assert restored == 1
+    assert [(c["id"], c["reason"]) for c in conflicts] == [(b["id"], "CHANGED_AFTER_ARCHIVE")]
+    assert await _version(a["id"]) == v_a0 + 2  # forward, never back to the backup's version
+    assert (await q("SELECT status, hidden_by FROM job_postings WHERE id = :i", i=a["id"])) == [("OPEN", None)]
+    assert (await q("SELECT hidden_by, duties FROM job_postings WHERE id = :i", i=b["id"])) == [("ARCHIVE", "보관 후 수정")]
+    async with session_scope() as db:  # a second restore changes nothing
+        assert (await archive.restore(db, backup))[0] == 0
