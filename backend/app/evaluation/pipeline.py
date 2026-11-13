@@ -17,6 +17,7 @@ from app.ai.client import AIClient
 from app.coding.grading import strip_comments
 from app.core.config import get_settings
 from app.core.constants import CRITERIA, Criterion
+from app.evaluation import checks
 from app.evaluation.scoring import (
     CODING_METRIC_WEIGHTS,
     QuestionScores,
@@ -81,31 +82,68 @@ def unit_input(q: InterviewQuestion, a: InterviewAnswer, posting: JobPosting, le
     return inp
 
 
+async def ask_model_for_judgements(ai: AIClient, inp: dict, n: int) -> tuple[list[dict], int, str | None, str, dict]:
+    """The model's side of a unit (T5): `n` independent judgements, each a score candidate, reason and sentence number per
+    criterion. Returns (usable outputs, model calls, manifest hash, last status, flags). Nothing here is checked or scored:
+    that is checks.py and scoring.py. A rule result (답변 없음, TOO_SHORT) has no model call and is not repeated."""
+    outputs, calls, manifest, status, flags = [], 0, None, "INVALID", {}
+    for _ in range(max(1, n)):
+        r = await ai.llm("evaluate_answer", inp, lane="BATCH")
+        calls += r.attempts.get("llm_calls", 0)
+        status = r.status
+        flags.update({k: v for k, v in (r.flags or {}).items() if v})
+        if r.status == "OK":
+            outputs.append(r.output)
+            manifest = r.manifest_hash
+            if not r.output.get("llm", True):
+                break  # a rule result: the same every time
+    return outputs, calls, manifest, status, flags
+
+
 async def evaluate_unit(ai: AIClient, q: InterviewQuestion, a: InterviewAnswer, posting: JobPosting,
                         app: Application | None = None) -> tuple[dict, str]:
     """Returns (payload, manifest_hash). Raises EvaluationFailed; AIUnavailable propagates (job deferral).
 
-    `eval_samples` independent T5 judgements, then per criterion the median one with its own evidence and comment (ADR-0023).
-    Every kept score is one the model gave; code only picks the middle of the model's own judgements. A rule result (답변 없음,
-    TOO_SHORT) has no model call and is not repeated. Samples that failed are left out; none left = EvaluationFailed."""
+    1. the model: `eval_samples` independent T5 judgements (ask_model_for_judgements), per criterion the median one with its own
+       evidence and comment (ADR-0023). Samples that failed are left out; none left = EvaluationFailed (run_task already spent
+       its format retries, so a unit without any usable judgement is not asked again).
+    2. code: checks.find_problems (quote, score-reason-evidence, form, spread of the samples).
+    3. only when something was found: ONE more T5 call with the reasons as feedback; the failed criteria are taken from it.
+    4. code: checks.settle puts what still fails on the system side (UNLINKED, QUOTE_MISMATCH) or the content side
+       (LOW_CONTENT, score capped). The model calls of one unit never exceed checks.unit_call_cap(eval_samples)."""
+    n = max(1, get_settings().eval_samples)
+    cap = checks.unit_call_cap(n)
     inp = unit_input(q, a, posting, candidate_level(app, posting))
-    samples, calls, manifest, status = [], 0, None, "INVALID"
-    for _ in range(max(1, get_settings().eval_samples)):
-        r = await ai.llm("evaluate_answer", inp, lane="BATCH")
-        calls += r.attempts.get("llm_calls", 0)
-        status = r.status
-        if r.status == "OK":
-            samples.append(r)
-            manifest = r.manifest_hash
-            if not r.output.get("llm", True):
-                break  # a rule result: the same every time
+    samples, calls, manifest, status, flags = await ask_model_for_judgements(ai, inp, n)
     if not samples:
         raise EvaluationFailed(f"evaluate_answer {status}")
-    out = median_judgement([s.output for s in samples])
-    flags: dict = {}
-    for s in samples:
-        flags.update({k: v for k, v in (s.flags or {}).items() if v})
-    return {**out, "flags": flags, "llm_calls": calls, "samples": len(samples)}, manifest
+    judged = median_judgement(samples)
+    if not judged.get("llm", True):
+        return {**judged, "flags": flags, "llm_calls": calls, "samples": len(samples),
+                "check": {"version": checks.CHECK_VERSION, "rule": True}}, manifest
+    text = a.eval_text or ""
+    found = checks.find_problems(judged, text, samples)
+    left, rejudged = found, False
+    if found and checks.MAX_REJUDGE > 0:
+        extra_out, more, again, _st, more_flags = await ask_model_for_judgements(
+            ai, {**inp, "review": checks.review_lines(found, judged, samples)}, 1)
+        calls += more
+        rejudged = True
+        flags.update(more_flags)
+        extra = extra_out[0] if extra_out and extra_out[0].get("llm", True) else None
+        if extra is not None and again != manifest:
+            raise EvaluationFailed("manifest changed between the judgements of one unit")
+        merged = judged if extra is None else checks.merge_rejudge(judged, extra, found)
+        left = checks.recheck(merged, text, found, extra, judged["items"])
+        judged = merged
+    if calls > cap:  # cannot happen with the loop above; a guard so a later change cannot loop on the model unnoticed
+        raise EvaluationFailed(f"evaluate_answer used {calls} model calls, cap {cap}")
+    try:
+        items, side = checks.settle(judged, left)
+    except ValueError as e:
+        raise EvaluationFailed(f"evaluate_answer result {e}") from e
+    check = {"version": checks.CHECK_VERSION, "found": found, "rejudged": rejudged, "left": left, "side": side}
+    return {**judged, "items": items, "flags": flags, "llm_calls": calls, "samples": len(samples), "check": check}, manifest
 
 
 def median_judgement(outputs: list[dict]) -> dict:

@@ -7,7 +7,7 @@
 1. `docs/PRD.md` — PRD v2.0(한 파일). 무엇을·왜 만드는지, 기능 ID·인수 기준·남은 확인 사항(14절)
 1-1. `docs/design/consolidation-round1.md` — 초기 설계 통합 결정(T1~T27). 이후 결정은 ADR이 우선한다.
 2. `docs/requirements-traceability.md` — PRD 요구사항·AC-01~22 추적표(상태 칸은 Phase 0 기준이라 갱신 필요, 6절 참고)
-3. `docs/TRD.md` — TRD v2.0(한 파일). 3장(데이터 모델)과 4장(API 계약)이 구현 기준
+3. `docs/TRD.md` — TRD(한 파일, 머리말에 버전). 3장(데이터 모델)과 4장(API 계약)이 구현 기준
 4. `docs/adr/` — ADR 0001~0027
 5. `docs/open-questions.md`(OQ-01~39), `docs/risks.md`, `docs/data-retention.md`(보관 기간 잠정안)
 6. `prototypes/README.md` — 이 장비(GTX 1660 SUPER 6GB) 실측 결과

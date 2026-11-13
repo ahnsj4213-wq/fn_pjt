@@ -11,6 +11,7 @@ when it passes (COD-05).
 """
 import hashlib
 import json
+import logging
 from datetime import timedelta
 from uuid import UUID
 
@@ -34,6 +35,7 @@ from app.interview import infra
 from app.jobs.queue import enqueue
 from app.models import Application, CodingAttempt, CodingProblem, CodingRun, CodingSubmission, CodingTestcase
 
+log = logging.getLogger("app.coding")
 router = APIRouter(prefix="/api/candidate/applications/{aid}/coding", tags=["candidate"])
 MAX_CODE_BYTES = 64 * 1024
 RUN_WALL_MS = 10_000  # [실행] is synchronous: the whole call stays within ~10 s
@@ -207,6 +209,17 @@ async def submit(aid: UUID, body: SubmitIn, ctx: CandidateCtx = Depends(require_
         raise conflict("TIME_OVER", "제한시간이 지났습니다. 마지막으로 저장된 코드가 제출됩니다.")
     attempt.draft_code, attempt.draft_revision, attempt.draft_saved_at = body.code, max(body.revision,
                                                                                         attempt.draft_revision), now
-    await submit_snapshot(db, app, body.code, "MANUAL")
+    # The interview graph closes the coding test (SUBMIT entry, in this transaction). Without the graph (its checkpoint store
+    # down) the same function is called directly: submit_snapshot is idempotent on the application, so either way one submission.
+    from app.interview import graph as igraph
+
+    try:
+        result = await igraph.submit_coding(db, app.id, body.code, "MANUAL")
+    except Exception:  # noqa: BLE001 - the graph is the route, not a requirement: the direct path below gives the same result
+        log.warning("coding_submit_graph_failed", exc_info=True)
+        result = "SUBMITTED" if await submit_snapshot(db, app, body.code, "MANUAL") else "ALREADY_SUBMITTED"
+    if result == "ALREADY_SUBMITTED":
+        await db.rollback()
+        raise conflict("ALREADY_SUBMITTED", "이미 제출했습니다.")
     await db.commit()
     return {"attempt_status": "SUBMITTED"}

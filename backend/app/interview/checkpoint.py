@@ -1,4 +1,5 @@
-"""PostgreSQL checkpoints of the interview graph (ADR-0016, ai-architecture 6.1).
+"""PostgreSQL checkpoints of the interview graph (ADR-0016, ai-architecture 6.1; one thread per application since 2026-11-11:
+composition, interview and the coding submission).
 
 A checkpoint is the place the graph stopped (state of the interview progress graph: ids, mode, route; never an answer
 text), kept so that a dropped connection resumes at the step it stopped at. The application row stays the source of
@@ -140,12 +141,16 @@ async def purge_finished(db) -> None:
     for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
         await db.execute(text(
             f"DELETE FROM {table} WHERE "
-            # composition threads (compose:<application>:<settings>) are needed while the questions can still be composed
+            # composition threads (compose:<application>:<settings>) once the attempt is past the composition
             "(thread_id LIKE 'compose:%' AND split_part(thread_id, ':', 2) NOT IN "
-            "  (SELECT id::text FROM applications WHERE attempt_status IN ('PREPARING', 'READY'))) "
+            "  (SELECT id::text FROM applications WHERE attempt_status IN ('READY', 'PREPARING'))) "
+            # coding submission threads (submit:<application>): a run in progress keeps it while the attempt is CODING
+            "OR (thread_id LIKE 'submit:%' AND split_part(thread_id, ':', 2) NOT IN "
+            "  (SELECT id::text FROM applications WHERE attempt_status = 'CODING')) "
             # evaluation threads (eval:<application>:<job>) while their job can still run (queued or running)
             "OR (thread_id LIKE 'eval:%' AND split_part(thread_id, ':', 3) NOT IN "
             "  (SELECT id::text FROM jobs WHERE kind = 'evaluate_application' AND state IN ('QUEUED', 'RUNNING'))) "
-            # interview threads (<application>) while the interview is in progress or can be resumed
-            "OR (thread_id NOT LIKE 'compose:%' AND thread_id NOT LIKE 'eval:%' AND thread_id NOT IN "
-            "  (SELECT id::text FROM applications WHERE attempt_status IN ('INTERVIEWING', 'INTERRUPTED')))"))
+            # interview threads (<application>, ADR-0028): the composition (READY, PREPARING), the
+            # interview (INTERVIEWING; INTERRUPTED until the sweeper ends it, ADR-0024) and the coding test (CODING)
+            "OR (thread_id NOT LIKE 'compose:%' AND thread_id NOT LIKE 'submit:%' AND thread_id NOT LIKE 'eval:%' AND thread_id NOT IN "
+            "  (SELECT id::text FROM applications WHERE attempt_status IN ('READY', 'PREPARING', 'INTERVIEWING', 'INTERRUPTED', 'CODING')))"))

@@ -21,9 +21,11 @@ def test_job_questions_come_from_own_documents_when_there_are_some():
     posting_q = {"text": "가격 수집 실패율이 오르면 원인 분석을 무엇부터 어떻게 하시겠습니까?", "basis_quote": LINE}
     doc_q = {"text": "제휴 호텔 가격 수집기의 응답 지연이 잦다면 무엇부터 어떻게 확인하시겠습니까?", "basis_quote": DOC_QUOTE}
     t2, inp, out = _t2([posting_q, doc_q], knowledge=[DOC])
-    first = t2.check(inp, out, {}, False)
-    assert first.feedback and "회사 자료" in first.feedback["gen"]  # the posting question is asked again from a document
-    kept = t2.check(inp, out, {}, True).output["questions"]  # on the retry a posting question still beats a bank question
+    first = t2.check(inp, out, {}, False).output
+    assert [f["codes"] for f in first["failed"]] == [["NEEDS_DOCUMENT"]]  # the posting question is asked again from a document
+    assert "회사 자료" in t2.build({**inp, "feedback": first["failed"]}, "n0")[0]
+    # on the last request a posting question still beats a code-made one
+    kept = t2.check({**inp, "last_chance": True}, out, {}, False).output["questions"]
     assert {q["source"]["type"] for q in kept} == {"POSTING", "KNOWLEDGE"}
     # no own documents: the posting line is fine
     t2, inp, out = _t2([posting_q], n=1)

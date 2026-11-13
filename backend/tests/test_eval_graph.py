@@ -286,8 +286,10 @@ def test_a_fresh_result_settles_what_still_fails_and_counts_system_and_content_a
     p = _payload(a)
     p["items"]["LOGIC"]["quote"] = {"start": 0, "end": 5, "text": "다른 문장", "sent": 1}  # not a span of the answer
     sealed = U.seal_fresh(p, a)
-    assert sealed["items"]["LOGIC"] == {**p["items"]["LOGIC"], "score": 1, "evidence_status": "INSUFFICIENT",
-                                        "insufficient_reason": "QUOTE_MISMATCH", "quote": None}
+    # unit-check-2 (PR #2 review): an unverified quote is UNLINKED with the model's score, never 1 point
+    assert sealed["items"]["LOGIC"] == {**p["items"]["LOGIC"], "evidence_status": "UNLINKED", "insufficient_reason": None,
+                                        "quote": None}
+    assert sealed["items"]["LOGIC"]["score"] == p["items"]["LOGIC"]["score"]
     with pytest.raises(EvaluationFailed):
         U.seal_fresh({**_payload(a), "rubric_version": "rubric-v1"}, a)
     low = {"score": 2, "evidence_status": "INSUFFICIENT", "insufficient_reason": "LOW_CONTENT", "quote": None, "comment": ""}
@@ -300,8 +302,8 @@ async def test_stored_units_that_fail_the_rules_are_evaluated_again_once_and_rep
     app_id, ids = await answered(client, make_client)
     await pre_evaluate_all(ids)
     assert count(fake_ai, "evaluate_answer") == UNITS
-    async with session_scope() as db:  # one UNLINKED high score, one older rubric version, one other manifest
-        await db.execute(text("UPDATE answer_pre_evaluations SET payload = jsonb_set(payload, '{items,LOGIC}', "
+    async with session_scope() as db:  # one UNLINKED high score made before the checks, one older rubric version, one other manifest
+        await db.execute(text("UPDATE answer_pre_evaluations SET payload = jsonb_set(payload - 'check', '{items,LOGIC}', "
                               "'{\"score\": 4, \"evidence_status\": \"UNLINKED\", \"insufficient_reason\": null, \"quote\": null, "
                               "\"comment\": \"\"}') WHERE answer_id=:a"), {"a": ids[0]})
         await db.execute(text("UPDATE answer_pre_evaluations SET payload = jsonb_set(payload, '{rubric_version}', '\"rubric-v1\"') "
@@ -334,7 +336,7 @@ async def test_evidence_that_cannot_be_linked_holds_the_evaluation_without_askin
     await submit_and_register(app_id)
     await drain()
     first = count(fake_ai, "evaluate_answer")
-    assert first == UNITS and not [c for c in fake_ai.calls if c.task == "report_summary"]
+    assert first == UNITS + (UNITS - 1) and not [c for c in fake_ai.calls if c.task == "report_summary"]
     await retry_now()  # the retry continues at verify: the same verdict, no model call
     assert count(fake_ai, "evaluate_answer") == first
     assert await q("SELECT eval_status FROM applications WHERE id=:a", a=app_id) == [("ON_HOLD",)]

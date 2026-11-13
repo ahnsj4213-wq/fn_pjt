@@ -2,13 +2,14 @@
 
 Before the interview the composition graph writes only the first main question and keeps the plan (area, custom text, mode per
 seq) on the question set. When every question so far is answered (and the follow-up decision of the last one is made), the
-interview graph calls `ensure_next`, which composes the next slot of the plan with the same sources as before — the resume (T3),
+interview graph's `compose_next` node (interview/graph.py) calls `ensure_next`, which composes the next slot of the plan with the same sources as before — the resume (T3),
 the company documents (T2 with the corrective RAG loop), code-made common questions — plus what the candidate has just said: the
 latest answers steer the document search and which resume item is asked about.
 
 Rules kept from up-front composition: the counts per area come from the plan (QST-02's 10 questions by type), a question once
-written is never changed (QST-06), a failed or slow generation falls back to a code-made question (QST-07), and every question is
-checked against the ones already asked.
+written is never changed (QST-06), every generated question passes the quality gate with at most one regeneration
+(questions/quality.py), a failed or slow generation falls back to a code-made question (QST-07), and every question is checked
+against the ones already asked.
 
 Composing ahead (2026-11-10): composition on a 6 GB GPU takes 10~40 s, so `prefetch` starts the next main question as soon as the
 current one is shown, while the candidate is still answering it. That question is steered by the answers before the current one;
@@ -40,7 +41,7 @@ from app.models import (
     Application, Company, Interview, InterviewAnswer, InterviewQuestion, JobPosting, PostingEvalSettings, QuestionSet,
 )
 from app.jobs.queue import enqueue
-from app.questions import compose as C
+from app.questions import compose as C, quality
 from app.questions.dbio import ShortReads
 from app.resumes.schemas import to_ai_resume
 
@@ -100,6 +101,7 @@ async def _fill(db, c: C._Ctx, sl: C.Slot) -> None:
 async def _fallback(db, c: C._Ctx, sl: C.Slot) -> None:
     """Generation failed or took too long: a question made by code (no model, no database)."""
     c.picked = [p for p in c.picked if p.seq != sl.seq]
+    start = len(c.picked)
     one = [(sl.seq, sl.area.value)]
     if sl.area == Area.PROJECT:  # 경험 stays an experience question (OQ-37, revised 2026-11-10)
         C.experience_fallback(c, to_ai_resume(c.app.resume_snapshot), one)
@@ -107,6 +109,7 @@ async def _fallback(db, c: C._Ctx, sl: C.Slot) -> None:
         C.common_fallback(c, one, sl.area.value)
     else:  # made by code from the posting, never from the question bank
         C.posting_fallback(c, FALLBACK_KIND[sl.area], one)
+    quality.check_fallback(c, start)  # the same gate as a generated question (a failing one gets a safe fixed sentence)
 
 
 # ── one composition at a time per application in this process ─────────────────

@@ -1,30 +1,26 @@
-"""Corrective RAG for generated questions (ADR-0020, revised 2026-11-10): called by the composition graph's motivation and job
-nodes (questions/graph.py) and by live composition (questions/live.py) for a COMPANY or JOB slot.
+"""Corrective RAG for generated questions (ADR-0020, revised 2026-11-11): one round per request of the quality loop
+(questions/quality.py) for a COMPANY or JOB slot, upfront (the composition nodes of interview/graph.py) or live.
 
-    plan_queries -> embed (once) -> retrieve -> generate (T2) -> review --enough--> done
-                                       ^                           |
-                                       +--- short, round 1 only ---+-- no new document: review again with the last-round rules
-                                                                      (no model call), done
+    request 1:  plan_queries -> embed (once) -> retrieve -> generate (T2) -> review
+    request 2:  retrieve (documents not shown yet; else the ones shown) -> review what round 1 held back under the last-round
+                rules -> generate (T2, `last_chance`, with the failure reasons of request 1) only for what is still missing -> review
 
   plan_queries  one search per duty line of the posting, so each part of the job finds its own document (code, no model)
-  embed         the queries are embedded once per run; every search and the RAG examples reuse the vectors
+  embed         the queries are embedded once per composition of an area; every search and the RAG examples reuse the vectors
   retrieve      vector search inside the company and posting, rank fusion with exact words, at most one chunk per document first.
                 A company with no document of its own uses the embedded documents of the other companies as examples of the job
                 (marked shared: asked as a situation, never stated as this company's work).
-  generate      T2 with the documents and the RAG examples (found once, reused in round 2). Round 1 may regenerate once inside
-                the task (only the failed questions, with their failure codes); round 2 is `last_chance`: no regeneration.
+  generate      T2 with the documents and the RAG examples (found once, reused in round 2). No regeneration inside the task: the
+                second request of the quality loop is the only regeneration, and it is this module's second round.
   review        keeps a question only if it names something concrete from its document and asks about a document not used yet.
                 On the last round the concrete and distinct rules give way: a grounded question beats a code-made one.
 
-Worst case per call (T2 format_retries 1): before 2 rounds x (1 + 1 regeneration + 2 format repairs) = 8 model calls; now round 1
-(1 + 1 regeneration + 1 format repair) + round 2 (1 + 1 format repair) = 5, and round 2 runs only when the search found documents
-not shown yet. Without them the questions round 1 held back (not concrete / same document) are reviewed again under the last-round
-rules: no model call. Embeddings: before up to 5 calls a round (3 searches, examples, copy check); now 1 for the queries, 1 copy
-check a round.
+Worst case per area: 2 requests x (1 + 1 format repair) = 4 model calls (before 2026-11-11: 5, round 1 with an in-task
+regeneration plus round 2). Round 2 calls the model only for what round 1's held-back questions cannot fill.
 
-A plain function, not a LangGraph subgraph: its state holds document text and the AI client, which must not be checkpointed, and
-the node that calls it is the unit of recovery (a crash repeats the node). It holds no database transaction: every query is a
-short read (questions/dbio.ShortReads). Nothing here decides anything about a candidate.
+The state lives on the composer context (`c.rag[kind]`) for the two requests of one node run: it holds document text and the AI
+client, which must not be checkpointed, and the node that calls it is the unit of recovery (a crash repeats the node). It holds no
+database transaction: every query is a short read (questions/dbio.ShortReads). Nothing here decides anything about a candidate.
 """
 import logging
 import re
@@ -149,7 +145,8 @@ async def _generate(state: RagState, c) -> dict:
            # ADR-0025: who is asked and how hard comes first; the documents only make the question concrete
            "level": getattr(c, "level", "JUNIOR"), "difficulties": list(getattr(c, "want", []))[len(state["accepted"]):][:missing]}
     if state["round"] >= MAX_ROUNDS:
-        inp["last_chance"] = True  # the second round asks once: no regeneration inside the task as well
+        inp["last_chance"] = True  # the second request: the relaxed rules, and the failure reasons of the first one
+        inp["feedback"] = list(getattr(c, "feedback", []) or [])
     examples = state.get("examples")
     if examples is None or examples[0] != ask:  # found once a run (same query, same kind): round 2 reuses them
         vec = (state.get("vectors") or [None])[0] if state["queries"] else None
@@ -164,6 +161,8 @@ async def _generate(state: RagState, c) -> dict:
     if r.status != "OK":
         log_event(log, "question_generate_failed", application_id=str(c.app.id), status=r.status)
         return {"candidates": [], "examples": examples, "rejects": rejects, "status": r.status}
+    if hasattr(c, "failed"):
+        c.failed.extend(r.output.get("failed") or [])  # what the task's own checks dropped, for the regeneration's feedback
     items = r.output.get("questions", [])
     kept = await _drop_copies(c, items, examples[1])
     _count(rejects, "RAG_COPY", len(items) - len(kept))
@@ -197,10 +196,6 @@ async def _review(state: RagState, config=None) -> dict:
     return {"accepted": accepted, "used_docs": used, "held": held, "rejects": rejects}
 
 
-def _next(state: RagState) -> str:
-    return "done" if len(state["accepted"]) >= state["n"] or state["round"] >= MAX_ROUNDS else "retrieve"
-
-
 async def _timed(name: str, c, kind: str, coro):
     """Stage timing (ADR-0025): `rag_stage` with the step's duration (retrieve = vector/keyword search + rerank, generate = RAG
     examples + T2 with its checks and retry, review = code only)."""
@@ -212,25 +207,29 @@ async def _timed(name: str, c, kind: str, coro):
 
 
 async def run(c, kind: str, n: int) -> RagState:
-    """Questions of `kind` grounded in the company's documents (or the posting): at most MAX_ROUNDS searches, at most one T2 call a
-    round. Returns the state: `accepted` (maybe fewer than n), `seen` (every document shown), `no_company_info`, `rejects` (the
-    composer adds them to its counts and logs them as `question_reject`)."""
-    state: dict = {"kind": kind, "n": n}
-    state.update(await _plan_queries(state, c))
-    while True:
-        state.update(await _timed("retrieve", c, kind, _retrieve(state, c)))
-        if state["round"] > 1 and not state["fresh"]:
-            # nothing new to show the model: what round 1 held back is taken under the last-round rules, no second T2 call
-            state.update({"round": MAX_ROUNDS, "candidates": []})
-            state.update(await _review(state))
-            break
+    """One round: questions of `kind` grounded in the company's documents (or the posting), at most one T2 call. The first call
+    of a composition plans and embeds the queries; the second (the quality loop's regeneration) searches past the documents
+    already shown and takes what round 1 held back first. Returns the state: `accepted` (this round's, maybe fewer than n),
+    `seen` (every document shown), `no_company_info`, `rejects` (this round's; the composer adds them to its counts) and
+    `status` (TIMEOUT: no second request)."""
+    rag = getattr(c, "rag", None)
+    if rag is None:
+        rag = c.rag = {}
+    state = rag.get(kind)
+    if state is None or state["round"] >= MAX_ROUNDS:
+        state = {"kind": kind}
+        state.update(await _plan_queries(state, c))
+        rag[kind] = state
+    state.update({"n": n, "accepted": [], "rejects": {}, "candidates": [], "status": "OK"})
+    state.update(await _timed("retrieve", c, kind, _retrieve(state, c)))
+    if state["round"] >= MAX_ROUNDS and state.get("held"):
+        state.update(await _review(state))  # what round 1 held back, under the last-round rules: no model call for it
+    if len(state["accepted"]) < n:
         state.update(await _timed("generate", c, kind, _generate(state, c)))
         state.update(await _review(state))
-        if state.get("status") == "TIMEOUT" or _next(state) == "done":
-            if len(state["accepted"]) < n and state["round"] < MAX_ROUNDS and state.get("held"):
-                state.update({"round": MAX_ROUNDS, "candidates": []})  # the model is too slow for round 2: take what is held
-                state.update(await _review(state))
-            break
+    if state.get("status") == "TIMEOUT" and state["round"] < MAX_ROUNDS and state.get("held"):
+        state.update({"round": MAX_ROUNDS, "candidates": []})  # the model is too slow for round 2: take what is held
+        state.update(await _review(state))
     log_event(log, "question_rag", application_id=str(c.app.id), kind=kind, attempt=state["round"], count=len(state["accepted"]),
               hits=len(state["seen"]))
     return state

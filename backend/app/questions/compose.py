@@ -16,9 +16,11 @@ Generated questions grounded in the posting are added to the company's bank unle
 removed). Last resort: shared seed questions of the same kind regardless of job family.
 Every question's `grounding.sources` lists what it came from as {type, id}; `grounding.retrieved` the documents searched.
 
+Every candidate question passes the quality gate (questions/quality.py: grounding, level, type, clarity, repetition) before it is
+picked; what fails is asked for once more with its reasons, then made by code (2026-11-11).
 Everything is composed in memory and written in one transaction (the snapshot rows are immutable, QST-06). No transaction is
 held across a model call (2026-11-10): reads go through questions/dbio.ShortReads, bank inserts open their own short transaction
-after the embeddings. The composition graph (questions/graph.py) and live composition (questions/live.py) drive these steps.
+after the embeddings. The interview graph's composition nodes (interview/graph.py) and live composition (questions/live.py) drive these steps.
 Usage counts are bumped when the interview starts, not here.
 """
 import hashlib
@@ -57,15 +59,15 @@ from app.models import (
     QuestionSet,
 )
 from app.ai.textrules import polite_did as _did, shared_terms, tidy_particles
-from app.questions import knowledge, rag
-from app.questions.level import DIFFICULTIES, career_level, difficulty_plan, fits_level, fits_type, problems
+from app.questions import knowledge, quality, rag
+from app.questions.level import DIFFICULTIES, career_level, difficulty_plan, fits_level, fits_type
 from app.resumes.schemas import to_ai_resume
 
 log = logging.getLogger("app.questions")
 
 RELEVANT_POOL = 6  # bank questions nearest to the posting that take turns (least used first)
 RELEVANT_MARGIN = 0.08  # ... when their cosine is within this of the nearest one
-COMPOSER_VERSION = "compose-v5"  # v5: generated questions go through questions/rag_graph.py (ADR-0020)
+COMPOSER_VERSION = "compose-v6"  # v6: every question passes questions/quality.py; one regeneration with the reasons, then code
 RESUME_LINE_FLOOR = 0.45
 EMBED_DUP_COSINE = 0.85  # TRD initial value, calibrated by S-14
 
@@ -93,6 +95,7 @@ class Picked:
     bank_id: uuid.UUID | None = None
     grounding: dict | None = None
     prompt_version: str | None = None
+    fixed: bool = False  # the sentence is code around what the model picked (MOTIVATION_QUESTION): its length is not the model's
 
 
 @dataclass
@@ -136,6 +139,13 @@ class _Ctx:
     difficulty: dict[int, str] = field(default_factory=dict)
     want: list[str] = field(default_factory=list)  # the difficulties of the slots being filled right now
     rejects: dict[str, int] = field(default_factory=dict)  # failure code -> count of the questions dropped, for the log (no text)
+    # the quality loop (questions/quality.py): this request's number, the questions it dropped with their codes, the previous
+    # request's (the regeneration's feedback), the number of model requests made, and the RAG state of the two requests
+    attempt: int = 0
+    failed: list[dict] = field(default_factory=list)
+    feedback: list[dict] = field(default_factory=list)
+    requests: int = 0
+    rag: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         try:
@@ -218,8 +228,9 @@ async def _drop_copies(c: _Ctx, items: list[dict], examples: list[rag.Example]) 
     return [i for n, i in enumerate(items) if n not in hit]
 
 
-async def _generate(c: _Ctx, kind: str, n: int) -> list[dict]:
-    """T2 for COMPANY/JOB. Returns validated questions (maybe fewer than n). AIUnavailable propagates (defer)."""
+async def _generate(c: _Ctx, kind: str, n: int) -> tuple[list[dict], str]:
+    """T2 for COMPANY/JOB, one request. Returns the validated questions (maybe fewer than n) and the request's status.
+    AIUnavailable propagates (defer)."""
     from app.questions import rag_graph
 
     out = await rag_graph.run(c, kind, n)
@@ -235,11 +246,8 @@ async def _generate(c: _Ctx, kind: str, n: int) -> list[dict]:
             i["replaced"] = "NO_COMPANY_KNOWLEDGE"
             if kind == "COMPANY":  # the model was asked a job question (nothing verified about the company): the slot stays 지원 동기
                 i["text"], i["fixed"] = MOTIVATION_QUESTION.format(title=c.posting.title), True
-    if kind == "COMPANY":  # ADR-0025: the sentence finally asked must be a motivation question (else the posting fallback)
-        before = len(items)
-        items = [i for i in items if i.get("replaced") or i.get("fixed") or "NOT_MOTIVATION" not in problems(i["text"], kind="COMPANY", level=c.level)]
-        c.reject("NOT_MOTIVATION", before - len(items))
-    return items
+    # ADR-0025: the sentence finally asked must be a motivation question: checked with every other rule by quality.judge
+    return items, out.get("status") or "OK"
 
 
 async def _embed_or_none(ai: AIClient, texts: list[str]) -> list[list[float]] | None:
@@ -325,25 +333,39 @@ async def _rank_by_relevance(c: _Ctx, rows: list[QuestionBank], query: str) -> l
 
 async def _fill_generated_kind(db: AsyncSession, c: _Ctx, kind: str, slots: list[tuple[int, str]],
                                embed_model: str) -> None:
+    """지원 동기(COMPANY)·직무(JOB) slots: T2 with corrective RAG, through the quality loop; what is left, posting_fallback."""
+    c.rag = {}
+
+    async def attempt(c: _Ctx, empty: list[tuple[int, str]]) -> str:
+        return await _generated_attempt(c, kind, empty, embed_model)
+    await quality.fill(c, slots, attempt, lambda c, rest: posting_fallback(c, kind, rest))
+
+
+async def _generated_attempt(c: _Ctx, kind: str, slots: list[tuple[int, str]], embed_model: str) -> str:
+    """One T2 request for `slots`; each question passes quality.take before it is picked. Returns the request's status."""
     c.tune(slots if kind == "JOB" else [])
-    gen = await _generate(c, kind, len(slots))
-    fresh = [g for g in gen if not any(similar_question(g["text"], t) for t in c.texts())]
-    c.reject("DUPLICATE", len(gen) - len(fresh))
-    gen = fresh[: len(slots)]
+    gen, status = await _generate(c, kind, len(slots))
     gen.sort(key=lambda g: DIFFICULTIES.index(g.get("difficulty") or "APPLIED"))  # slots run easiest first (difficulty_plan)
-    shareable = [g for g in gen if g["source"]["type"] != "KNOWLEDGE" and not g.get("fixed")]
-    bank_ids = dict(zip((id(g) for g in shareable), await _add_to_bank(db, c, kind, shareable, embed_model)))
     version = TASKS["question_generate"].full_version
-    for (seq, slot), g in zip(slots, gen):
+    taken: list[tuple[Picked, dict]] = []
+    free = list(slots)
+    for g in gen:
+        if not free:
+            break
         grounding = {"basis": g.get("basis"), "sources": [g["source"]], "retrieved": g["retrieved"], "level": c.level}
         if g.get("difficulty"):
             grounding["difficulty"] = g["difficulty"]
         if g.get("replaced"):
             grounding["replaced"] = g["replaced"]
-        c.picked.append(Picked(seq, slot, g["text"], "AI", bank_id=bank_ids.get(id(g)), grounding=grounding, prompt_version=version))
-    rest = slots[len(gen):]
-    if rest:  # what the model could not make: a question about a line of the posting, by code (never the question bank)
-        posting_fallback(c, kind, rest)
+        seq, slot = free[0]
+        p = Picked(seq, slot, g["text"], "AI", grounding=grounding, prompt_version=version, fixed=bool(g.get("fixed")))
+        if quality.take(c, p):
+            free.pop(0)
+            taken.append((p, g))
+    shareable = [(p, g) for p, g in taken if g["source"]["type"] != "KNOWLEDGE" and not g.get("fixed")]
+    for (p, _g), bank_id in zip(shareable, await _add_to_bank(c.db, c, kind, [g for _p, g in shareable], embed_model)):
+        p.bank_id = bank_id
+    return status
 
 
 def resume_context(resume: dict, field: str) -> str:
@@ -460,6 +482,13 @@ def used_entries(c: _Ctx, resume: dict, skip: list | tuple = ()) -> list[dict]:
 
 
 async def _fill_resume(db: AsyncSession, c: _Ctx, slots: list[tuple[int, str]]) -> None:
+    """경험 slots: T3 against the resume through the quality loop; what is left, an experience question by code (OQ-37)."""
+    await quality.fill(c, slots, _resume_attempt,
+                       lambda c, rest: experience_fallback(c, to_ai_resume(c.app.resume_snapshot), rest))
+
+
+async def _resume_attempt(c: _Ctx, slots: list[tuple[int, str]]) -> str:
+    """One T3 request for `slots`; each question passes quality.take before it is picked. Returns the request's status."""
     resume = to_ai_resume(c.app.resume_snapshot)
     flat = flatten_resume(resume)[0]
     # One search per resume line: the whole resume at once scores below the floor (ADR-0020). Lines without a sentence (skills) are left out.
@@ -468,16 +497,20 @@ async def _fill_resume(db: AsyncSession, c: _Ctx, slots: list[tuple[int, str]]) 
                                          k=get_settings().rag_knowledge_count, floor=RESUME_LINE_FLOOR, kind="RESUME")
     # what the job and the company actually use, and what the candidate has just talked about (live composition)
     wanted = "\n".join([*c.answers, job_brief(c.posting), *(f"{x.title} {x.text}" for x in chunks)])
-    # Resume parts already asked about in this set (live composition makes one resume question at a time): never asked again, and
-    # the model is asked for enough candidates to get past them.
+    # Resume parts already asked about in this set (live composition makes one resume question at a time): the model is asked for
+    # enough candidates to get past them (quality.judge rejects them as SAME_BASIS).
     asked = {_evidence_key(resume, ev) for p in c.picked for ev in (p.grounding or {}).get("evidence") or []}
     done_before = sum(1 for p in c.picked if p.slot == Area.PROJECT.value and p.source == "AI")
     c.tune(slots)
     inp = {"resume": resume, "job_brief": job_brief(c.posting), "n": min(3, len(slots) + len(asked)), "shared_terms": shared_terms(wanted, flat),
            "level": c.level, "difficulties": c.want}
+    if c.attempt:  # the regeneration: the reasons of the first request, the questions picked so far, the relaxed rules
+        inp.update({"feedback": list(c.feedback), "existing": c.texts(), "last_chance": True})
     examples = await _with_examples(c, "RESUME", flat, inp)
     r = await c.ai.llm("resume_question", inp, lane="INTERACTIVE")
     c.reject_all((r.flags or {}).get("rejects"))
+    if r.status == "OK":
+        c.failed.extend(r.output.get("failed") or [])
     qs = await _drop_copies(c, r.output.get("questions", []), examples) if r.status == "OK" else []
     c.reject("RAG_COPY", len(r.output.get("questions", [])) - len(qs) if r.status == "OK" else 0)
     version = TASKS["resume_question"].full_version
@@ -488,27 +521,17 @@ async def _fill_resume(db: AsyncSession, c: _Ctx, slots: list[tuple[int, str]]) 
     for q in qs:
         if used >= len(slots):
             break
-        keys = {_evidence_key(resume, ev) for ev in q["evidence"]}
-        text_ = ground_question(resume, q, done_before + used, c.want[used] if used < len(c.want) else None)
-        if keys & asked:
-            c.reject("SAME_BASIS")  # a part of the resume another question already asks about
-            continue
-        if any(similar_question(x, t) for x in (q["text"], text_) for t in c.texts()):
-            c.reject("DUPLICATE")
-            continue
+        diff = c.want[used] if used < len(c.want) else None
+        text_ = ground_question(resume, q, done_before + used, diff)
         seq, slot = slots[used]
-        c.picked.append(Picked(seq, slot, text_, "AI", grounding={"evidence": q["evidence"], "asked": q["text"],
-                                                                   "level": c.level,
-                                                                   "difficulty": c.want[used] if used < len(c.want) else q.get("difficulty"),
-                                                                   "sources": [{"type": "RESUME_SNAPSHOT", "id": str(c.app.id), "field": e["field"]} for e in q["evidence"]],
-                                                                   "retrieved": [str(x.id) for x in chunks]},
-                               prompt_version=version))
-        asked |= keys
-        taken |= {entry_of(ev.get("field")) for ev in q["evidence"]}
-        used += 1
-    rest = slots[used:]
-    if rest:  # OQ-37 (revised 2026-11-10): an experience question, not a job question
-        experience_fallback(c, resume, rest)
+        p = Picked(seq, slot, text_, "AI", grounding={"evidence": q["evidence"], "asked": q["text"], "level": c.level,
+                                                     "difficulty": diff or q.get("difficulty"),
+                                                     "sources": [{"type": "RESUME_SNAPSHOT", "id": str(c.app.id), "field": e["field"]} for e in q["evidence"]],
+                                                     "retrieved": [str(x.id) for x in chunks]},
+                   prompt_version=version)
+        if quality.take(c, p):
+            used += 1
+    return r.status
 
 
 # 경험 slots the resume questions could not fill (OQ-37, revised 2026-11-10). The job bank used before asked "어떻게 하시겠습니까"
@@ -615,7 +638,9 @@ async def plan_slots(db: AsyncSession, posting: JobPosting, settings: PostingEva
 async def _fill_common(db: AsyncSession, c: _Ctx, kind: str, slots: list[tuple[int, str]], about: str = "") -> None:
     """인성·협업: made from the candidate's resume or the posting by code (common_fallback), not taken from the question bank."""
     if slots:
+        start = len(c.picked)
         common_fallback(c, slots, kind)
+        quality.check_fallback(c, start)
 
 
 ADAPT_DOCUMENTS = 4

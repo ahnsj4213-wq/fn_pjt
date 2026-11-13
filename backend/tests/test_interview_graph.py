@@ -16,22 +16,31 @@ SECRET = "비밀답변절대체크포인트에남지않아야함"
 def test_graph_nodes_and_edges_match_the_design():
     g = G.build().compile().get_graph()
     nodes = {n for n in g.nodes} - {"__start__", "__end__"}
-    assert nodes == {"present", "ask", "wait_answer", "transcribe", "decide_followup", "finish"}
+    assert nodes == {"start", "plan", "project", "motivation", "job_skill", "write",  # composition
+                     "compose_next", "present", "ask", "wait_answer", "transcribe", "decide_followup", "finish",  # interview
+                     "coding_submit"}  # the end of the coding test
     edges = {(e.source, e.target) for e in g.edges}
-    assert ("__start__", "present") in edges and ("ask", "wait_answer") in edges and ("transcribe", "decide_followup") in edges
+    assert ("__start__", "start") in edges
+    assert {("start", "plan"), ("start", "compose_next"), ("start", "coding_submit"), ("start", "__end__")} <= edges
+    assert ("write", "__end__") in edges and ("ask", "wait_answer") in edges and ("transcribe", "decide_followup") in edges
+    assert ("decide_followup", "compose_next") in edges
+    assert {("compose_next", "present"), ("compose_next", "finish"), ("compose_next", "__end__")} <= edges
     assert {("present", "ask"), ("present", "finish"), ("present", "__end__")} <= edges
     assert {("wait_answer", "transcribe"), ("wait_answer", "present")} <= edges
-    assert {("decide_followup", "present"), ("decide_followup", "finish"), ("decide_followup", "__end__")} <= edges
-    assert ("finish", "__end__") in edges
+    assert ("finish", "__end__") in edges and ("coding_submit", "__end__") in edges
 
 
 def test_forks_are_decided_by_code_from_plain_state():
+    assert G.after_start({"stage": "COMPOSE"}) == "plan" and G.after_start({"stage": "INTERVIEW"}) == "compose_next"
+    assert G.after_start({"stage": "SUBMIT"}) == "coding_submit" and G.after_start({"stage": END}) == END
     assert G.after_present({"result": "ENDED"}) == END and G.after_present({"result": "TEXT_MODE_REQUIRED"}) == END
     assert G.after_present({"turn": {"turn_id": "x"}}) == "ask" and G.after_present({"route": "DONE"}) == "finish"
     assert G.after_wait({"signal": "ENDED"}) == "transcribe" and G.after_wait({"signal": "ABANDONED"}) == "present"
-    assert G.after_decide({"mode": "VOICE", "route": "NEXT"}) == "present" and G.after_decide({"mode": "VOICE", "route": "FOLLOWUP"}) == "present"
-    assert G.after_decide({"mode": "VOICE", "route": "DONE"}) == "finish"
-    assert G.after_decide({"mode": "TEXT", "route": "DONE"}) == END  # text mode hands control back to the client
+    assert G.after_compose_next({"mode": "TEXT", "route": "PRESENT"}) == "present"  # a (re)start always shows the next question
+    assert G.after_compose_next({"mode": "VOICE", "route": "NEXT"}) == "present"
+    assert G.after_compose_next({"mode": "VOICE", "route": "FOLLOWUP"}) == "present"
+    assert G.after_compose_next({"mode": "VOICE", "route": "DONE"}) == "finish"
+    assert G.after_compose_next({"mode": "TEXT", "route": "DONE"}) == END  # text mode hands control back to the client
 
 
 class RecordingIO(G.TextIO):

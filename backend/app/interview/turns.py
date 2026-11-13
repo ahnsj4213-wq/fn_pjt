@@ -218,21 +218,27 @@ async def finalize(db: AsyncSession, turn_id: UUID, *, end_reason: str, transcri
 
 
 async def _followup_context(db: AsyncSession, app: Application, ans: InterviewAnswer) -> dict:
-    """What else the interviewer knows at this point (ADR-0020): the last answers, the follow-ups already asked, and the
-    company documents closest to this answer. Small on purpose: this call runs while the candidate waits (ADR-0019)."""
-    from app.ai.client import get_ai_client
-    from app.core.config import get_settings
-    from app.questions import knowledge
-
+    """What else the interviewer knows at this point (ADR-0020): the last answers and the follow-ups already asked (read in the
+    caller's transaction). The company documents closest to this answer are searched by `_followup_documents` after it closes:
+    the search embeds the answer, a model call (2026-11-11). Small on purpose: this call runs while the candidate waits."""
     previous = (await db.execute(select(InterviewAnswer.id, InterviewAnswer.eval_text).where(
         InterviewAnswer.application_id == app.id, InterviewAnswer.id != ans.id, InterviewAnswer.eval_text.is_not(None))
         .order_by(InterviewAnswer.confirmed_at.desc()).limit(FOLLOWUP_PREVIOUS_ANSWERS))).all()
     asked = (await db.execute(select(InterviewQuestion.text).where(
         InterviewQuestion.application_id == app.id, InterviewQuestion.role == "FOLLOWUP"))).scalars().all()
-    chunks = await knowledge.search(db, get_ai_client(), get_settings().embed_model, company_id=app.company_id,
-                                    posting_id=app.posting_id, query=ans.eval_text or "", k=FOLLOWUP_KNOWLEDGE_COUNT, kind="FOLLOWUP")
-    return {"previous_answers": [{"id": str(i), "text": t[:FOLLOWUP_PREVIOUS_CHARS]} for i, t in previous], "asked": list(asked),
-            "company_context": [c.as_input() for c in chunks]}
+    return {"previous_answers": [{"id": str(i), "text": t[:FOLLOWUP_PREVIOUS_CHARS]} for i, t in previous], "asked": list(asked)}
+
+
+async def _followup_documents(company_id: UUID, posting_id: UUID, query: str) -> list[dict]:
+    """The company documents closest to the answer, with no transaction open (each query its own short read)."""
+    from app.ai.client import get_ai_client
+    from app.core.config import get_settings
+    from app.questions import knowledge
+    from app.questions.dbio import ShortReads
+
+    chunks = await knowledge.search(ShortReads(), get_ai_client(), get_settings().embed_model, company_id=company_id,
+                                    posting_id=posting_id, query=query, k=FOLLOWUP_KNOWLEDGE_COUNT, kind="FOLLOWUP")
+    return [c.as_input() for c in chunks]
 
 
 async def decide_followup(app_id: UUID, answer_id: UUID) -> InterviewQuestion | None:
@@ -280,10 +286,12 @@ async def decide_followup(app_id: UUID, answer_id: UUID) -> InterviewQuestion | 
                         "level": level, "difficulty": (q.grounding or {}).get("difficulty"),
                         "shared_terms": shared_terms(brief, flatten_resume(resume)[0]),
                         **await _followup_context(db, app, ans)}
+            search = (app.company_id, app.posting_id, ans.eval_text or "")
         deadline_ms = int((ans.confirmed_at.timestamp() + FOLLOWUP_DECISION_TIMEOUT_SEC) * 1000)
     t0 = time.monotonic()
     out = None
     if cause is None:
+        payload["company_context"] = await _followup_documents(*search)
         from app.ai.client import AIUnavailable, get_ai_client
 
         try:

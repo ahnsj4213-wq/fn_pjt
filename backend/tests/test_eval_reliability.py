@@ -133,11 +133,12 @@ async def test_the_kept_score_is_the_median_of_the_models_own_judgements(monkeyp
     ])
     payload, manifest = await pipeline.evaluate_unit(ai, _q(), _a(), _POSTING)
     items = payload["items"]
-    assert len(ai.calls) == 3 and payload["samples"] == 3 and manifest
+    # 3 samples + 1 confirming re-judgement (the samples are 3 points apart: UNSTABLE, checks.py); the median stays
+    assert len(ai.calls) == 4 and payload["samples"] == 3 and manifest
     assert {c: v["score"] for c, v in items.items()} == {"EXPERTISE": 4, "LOGIC": 3, "ATTITUDE": 3, "DELIVERY": 3}
     assert items["LOGIC"]["comment"] == "logic 판단 3"  # the kept judgement is whole: its own comment and sentence
     assert payload["detail"]["logic_sub"]["a"] == 3  # sub-items from the judgement whose 논리성 was kept
-    assert payload["scores_sampled"]["LOGIC"] == [2, 5, 3]
+    assert payload["scores_sampled"]["LOGIC"] == [2, 5, 3, 2]  # the samples, then the confirming judgement
 
 
 async def test_a_failed_sample_is_left_out_and_all_failed_fails_the_unit(monkeypatch):

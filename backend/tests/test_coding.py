@@ -1,5 +1,7 @@
 """Coding test API (handoff step 5; TRD 04 §5.3, COD-01~06, AC-15) over HTTP. The candidate reaches CODING through
 the real interview (text mode), the runner is the local fake that executes the submitted Python, AI is fake."""
+import asyncio
+
 import pytest
 
 from app.interview import infra
@@ -105,6 +107,25 @@ async def test_ac15_deadline_autosubmits_last_draft_even_when_disconnected(clien
     assert await q("SELECT eval_status FROM applications WHERE id=:a", a=app_id) == [("DONE",)]
     r = await cand.put(url(app_id, "/coding/draft"), json={"code": "late", "revision": 9})
     assert r.status_code == 409
+
+
+async def test_two_final_submissions_at_once_make_one_submission_and_one_evaluation(client, make_client, voice_ai,
+                                                                                   fake_runner, sandbox_up):
+    """A double-clicked [최종 제출] (two requests at once): the application lock and the submission's unique key give one
+    submission, one grading job and one evaluation job; the other request is ALREADY_SUBMITTED. The submission's own graph
+    thread (submit:<application>) is deleted and the interview thread is not recreated by it."""
+    app_id, cand = await to_coding(client, make_client, voice_ai)
+    body = {"code": SUM_SOLUTION, "revision": 2, "confirmed": True}
+    r1, r2 = await asyncio.gather(cand.post(url(app_id, "/coding/submit"), json=body),
+                                  cand.post(url(app_id, "/coding/submit"), json=body))
+    assert sorted([r1.status_code, r2.status_code]) == [200, 409], (r1.text, r2.text)
+    loser = r1 if r1.status_code == 409 else r2
+    assert loser.json()["error"]["code"] == "ALREADY_SUBMITTED"
+    assert await q("SELECT count(*) FROM coding_submissions WHERE application_id=:a", a=app_id) == [(1,)]
+    assert await q("SELECT count(*) FROM jobs WHERE kind='grade_coding' AND application_id=:a", a=app_id) == [(1,)]
+    assert await q("SELECT count(*) FROM jobs WHERE kind='evaluate_application' AND application_id=:a", a=app_id) == [(1,)]
+    assert await q("SELECT attempt_status FROM applications WHERE id=:a", a=app_id) == [("SUBMITTED",)]
+    assert await q("SELECT count(*) FROM checkpoints WHERE thread_id IN (:s, :i)", s=f"submit:{app_id}", i=app_id) == [(0,)]
 
 
 async def test_coding_time_over_and_sandbox_down(client, make_client, voice_ai, fake_runner, sandbox_up):

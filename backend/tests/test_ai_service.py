@@ -441,31 +441,24 @@ async def test_service_500_reports_exception_type_and_location(ai_app):
 
 
 async def test_evidence_is_a_sentence_number_and_a_failed_citation_keeps_the_score():
-    """ADR-0023: the model names sentence numbers, code stores that sentence's span. No sentence + score >= 3 is asked once more,
-    then kept as UNLINKED (the score stays); no sentence + score 1~2 is 내용 부족 (LOW_CONTENT) at once; an unknown number is no evidence."""
+    """ADR-0023: the model names sentence numbers, code stores that sentence's span. No sentence + score >= 3 is UNLINKED (the
+    score stays); no sentence + score 1~2 is 내용 부족 (LOW_CONTENT); an unknown number is no evidence. Since evaluate_answer@2.2.0
+    T5 itself does not ask again for a sentence: the unit's verification loop asks once per unit (tests/test_eval_checks.py)."""
     from app.evaluation.quotes import sentences
     fake = FakeAIClient()
-    calls = {"n": 0}
-
-    def reply(inp, msgs):
-        calls["n"] += 1
-        first = calls["n"] == 1
-        return {"expertise": {"sent": 1, "comment": "수치로 개선을 설명했다.", "score": 4},
-                "logic": {"sent": 0 if first else 2, "comment": "원인 분석이 이어진다.", "score": 4},
-                "attitude": {"sent": 0, "comment": "입장이 드러나지 않는다.", "score": 2},
-                "delivery": {"sent": 9 if first else 0, "comment": "결론이 앞에 있다.", "score": 4}}
-
-    fake.responses["evaluate_answer"] = reply
+    fake.responses["evaluate_answer"] = lambda inp, msgs: {
+        "expertise": {"sent": 1, "comment": "수치로 개선을 설명했다.", "score": 4},
+        "logic": {"sent": 0, "comment": "원인 분석이 이어진다.", "score": 4},
+        "attitude": {"sent": 0, "comment": "입장이 드러나지 않는다.", "score": 2},
+        "delivery": {"sent": 9, "comment": "결론이 앞에 있다.", "score": 4}}
     r = await fake.llm("evaluate_answer", {"question": "성능 문제를 해결한 경험을 말씀해 주세요.", "question_type": "PROJECT",
                                            "answer": ANSWER}, lane="BATCH")
     items, sents = r.output["items"], sentences(ANSWER)
-    assert r.status == "OK" and r.attempts["llm_calls"] == 2 and "sent가 0이거나" in fake.calls[0].messages[1][-1]["content"]
-    assert "logic" in fake.calls[0].messages[1][-1]["content"] and "attitude" not in fake.calls[0].messages[1][-1]["content"]
+    assert r.status == "OK" and r.attempts["llm_calls"] == 1
     ex = items["EXPERTISE"]
     assert ex["evidence_status"] == "OK" and ex["quote"]["text"] == sents[0].text == ANSWER[ex["quote"]["start"]:ex["quote"]["end"]]
-    assert items["LOGIC"]["evidence_status"] == "OK" and items["LOGIC"]["quote"]["text"] == sents[1].text  # found on the second ask
-    assert (items["ATTITUDE"]["evidence_status"], items["ATTITUDE"]["insufficient_reason"], items["ATTITUDE"]["score"]) \
-        == ("INSUFFICIENT", "LOW_CONTENT", 2)
+    assert (items["LOGIC"]["evidence_status"], items["LOGIC"]["score"], items["LOGIC"]["quote"]) == ("UNLINKED", 4, None)
+    assert (items["ATTITUDE"]["evidence_status"], items["ATTITUDE"]["insufficient_reason"], items["ATTITUDE"]["score"])         == ("INSUFFICIENT", "LOW_CONTENT", 2)
     assert (items["DELIVERY"]["evidence_status"], items["DELIVERY"]["score"], items["DELIVERY"]["quote"]) == ("UNLINKED", 4, None)
     assert r.output["question_kind"] == "EXPERIENCE"
 

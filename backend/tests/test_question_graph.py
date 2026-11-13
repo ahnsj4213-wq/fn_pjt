@@ -1,5 +1,6 @@
-"""The question generation graph after the 2026-11-10 refactoring: limited regeneration with failure codes, the clarity rules, no
-database transaction held across a model call (upfront and live), idempotent re-runs and one composition per live slot."""
+"""Question generation inside the interview graph (2026-11-10 refactoring, revised 2026-11-11): one model answer per request with
+failure codes, the clarity rules, no database transaction held across a model call (upfront and live), idempotent re-runs and
+one composition per live slot. The quality loop itself (one regeneration with the reasons, the call bound): test_question_quality."""
 import asyncio
 import contextvars
 import uuid
@@ -11,8 +12,9 @@ from app.ai.textrules import clarity_problems
 from app.core.db import open_scopes
 from app.core.config import get_settings
 from app.questions import compose as C
-from app.questions import graph as Q
-from app.questions import live
+from app.interview import graph as G
+from app.questions import live, quality
+from app.questions import steps as Q
 from app.questions import rag_graph
 from tests.test_company_knowledge import DOC, _add, _embed, _posting_of
 from tests.test_handlers import fake_ai, q, setup_app  # noqa: F401 - the fixture
@@ -46,26 +48,24 @@ def test_clarity_rules_catch_foreign_script_and_stacked_conditions():
     assert {"FOREIGN_SCRIPT", "NESTED", "QUOTE_MISMATCH", "DUPLICATE", "SAME_BASIS"} <= set(CHECK_TEXT)
 
 
-# ── T2: only the failed questions are asked again ──────────────────────────────
-async def test_regeneration_keeps_the_passed_question_and_asks_only_for_the_missing_one(fake_ai):
-    answers = iter([{"questions": [GOOD1, FOREIGN, MISQUOTED]}, {"questions": [GOOD1, GOOD2]}])
-    fake_ai.responses["question_generate"] = lambda i, m: next(answers)
+# ── T2/T3: one answer per request, the failed questions come back with their codes ─────────────────────
+async def test_one_request_returns_what_passed_and_what_failed_with_its_codes(fake_ai):
+    fake_ai.responses["question_generate"] = lambda i, m: {"questions": [GOOD1, FOREIGN, MISQUOTED]}
     r = await fake_ai.llm("question_generate", _gen_input(2), lane="INTERACTIVE")
-    assert r.status == "OK" and [x["text"] for x in r.output["questions"]] == [GOOD1["text"], GOOD2["text"]]
-    call = fake_ai.calls[-1]
-    assert len(call.messages) == 2  # one regeneration
-    regen = call.messages[1][-1]["content"]
-    assert "2번 질문: [FOREIGN_SCRIPT]" in regen and "3번 질문: [QUOTE_MISMATCH]" in regen and "새 질문 1개만" in regen
-    assert "1번" in regen and "그대로 쓴다" in regen  # the passed one is kept, not made again
-    # counts per code over both answers (the repeated GOOD1 repeats the kept one and its basis), never the text
-    assert r.flags["rejects"] == {"FOREIGN_SCRIPT": 1, "QUOTE_MISMATCH": 1, "DUPLICATE": 1, "SAME_BASIS": 1} and r.flags["kept"] == 1
+    assert r.status == "OK" and [x["text"] for x in r.output["questions"]] == [GOOD1["text"]]
+    assert len(fake_ai.calls[-1].messages) == 1  # no regeneration inside the task: the composer's second request is the only one
+    assert [f["codes"] for f in r.output["failed"]] == [["FOREIGN_SCRIPT"], ["QUOTE_MISMATCH"]]
+    assert r.flags["rejects"] == {"FOREIGN_SCRIPT": 1, "QUOTE_MISMATCH": 1}  # counts per code, never the text
 
 
-async def test_the_regeneration_budget_stays_one_and_the_kept_question_survives_a_bad_second_answer(fake_ai):
-    answers = iter([{"questions": [GOOD1, FOREIGN]}, {"questions": [FOREIGN]}])
-    fake_ai.responses["question_generate"] = lambda i, m: next(answers)
-    r = await fake_ai.llm("question_generate", _gen_input(2), lane="INTERACTIVE")
-    assert len(fake_ai.calls[-1].messages) == 2 and [x["text"] for x in r.output["questions"]] == [GOOD1["text"]]
+async def test_the_feedback_of_the_second_request_names_each_failed_question_and_its_codes(fake_ai):
+    fake_ai.responses["question_generate"] = lambda i, m: {"questions": [GOOD2]}
+    fb = [{"text": FOREIGN["text"], "codes": ["FOREIGN_SCRIPT"]}, {"text": MISQUOTED["text"], "codes": ["QUOTE_MISMATCH", "NESTED"]}]
+    r = await fake_ai.llm("question_generate", _gen_input(1, feedback=fb, existing=[GOOD1["text"]], last_chance=True), lane="INTERACTIVE")
+    prompt = fake_ai.calls[-1].messages[0][-1]["content"]
+    assert "1번: [FOREIGN_SCRIPT]" in prompt and "2번: [QUOTE_MISMATCH]" in prompt and "[NESTED]" in prompt
+    assert FOREIGN["text"] in prompt and GOOD1["text"] in prompt  # the rejected question (fenced) and the ones already picked
+    assert [x["text"] for x in r.output["questions"]] == [GOOD2["text"]]
 
 
 async def test_last_chance_asks_once(fake_ai):
@@ -74,7 +74,7 @@ async def test_last_chance_asks_once(fake_ai):
     assert len(fake_ai.calls[-1].messages) == 1 and len(r.output["questions"]) == 1
 
 
-async def test_the_resume_task_also_keeps_what_passed(fake_ai):
+async def test_the_resume_task_also_returns_what_passed_and_what_failed(fake_ai):
     from app.ai.tasks.questions import flatten_resume
     resume = {"experience": [{"company": "데이터웍스", "role": "백엔드", "description": "결제 승인 서버의 응답 지연을 캐시로 줄였다"},
                              {"company": "페이랩", "role": "백엔드", "description": "정산 배치를 파티션 단위로 병렬화했다"}]}
@@ -85,15 +85,14 @@ async def test_the_resume_task_also_keeps_what_passed(fake_ai):
     bad = {"text": f"정산 배치를 {HAN} 병렬화하셨습니까?", "evidence": [{"field": "experience[1].description", "quote": "정산 배치를 파티션 단위로 병렬화했다"}]}
     good2 = {"text": "정산 배치를 파티션 단위로 나눈 이유는 무엇이었습니까?",
              "evidence": [{"field": "experience[1].description", "quote": "정산 배치를 파티션 단위로 병렬화했다"}]}
-    answers = iter([{"questions": [good, bad]}, {"questions": [good2]}])
-    fake_ai.responses["resume_question"] = lambda i, m: next(answers)
+    fake_ai.responses["resume_question"] = lambda i, m: {"questions": [good, bad, good2]}
     r = await fake_ai.llm("resume_question", {"resume": resume, "job_brief": "결제 백엔드", "n": 2, "level": "JUNIOR"}, lane="INTERACTIVE")
     assert {x["text"] for x in r.output["questions"]} == {good["text"], good2["text"]}
-    assert "2번 질문: [FOREIGN_SCRIPT]" in fake_ai.calls[-1].messages[1][-1]["content"]
+    assert len(fake_ai.calls[-1].messages) == 1 and r.output["failed"] == [{"text": bad["text"], "codes": ["FOREIGN_SCRIPT", "YES_NO"]}]
 
 
 # ── corrective RAG: bounded model calls ────────────────────────────────────────
-async def test_rag_asks_the_model_at_most_twice_and_not_again_without_new_documents(client, make_client, fake_ai):
+async def test_rag_asks_the_model_at_most_twice_and_then_the_code_makes_the_question(client, make_client, fake_ai):
     _, app_id, _cand = await setup_app(client, make_client, title="결제 백엔드 개발자", duties=DOC)
     company, _ = await _posting_of(app_id)
     await _add(company, "정산 배치 재설계", DOC)
@@ -101,11 +100,12 @@ async def test_rag_asks_the_model_at_most_twice_and_not_again_without_new_docume
     never = {"text": f"정산 배치 재설계에서 {HAN} 멱등 키를 어떻게 쓰시겠습니까?", "basis_quote": "멱등 키로 중복 정산을 막습니다"}
     fake_ai.responses["question_generate"] = lambda i, m: {"questions": [never]}  # never passes
     c, _slots = await Q._load({"application_id": app_id, "settings_id": await _settings(app_id), "picked": []})
-    out = await rag_graph.run(c, "JOB", 2)
+    await C._fill_generated_kind(c.db, c, "JOB", [(3, "JOB_SKILL"), (4, "JOB_SKILL")], c.embed_model)
     gen = [x for x in fake_ai.calls if x.task == "question_generate"]
-    # round 1: one regeneration; round 2 only if the search found a document not shown yet, and then without regeneration
-    assert sum(len(x.messages) for x in gen) <= 3 and len(gen) <= 2
-    assert out["accepted"] == [] and out["rejects"].get("FOREIGN_SCRIPT", 0) >= 2
+    # request 1, then one regeneration (round 2 of the search, with the reasons); never a third
+    assert len(gen) == quality.MAX_REQUESTS and sum(len(x.messages) for x in gen) <= quality.max_model_calls()
+    assert gen[1].input["last_chance"] and gen[1].input["feedback"][0]["codes"] == ["FOREIGN_SCRIPT"]
+    assert [p.source for p in c.picked] == ["TEMPLATE", "TEMPLATE"] and c.rejects.get("FOREIGN_SCRIPT", 0) >= 2
 
 
 async def _settings(app_id: str) -> str:
@@ -155,7 +155,7 @@ async def test_upfront_composition_calls_no_model_inside_a_transaction(client, m
     await _add(company, "정산 배치 재설계", DOC)
     await _embed(fake_ai)
     assert (await cand.post(url(app_id, "/interview/prepare"))).status_code == 200
-    qset = await _composed(Q.run, uuid.UUID(app_id), uuid.UUID(await _settings(app_id)))
+    qset = await _composed(G.compose, uuid.UUID(app_id), uuid.UUID(await _settings(app_id)))
     tasks = {t for t, _ in seen}
     assert {"question_generate", "resume_question", "embed"} <= tasks
     assert all(n == 0 for _, n in seen), [x for x in seen if x[1]]
@@ -175,12 +175,12 @@ async def test_a_crash_after_the_write_committed_reruns_write_without_a_second_s
         return real_log(logger, event, *a, **fields)
     monkeypatch.setattr(Q, "log_event", crash_after_write)
     with pytest.raises(RuntimeError):
-        await Q.run(aid, sid)
-    graph = await Q.get_graph()
-    snap = await graph.aget_state({"configurable": {"thread_id": Q.thread_id(aid, sid)}})
+        await G.compose(aid, sid)
+    graph = await G.get_graph()
+    snap = await graph.aget_state({"configurable": {"thread_id": G.thread_id(aid, G.COMPOSE, sid)}})
     assert snap.next == ("write",)  # the checkpoint says write has not run; the database says it has
     before = len(fake_ai.calls)
-    qset = await Q.run(aid, sid)
+    qset = await G.compose(aid, sid)
     assert len(fake_ai.calls) == before  # the model nodes are not run again
     assert await q("SELECT count(*) FROM question_sets WHERE application_id=:a", a=app_id) == [(1,)]
     assert await q("SELECT count(*) FROM interview_questions WHERE question_set_id=:s", s=str(qset)) == [(5,)]

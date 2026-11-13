@@ -193,7 +193,8 @@ async def start(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: A
     qset = (await db.execute(select(QuestionSet).where(QuestionSet.application_id == app.id,
                                                        QuestionSet.status.in_(["COMPOSING", "READY"])))).scalar_one_or_none()
     if qset is None or qset.status != "READY" or qset.settings_id != posting.current_settings_id:
-        if qset is not None and qset.settings_id != posting.current_settings_id:
+        if qset is not None and (qset.settings_id != posting.current_settings_id or qset.status != "READY"):
+            # an older settings version, or a COMPOSING set (not written by the current code): compose it again
             qset.status = "SUPERSEDED"
             await enqueue(db, "compose_questions", {"application_id": str(app.id),
                                                     "settings_id": str(posting.current_settings_id)},
