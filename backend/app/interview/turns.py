@@ -191,7 +191,7 @@ async def finalize(db: AsyncSession, turn_id: UUID, *, end_reason: str, transcri
     code = (turn.code_text or "").strip()
     no_answer = not transcript and not code and not turn.whiteboard_key
     names = [n for n in [(await db.get(User, app.candidate_id)).name, app.resume_snapshot.get("name")] if n]
-    eval_text = make_eval_text(transcript, names) if transcript else ""
+    eval_text = make_eval_text(transcript, names, question=q.text, voice=turn.input_mode == "VOICE") if transcript else ""
     if code:  # the code is part of the answer evaluation and of the quote check (live coding, SC-A06)
         eval_text = f"{eval_text}\n[제출 코드 · {turn.code_language}]\n{code}".strip()
     now = utcnow()

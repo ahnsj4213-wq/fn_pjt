@@ -28,6 +28,54 @@ def remove_fillers(text: str) -> str:
     return " ".join(t for t in text.split() if t.strip(EDGE_PUNCT) not in FILLERS or not t.strip(EDGE_PUNCT))
 
 
+# Spoken-answer STT can hallucinate isolated greetings or stray word fragments.
+# Never rewrite the confirmed transcript: only the evaluation projection uses this filter.
+# Conservative by design: coherent sentences, isolated one-word answers, technical lists,
+# and context-relevant terms must not be removed merely for lacking lexical overlap.
+_STT_SOCIAL = frozenset({
+    "안녕", "안녕하세요", "아멘", "감사합니다", "고맙습니다", "다음 시간에 만나요",
+    "시청해 주셔서 감사합니다", "구독과 좋아요",
+})
+_STT_SPLIT = re.compile(r"(?<=[.!?。])\s+|\n+")
+_STT_EDGE = " \t\r\n,.!?。…~"
+
+
+def remove_stt_noise(text: str, question: str = "") -> str:
+    """Drop *high-confidence* STT artifacts from the evaluation copy, not the original transcript.
+
+    Independent stock greetings are omitted only when other fragments exist and the
+    question is not about that expression. A trailing run of 3+ short disconnected
+    Korean fragments is omitted only when a stock artifact occurs in that run and
+    a substantive answer precedes it. Do not use a broad vocabulary blacklist:
+    e.g. '계란' is a valid answer in a food-related interview.
+    """
+    chunks = [x.strip() for x in _STT_SPLIT.split(text or "") if x.strip()]
+    if len(chunks) < 2:
+        return text or ""
+    q = normalize(question)
+    def plain(s: str) -> str:
+        return s.strip(_STT_EDGE)
+
+    social = {i for i, s in enumerate(chunks) if plain(s) in _STT_SOCIAL and normalize(plain(s)) not in q}
+    substantive = [i for i, s in enumerate(chunks)
+                   if i not in social and len(normalize(plain(s))) >= 15]
+    drop = set(social)
+    if substantive:
+        last_long = max(substantive)
+        trailing = list(range(last_long + 1, len(chunks)))
+        short = [i for i in trailing
+                 if re.fullmatch(r"[가-힣]{1,8}", plain(chunks[i]))
+                 and normalize(plain(chunks[i])) not in q]
+        # Require an explicit social/artifact anchor; standalone domain terms alone
+        # cannot safely be declared noise.
+        if len(trailing) >= 3 and len(short) == len(trailing) and social:
+            drop.update(short)
+    if not drop:
+        return text or ""  # nothing to drop: the evaluation copy keeps the transcript's own line breaks and spacing
+    remaining = [s for i, s in enumerate(chunks) if i not in drop]
+    return " ".join(remaining) if remaining else text or ""
+
+
 def redact(text: str, names: list[str] | tuple[str, ...] = ()) -> str:
     """Mask the candidate's own name, contacts, age and first-person gender mentions."""
     out = _EMAIL.sub("[연락처]", text)
@@ -39,7 +87,7 @@ def redact(text: str, names: list[str] | tuple[str, ...] = ()) -> str:
     return out
 
 
-def make_eval_text(transcript: str, names: list[str] | tuple[str, ...] = ()) -> str:
+def make_eval_text(transcript: str, names: list[str] | tuple[str, ...] = (), *, question: str = "", voice: bool = False) -> str:
     """rd-1: the text evaluation, quote checks and the recruiter report use (stored as interview_answers.eval_text).
 
     `names` = full name from the account / resume snapshot; given-name-only variants are added automatically.
@@ -52,7 +100,8 @@ def make_eval_text(transcript: str, names: list[str] | tuple[str, ...] = ()) -> 
         expanded.append(n)
         if len(n) >= 3 and re.fullmatch(r"[가-힣]+", n):
             expanded.append(n[1:])  # Korean given name without the family name
-    return redact(remove_fillers(transcript), expanded).strip()
+    cleaned = remove_stt_noise(transcript, question) if voice else transcript
+    return redact(remove_fillers(cleaned), expanded).strip()
 
 
 # ── nc-1 ───────────────────────────────────────────────────────────────────────
