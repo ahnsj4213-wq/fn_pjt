@@ -1,1 +1,10 @@
-[]
+[
+  {
+    "source_url": "https://helloworld.kurly.com/blog/2025-delivery-debug-study/",
+    "reason": "manual_review(team study program, not a tech case)"
+  },
+  {
+    "source_url": "https://helloworld.kurly.com/blog/%EC%BF%A0%ED%8F%B0%EA%B3%BC-%ED%95%A0%EC%9D%B8%EC%9C%BC%EB%A1%9C-%EC%95%9E%EB%8B%A4%EB%A6%AC%EC%82%B4-%ED%95%98%EB%82%98-%EB%8D%94-%ED%8C%90%EB%A7%A4%ED%95%9C-%EC%9D%B4%EC%95%BC%EA%B8%B0/",
+    "reason": "not_technical(score=3)"
+  }
+]

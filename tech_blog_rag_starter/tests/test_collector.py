@@ -115,3 +115,27 @@ def test_validate_rejects_duplicate_content_across_companies(isolated_root):
         json.dumps(_doc("toss", "토스", "https://toss.tech/article/a", text), ensure_ascii=False) + "\n", encoding="utf-8")
     res = _run_validate(isolated_root)
     assert res.returncode == 1 and "duplicate content" in res.stdout
+
+
+def test_copyright_captions_inside_the_body_are_dropped():
+    import yaml
+    patterns = yaml.safe_load((ROOT / "config" / "companies.yaml").read_text(encoding="utf-8"))["settings"]["drop_line_patterns"]
+    body = "Kafka 컨슈머 오프셋을 옮긴 방법입니다.\n© 2024.Kurly.All right reserved\n코드는 아래와 같습니다.\n© 2024. Kurly. All rights reserved. © 2024. Kurly. All rights reserved."
+    doc = C.make_doc({"company_id": "kurly", "name": "컬리"}, "t", "https://helloworld.kurly.com/blog/a", None, body, "html", 5)
+    out = C.drop_lines([doc], patterns)[0]
+    assert out["content"] == "Kafka 컨슈머 오프셋을 옮긴 방법입니다.\n코드는 아래와 같습니다."
+    assert out["content_sha256"] == hashlib.sha256(out["content"].encode()).hexdigest()
+
+
+def test_the_published_date_is_the_one_shown_under_the_title():
+    data = '"publishedTime\\":\\"2026-09-01T09:00:00+09:00\\"" "publishedTime\\":\\"2026-09-15T10:42:00+09:00\\""'
+    page = f'<header><h1>GPU 클러스터</h1><div>장재영</div><div>2026년 9월 15일</div></header><script>{data}</script>'
+    assert C.page_published_date(page) == "2026-09-15T10:42:00+09:00"  # the related post's date is not taken
+    assert C.page_published_date("<header><h1>제목</h1><div>2026년 9월 5일</div></header>") == "2026-09-05"
+    assert C.page_published_date(f"<header><h1>제목</h1></header><script>{data}</script>") is None  # nothing shown: no date
+
+
+def test_an_event_blurb_after_the_post_is_removed():
+    body = "\n".join(["그래프 검색 품질", "후보 수를 제한했습니다.", "마치며", "읽어주셔서 감사합니다.",
+                      "테크톡톡은 지식공유 포럼이에요.", "토스증권의 기술과 경험을 나누는 행사로, 엔지니어들이 공유해요."])
+    assert C.strip_trailing_promo(body).endswith("읽어주셔서 감사합니다.")

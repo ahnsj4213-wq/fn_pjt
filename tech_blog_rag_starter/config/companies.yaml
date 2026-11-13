@@ -20,6 +20,10 @@ companies:
     target: 20
     article_path: '^/blog/[^/]+/?$'
     title_suffixes: [' - 컬리 기술 블로그']
+    # Manual sample review (PR #4 review 1): posts about team culture or programs, not a tech case. Replaced.
+    exclude_urls:
+      - url: https://helloworld.kurly.com/blog/2025-delivery-debug-study/
+        reason: team study program, not a tech case
   - company_id: toss
     name: 토스
     base_url: https://toss.tech/
@@ -34,7 +38,11 @@ companies:
       - https://toss.tech/category/engineering?page={n}
     use_sitemap: false
     require_listing: true
+    languages: [ko]
     title_suffixes: []
+    exclude_urls:
+      - url: https://toss.tech/article/toss-frontend-ai-docs-eng
+        reason: English translation of an earlier Korean post
   - company_id: kakao
     name: 카카오
     base_url: https://tech.kakao.com/
@@ -49,6 +57,13 @@ companies:
     exclude_categories: [events]
     languages: [ko]
     title_suffixes: [' - tech.kakao.com']
+    exclude_urls:
+      - url: https://tech.kakao.com/posts/823
+        reason: a non-developer's AI tool essay, not a tech case
+      - url: https://tech.kakao.com/posts/816
+        reason: new-hire onboarding retrospective
+      - url: https://tech.kakao.com/posts/815
+        reason: new-hire onboarding retrospective
 settings:
   delay_seconds: 2.0
   timeout_seconds: 20
@@ -58,6 +73,9 @@ settings:
   max_candidates_per_company: 150
   min_body_characters: 1000
   min_tech_keywords: 4
+  # Boilerplate lines found inside bodies during the manual review (image captions with the copyright notice).
+  drop_line_patterns:
+    - '^(©|\(c\))\s*\d{4}.{0,40}all rights? reserved\.?(\s*(©|\(c\)).{0,60})?$'
   user_agent: TechBlogRAGResearchBot/0.1 (+local research; polite fetch)
   keywords:
     - 아키텍처

@@ -9,6 +9,13 @@
 
 이 저장소는 **블로그 URL의 모음집**이며, 게시글 본문 데이터셋은 아닙니다.
 
+> **현재 상태: 수집·검증까지만 완료. 면접 RAG에 바로 쓸 수 있는 상태가 아닙니다.**
+> 회사별 원문 60건을 모으고 검증했을 뿐입니다. 아래 일은 아직 하지 않았습니다(후속 작업).
+> - 청크 분할, 로컬 임베딩, 기존 PostgreSQL/pgvector 적재
+> - `company_id` 필터를 건 검색 격리 검증(타사 문서 혼입 0건)
+> - 면접 질문 생성과의 연동
+> 자세한 계획은 "다음 단계" 절을 보세요.
+
 ## 실행 (Windows PowerShell / Python 3.11+)
 ```powershell
 cd tech_blog_rag_starter
@@ -18,6 +25,7 @@ pip install -r requirements.txt
 python scripts/collect.py                  # URL 후보 확인만
 python scripts/collect.py --company kurly --collect --limit 3  # 3건 시험
 python scripts/collect.py --collect        # 기업별 최대 20건
+python scripts/collect.py --collect --backfill-dates  # 게시일이 null인 기존 글만 페이지를 다시 읽어 날짜 채움(본문은 그대로)
 python scripts/validate.py                # 파일 검증 + data/reports/collection_report.md 생성
 python scripts/validate.py --check-urls   # 출처 URL도 다시 요청해 200 확인
 python -m pytest tests -q                 # 오프라인 단위 테스트 (네트워크 없음)
@@ -49,6 +57,16 @@ Linux/macOS에서는 `source .venv/bin/activate`를 사용합니다. 초기 탐�
 - **회사 구분**: 회사마다 파일 하나(`data/raw/<company_id>.jsonl`). 검증 시 `company_id`=파일명, `company_name`=설정값,
   `source_url` 호스트=그 회사 블로그인지 확인해 RAG 검색에서 타사 문서가 섞이지 않게 함.
 - **재실행**: 기존 JSONL을 읽어 같은 URL(정규화)·같은 본문 해시는 다시 저장하지 않습니다.
+  제외 사유 기록(`<company>_rejected.json`)은 실행마다 덮어쓰지 않고 누적합니다.
+- **게시일**: 피드 → 페이지 메타 → 제목 아래에 표시된 날짜 순으로 찾습니다. 페이지 데이터의 `publishedTime`은 화면에 보이는 날짜와
+  같은 날일 때만 씁니다. 어디에도 없으면 null로 둡니다(날짜를 만들어 내지 않음).
+
+## 수동 검수와 교체 (2026-11-13, PR #4 리뷰 1차 대응)
+- 검수 기록: `data/reports/manual_review.md`
+- 회사 사례가 아닌 글(팀 문화·교육 회고·비개발자 에세이·번역본)은 `companies.yaml`의 `exclude_urls`에 사유와 함께 적습니다.
+  다음 실행 때 해당 글을 빼고 다음 후보로 채우며, 제외 사유는 `manual_review(...)`로 남습니다. 검증기는 제외된 글이 남아 있으면 오류로 봅니다.
+- 본문 중간의 군더더기 줄(예: 이미지 캡션 `© 2024. Kurly. All rights reserved.`)은 `settings.drop_line_patterns`로 지우고,
+  글 끝 행사 소개 문단도 잘라 냅니다. 이 정리는 이미 저장된 글에도 똑같이 적용되며(다시 내려받지 않음), 검증기가 남은 줄을 오류로 잡습니다.
 
 ## 수집 원칙과 주의사항
 1. 이 파일에는 **실제 60개 문서가 포함되어 있지 않습니다**. 본문은 사용자의 실행 환경에서 직접 가져옵니다.
@@ -61,6 +79,12 @@ Linux/macOS에서는 `source .venv/bin/activate`를 사용합니다. 초기 탐�
 8. 20개가 부족한 회사는 부족 건수를 보고하며, 타 회사 글로 보충하지 않습니다.
 9. 원문을 외부에 재배포하거나 생성 결과에 통째로 인용하지 않습니다. 원문 URL과 출처 표기를 유지합니다.
 
+## 이용 범위와 약관 (확인 필요)
+- robots.txt 허용과 출처 URL 200 응답은 **재사용 허가가 아닙니다.** 컬리 글의 이미지 캡션에도 "All rights reserved"가 적혀 있습니다.
+- 그래서 원문 JSONL(`data/raw/`)은 커밋하지 않고 로컬에만 둡니다(저장소가 공개 상태). 커밋하는 것은 제목·URL·통계 보고서뿐입니다.
+- 사내 면접 질문 생성의 참고 자료로만 쓰고, 생성 결과에는 짧은 인용과 출처 URL만 남기는 것을 전제로 합니다.
+- **각 사이트 이용약관의 최종 확인은 아직 하지 않았습니다.** 법적 판단은 수집기가 대신하지 않으며, 운영에 쓰기 전에 담당자가 확인해야 합니다.
+
 ## 다음 단계: 기존 PostgreSQL / pgvector 연동
 - 기존 스키마 파악 후 `company_id` 매핑 및 `source_url` 유니크 처리.
 - 500~1000 토큰 청크, 100~150 토큰 overlap부터 실험(실제 토크나이저 적용).
@@ -69,7 +93,7 @@ Linux/macOS에서는 `source .venv/bin/activate`를 사용합니다. 초기 탐�
 - 질의 평가셋(회사별 10질문), Hit@5, 출처 정확성, 타 기업 문서 혼입 0건 확인.
 
 ## JSONL 예시 필드
-`document_id`, `company_id`, `company_name`, `document_type`(`tech_blog`), `title`, `source_url`, `published_at`(확인 못 하면 null), `collected_at`, `language`, `is_synthetic`(false), `extraction_method`(html/feed), `tech_keyword_score`, `content_length`, `content_sha256`, `content`.
+`document_id`, `company_id`, `company_name`, `document_type`(`tech_blog`), `title`, `source_url`, `published_at`(확인 못 하면 null), `collected_at`, `language`, `is_synthetic`(false), `extraction_method`(html/feed/embedded), `tech_keyword_score`, `content_length`, `content_sha256`, `content`.
 
 ## 알려진 한계
 - `robots.txt`는 받아오지만 사이트별 별도 이용약관의 자동 해석은 하지 않습니다.

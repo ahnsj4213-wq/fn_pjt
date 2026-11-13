@@ -12,7 +12,7 @@
     "robots": "ok(200)",
     "saved": 20,
     "target": 20,
-    "rejected": 0,
+    "rejected": 2,
     "candidates": 123
   },
   {
@@ -21,7 +21,7 @@
     "robots": "absent(404)",
     "saved": 20,
     "target": 20,
-    "rejected": 0,
+    "rejected": 3,
     "candidates": 60
   },
   {
@@ -30,7 +30,7 @@
     "robots": "ok(200)",
     "saved": 20,
     "target": 20,
-    "rejected": 0,
+    "rejected": 19,
     "candidates": 150
   }
 ]

@@ -361,7 +361,38 @@ def extract_article(client, url, company, settings, feed_item):
         meta = soup.find("meta", attrs={key: val})
         if meta and meta.get("content"):
             date = parse_date(meta["content"])
+    date = date or page_published_date(html)
     return make_doc(company, title, url, date, text, method, score), None
+
+
+def page_published_date(html):
+    """The date shown under the post title. A page-data publishedTime is used only when it is the same day;
+    without a visible date nothing is returned (no date is ever guessed)."""
+    soup = BeautifulSoup(html, "html.parser")
+    h1 = soup.find("h1")
+    header = h1.find_parent("header") if h1 else None
+    m = re.search(r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일", header.get_text(" ", strip=True)) if header else None
+    if not m:
+        return None
+    day = f"{m[1]}-{int(m[2]):02d}-{int(m[3]):02d}"
+    for t in re.findall(r'publishedTime\\?"\s*:\s*\\?"(\d{4}-\d{2}-\d{2}T[0-9:.]+(?:Z|[+-]\d{2}:\d{2}))', html):
+        if t.startswith(day):
+            return t
+    return day
+
+
+def drop_lines(docs, patterns):
+    """Remove boilerplate lines that sit inside the body (e.g. an image caption '© 2024. Kurly. All rights reserved.')
+    and promo lines at the end, for stored and new posts alike (idempotent)."""
+    regs = [re.compile(p, re.I) for p in patterns or []]
+    out = []
+    for d in docs:
+        text = "\n".join(ln for ln in d["content"].splitlines() if not any(r.search(ln.strip()) for r in regs)).strip()
+        text = strip_trailing_promo(text)
+        if text != d["content"]:
+            d = {**d, "content": text, "content_length": len(text), "content_sha256": hashlib.sha256(text.encode()).hexdigest()}
+        out.append(d)
+    return out
 
 
 def strip_trailing_promo(text):
@@ -372,7 +403,7 @@ def strip_trailing_promo(text):
         if re.fullmatch(r"\s*(관련\s*글(\s*목록)?|함께\s*읽으면\s*좋은\s*글|추천\s*글|Related\s*(posts|articles))\s*:?\s*", lines[i], re.I):
             lines = lines[:i]
             break
-    while lines and len(lines) > 3 and re.search(r"채용|지원하기|구독하기|함께하실", lines[-1]) and len(lines[-1]) < 200:
+    while lines and len(lines) > 3 and re.search(r"채용|지원하기|구독하기|함께하실|(행사|포럼)(이에요|입니다|로,)", lines[-1]) and len(lines[-1]) < 200:
         lines.pop()
     return "\n".join(lines).strip()
 
@@ -428,6 +459,7 @@ def main():
     ap.add_argument("--collect", action="store_true", help="원문 수집 실행 (기본: URL 후보 탐색만)")
     ap.add_argument("--company", help="특정 기업만 실행 (config/companies.yaml의 company_id)")
     ap.add_argument("--limit", type=int, help="기업별 문서 수 목표 덮어쓰기 (1~20)")
+    ap.add_argument("--backfill-dates", action="store_true", help="게시일이 null인 기존 문서의 페이지를 다시 읽어 화면에 표시된 게시일만 채움")
     args = ap.parse_args()
     if args.limit is not None and not (1 <= args.limit <= 20):
         ap.error("--limit은 1~20")
@@ -494,18 +526,29 @@ def main():
                             "candidates": len(candidates), "saved": 0, "target": target}
             continue
         output = ROOT / "data" / "raw" / f"{cid}.jsonl"
+        # Posts a person reviewed and found unfit for interview RAG (not a company tech case): dropped and replaced.
+        manual = {canonical(e["url"]): e["reason"] for e in comp.get("exclude_urls", [])}
         existing = {}
+        rejected = []
         if output.exists():
             for line in output.read_text(encoding="utf-8").splitlines():
                 if line.strip():
                     d = json.loads(line)
+                    if canonical(d["source_url"]) in manual:
+                        rejected.append({"source_url": d["source_url"], "reason": f"manual_review({manual[canonical(d['source_url'])]})"})
+                        continue
                     existing[canonical(d["source_url"])] = d
-        rejected = []
+        if args.backfill_dates:
+            for d in existing.values():
+                if d.get("published_at") is None:
+                    r = client.get(d["source_url"])  # the stored body is kept as it is; only the date is read
+                    d["published_at"] = page_published_date(decoded(r)) if r is not None else None
+                    LOG.info("[%s] 게시일 %s: %s", cid, d["published_at"], d["title"][:50])
         hashes = {d["content_sha256"] for d in existing.values()}
         for key, url in candidates:
             if len(existing) >= target:
                 break
-            if key in existing:
+            if key in existing or key in manual:
                 continue
             doc, reason = extract_article(client, url, comp, st, feed_by_key.get(key))
             if doc is None:
@@ -518,7 +561,7 @@ def main():
             hashes.add(doc["content_sha256"])
             existing[key] = doc
             LOG.info("[%s] 수집 %d/%d: %s", cid, len(existing), target, doc["title"][:55])
-        docs = remove_repeated_lines(list(existing.values()))
+        docs = remove_repeated_lines(drop_lines(list(existing.values()), st.get("drop_line_patterns", [])))
         kept, seen_hash = [], set()
         for d in docs:
             if d["content_length"] < st["min_body_characters"] or d["content_sha256"] in seen_hash:
@@ -530,8 +573,17 @@ def main():
             for d in kept[:target]:
                 f.write(json.dumps(d, ensure_ascii=False) + "\n")
         rej_file = ROOT / "data" / "reports" / f"{cid}_rejected.json"
-        if rejected or not rej_file.exists():  # a re-run that tried nothing new keeps the earlier rejection log
-            rej_file.write_text(json.dumps(rejected, ensure_ascii=False, indent=2), encoding="utf-8")
+        # The rejection log accumulates across runs (latest reason per URL), so re-runs never lose earlier reasons.
+        log = {}
+        if rej_file.exists():
+            try:
+                log = {r["source_url"]: r for r in json.loads(rej_file.read_text(encoding="utf-8"))}
+            except (ValueError, KeyError, TypeError):
+                log = {}
+        log.update({r["source_url"]: r for r in rejected})
+        kept_urls = {d["source_url"] for d in kept[:target]}
+        rejected = [r for u, r in log.items() if u not in kept_urls]
+        rej_file.write_text(json.dumps(rejected, ensure_ascii=False, indent=2), encoding="utf-8")
         saved = min(len(kept), target)
         summary[cid] = {"company": cid, "status": "target_met" if saved >= target else "shortfall", "robots": client.robots_status,
                         "saved": saved, "target": target, "rejected": len(rejected), "candidates": len(candidates)}

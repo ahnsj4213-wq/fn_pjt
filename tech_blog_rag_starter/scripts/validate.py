@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 
@@ -58,6 +59,8 @@ def main():
     names = {c['company_id']: c['name'] for c in cfg['companies']}
     hosts = {c['company_id']: set(c['allowed_hosts']) for c in cfg['companies']}
     disabled = {c['company_id']: c.get('disabled_reason', '') for c in cfg['companies'] if c not in active}
+    boiler = [re.compile(p, re.I) for p in cfg['settings'].get('drop_line_patterns', [])]
+    excluded = {c['company_id']: {e['url'] for e in c.get('exclude_urls', [])} for c in cfg['companies']}
 
     counts = Counter()
     errors = []
@@ -98,6 +101,10 @@ def main():
                     raise ValueError('content_length mismatch')
                 if hashlib.sha256(doc['content'].encode()).hexdigest() != doc['content_sha256']:
                     raise ValueError('content checksum mismatch')
+                if any(r.search(ln.strip()) for ln in doc['content'].splitlines() for r in boiler):
+                    raise ValueError('boilerplate line left in the body (drop_line_patterns)')
+                if doc['source_url'] in excluded[doc['company_id']]:
+                    raise ValueError('post excluded by manual review is still in the file')
                 if doc['content_sha256'] in seen_hash:
                     raise ValueError(f'duplicate content (also {seen_hash[doc["content_sha256"]]})')
                 seen_hash[doc['content_sha256']] = where
@@ -148,6 +155,7 @@ def write_report(docs, counts, targets, names, errors, rejected, summary, url_st
         out.append(f'| {names[cid]} ({cid}) | {t} | {counts[cid] + bad[cid]} | {counts[cid]} | {s.get("robots", s.get("status", "-"))} '
                    f'| {len(rejected[cid])} | {state} |')
     out += ['', f'- 총 검증 통과 문서: **{sum(counts.values())} / {sum(targets.values())}**',
+            f'- 게시일 없음(null): {sum(1 for d in docs if not d.get("published_at"))}건',
             f'- 검증 오류: {len(errors)}건' + (''.join(f'\n  - {e}' for e in errors)),
             f'- 출처 URL 재확인: ' + (f'{sum(1 for s in url_status.values() if s == "ok(200)")}/{len(url_status)} 정상 (HTTP 200)'
                                    if url_status else '실행 안 함 (`--check-urls`)')]
