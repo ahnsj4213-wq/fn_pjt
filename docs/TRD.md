@@ -1,6 +1,6 @@
-# AI 채용 플랫폼 TRD (기술 설계서) v2.3
+# AI 채용 플랫폼 TRD (기술 설계서) v2.5
 
-- 버전: **v2.3** · 날짜: 2026-11-13 · 기준: 현재 구현(커밋 eb404e8 이후 코드)
+- 버전: **v2.5** · 날짜: 2026-11-13 · 기준: 현재 구현(커밋 eb404e8 이후 코드)
 - **이 문서가 유일한 TRD다.** 이전 TRD(TRD_v1.4·v1.5, Final_Project_TRD v1.0~1.5, `docs/trd/01~08` 분할본)는 모두 이 문서로 대체됐다.
 - 무엇을·왜 만드는지는 [`docs/PRD.md`](PRD.md)(v2.1), 개별 결정의 근거는 [`docs/adr/`](adr/README.md)에 있다.
 - 장 번호는 예전 분할본 번호와 같다. 코드 주석의 "TRD 07 §12"는 이 문서 7장 12절을 뜻한다.
@@ -21,6 +21,8 @@
 
 | 버전 | 날짜 | 내용 |
 |---|---|---|
+| v2.5 | 2026-11-13 | ADR-0030 리뷰 반영(PR #6): BM25 색인은 색인 열 전체의 해시로 갱신, 벡터·BM25를 서로 격리(SAVEPOINT)해 pgvector 쿼리 실패 시 BM25로 대체, 두 가중치 합 1 검사, BM25만 찾은 조각은 다양성 규칙으로 앞당기지 않음(근거 정확도 회복), 가중치 선택에 근거 정확도 가드레일 |
+| v2.4 | 2026-11-13 | ADR-0030 반영: 회사 자료 검색을 독립 BM25 + pgvector 가중 RRF(0.7:0.3)로, 한 방식 장애 시 다른 방식, 설정 `rag_weight_vector`·`rag_weight_bm25`·`rag_rrf_k`·`rag_bm25_min_coverage`, 평가 도구 `tools/eval_bm25.py` |
 | v2.3 | 2026-11-13 | ADR-0031 반영(PR #5 리뷰): 마이그레이션 0036으로 `question_bank`를 `question_bank_backup_20261113`으로 보관, 질문은행 읽기·쓰기·사용 횟수 갱신 제거(생성 실패 대체는 공고·이력서 기반 코드 질문). 공고 보관 처리: 대상 행 잠금 후 재조사·`row_version` 확인, 복원은 버전을 앞으로 올리고 보관 후 바뀐 공고는 충돌로 남김 |
 | v2.2 | 2026-11-13 | ADR-0029 반영: 마이그레이션 0035(`job_postings.is_virtual`·`source_doc_ids`, 숨김 사유 ARCHIVE·마감 사유 ARCHIVED, `company_knowledge` origin TECH_BLOG·`source_url`·`published_at`), 기존 테스트 공고 보관, 기술 블로그 테스트용 가상 공고, 공개 공고 API `is_virtual`·`sources`. 버그 수정: 텍스트 답변(`text-answer`)이 턴을 다시 읽어 연 트랜잭션을 그래프 실행(꼬리질문 판단·다음 질문 생성, CPU 30초 이상) 동안 유지해 `idle_in_transaction` 30초에 끊기던 문제 |
 | v2.1 | 2026-11-11 | ADR-0028 반영: LangGraph 두 개(면접 실행·평가), 질문·평가 품질 검증 루프, T2 1.9.0·T3 1.7.0·T5 2.2.0 |
@@ -1490,7 +1492,7 @@ INT-14(면접 시작 전 AI 상태): `app`의 `GET /api/system/ai-health`가 `/v
 
 **RAG 예시(T2·T3 공통)**: 호출 전에 검색 글(T2 직무=공고 제목·업무·자격요건, T2 기업=제목·회사 소개·업무, T3=이력서 표준 항목)을 임베딩해 `question_examples`에서 같은 종류(JOB/COMPANY/RESUME)의 가장 가까운 질문 `rag_example_count`(기본 3)개를 입력 `examples`로 넣는다. 프롬프트에는 "말투와 난이도만 참고하고 베끼지 말 것, 예시의 사실을 근거로 쓰지 말 것"과 함께 들어간다. 예시와 어휘가 80% 이상 겹치는 질문은 작업 검증에서 탈락(재생성 피드백 대상), 통과한 질문도 임베딩 코사인 `rag_copy_cosine`(0.9) 이상이면 구성 단계에서 버린다. 임베딩 서버 장애나 색인 전이면 예시 없이 생성한다(`rag_skipped` 로그). 코드: `app/questions/rag.py`.
 
-**회사 자료 RAG(필수, ADR-0020)**: T2 호출 전에 `company_knowledge`에서 회사·공고 범위로 `rag_knowledge_count`(기본 4)개를 찾아 입력 `knowledge`로 넣는다. 유사도 `rag_knowledge_min_similarity` 미만은 버린다. 동기(COMPANY) 질문은 회사 자료에서 인용해야 통과하고, 자료가 없으면 회사 소개도 빼고 공고 기반 JOB 질문으로 바꾼다(`grounding.replaced`). 코드 검증: 인용이 출처에 있을 것, 질문이 인용과 내용을 공유할 것, 출처에 없는 영문 기술명·숫자가 없을 것, 회사 자료 기반 질문은 지원자의 판단·경험을 물을 것. 출처는 `grounding.sources`에 `{type, id}`로 남는다. 임베딩 장애 시 자료 없음으로 처리한다.
+**회사 자료 RAG(필수, ADR-0020)**: T2 호출 전에 `company_knowledge`에서 회사·공고 범위로 `rag_knowledge_count`(기본 4)개를 찾아 입력 `knowledge`로 넣는다. 검색은 pgvector와 BM25(`app/questions/bm25.py`)를 질의마다 각자 하고 가중 RRF `Σ w/(60+rank)`(vector 0.7 : BM25 0.3)로 합친다(ADR-0030). 벡터 목록은 유사도 `rag_knowledge_min_similarity` 미만을 버린다. 한 방식이 장애면(임베딩 모델 또는 쿼리 실패) 다른 방식만으로 찾는다. 글마다 첫 조각을 앞당기는 다양성 규칙은 벡터가 찾은 조각에만 적용한다. 동기(COMPANY) 질문은 회사 자료에서 인용해야 통과하고, 자료가 없으면 회사 소개도 빼고 공고 기반 JOB 질문으로 바꾼다(`grounding.replaced`). 코드 검증: 인용이 출처에 있을 것, 질문이 인용과 내용을 공유할 것, 출처에 없는 영문 기술명·숫자가 없을 것, 회사 자료 기반 질문은 지원자의 판단·경험을 물을 것. 출처는 `grounding.sources`에 `{type, id}`로 남는다. 임베딩과 BM25가 모두 장애일 때만 자료 없음으로 처리한다.
 
 #### T3 `resume_question` (QST-03, AC-07)
 

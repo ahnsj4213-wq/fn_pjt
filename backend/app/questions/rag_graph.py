@@ -110,8 +110,8 @@ async def _retrieve(state: RagState, c) -> dict:
     search = dict(company_id=c.company.id, posting_id=c.posting.id, queries=state["queries"], k=k, kind=state["kind"],
                   exclude_docs=state["used_docs"], vectors=state.get("vectors"))
     shared = state["shared"]
-    if state.get("vectors") is None:  # embeddings down: no search at all (the questions come from the posting)
-        search["k"] = 0
+    if state.get("vectors") is None:  # embeddings down: BM25 alone searches (ADR-0030); nothing found -> the posting, as before
+        search["use_vector"] = False
     chunks = [] if shared else await knowledge.search_many(c.db, c.ai, c.embed_model, floor=floor, **search)
     first = not state["seen"]
     if not chunks and first and state["used_docs"] and not shared:  # every own document was asked about already: one again
