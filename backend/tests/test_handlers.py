@@ -18,7 +18,7 @@ from app.core.constants import INTRO_QUESTION
 from app.core.db import get_engine, session_scope
 from app.jobs import handlers, worker  # noqa: F401  registers the handlers
 from app.jobs.queue import enqueue
-from app.models import InterviewQuestion, QuestionBank, QuestionTtsAsset
+from app.models import InterviewQuestion, QuestionTtsAsset
 from tests.evalstate import to_submitted
 from tests.fixtures import RESUME, apply, create_posting, text_pdf
 from tests.helpers import candidate, recruiter
@@ -143,17 +143,11 @@ async def test_compose_fills_fixed_slots_and_pregenerates_tts(client, make_clien
 
 
 async def test_compose_resume_fallback_and_company_scoped_generation(client, make_client, fake_ai):
-    """No grounded resume question -> BANK_FALLBACK; a family without job seeds -> T2 questions stored for this
-    company only (C2) and never offered to another company's applicant."""
+    """No grounded resume question -> an experience question made by code; T2 questions of one company's posting are never
+    stored for reuse (the question bank is retired, ADR-0031) and never offered to another company's applicant."""
     fake_ai.responses["resume_question"] = lambda inp, msgs: {"questions": []}
     canary = "카나리아결제엔진"
-    async with session_scope() as db:  # every category now has seed questions: take DESIGN's away for this test
-        await db.execute(text("UPDATE question_bank SET is_active = false WHERE source = 'SEED' AND job_family = 'DESIGN'"))
-    try:
-        await _compose_scoped(client, make_client, canary)
-    finally:
-        async with session_scope() as db:
-            await db.execute(text("UPDATE question_bank SET is_active = true WHERE source = 'SEED' AND job_family = 'DESIGN'"))
+    await _compose_scoped(client, make_client, canary)
 
 
 async def _compose_scoped(client, make_client, canary: str) -> None:
@@ -165,9 +159,8 @@ async def _compose_scoped(client, make_client, canary: str) -> None:
     assert qs[3].grounding["fallback"] == "EXPERIENCE" and qs[3].bank_question_id is None  # an experience question, not the job bank's
     ai_qs = [x for x in qs if x.source == "AI"]
     assert ai_qs and all(x.grounding["basis"]["text"] for x in ai_qs) and any(canary in x.text for x in ai_qs)
-    async with session_scope() as db:
-        stored = (await db.execute(select(QuestionBank).where(QuestionBank.source == "AI"))).scalars().all()
-    assert stored and {str(s.company_id) for s in stored} == {company_a}
+    assert all(x.bank_question_id is None for x in qs)
+    assert (await q("SELECT count(*) FROM question_bank_backup_20261113 WHERE source = 'AI'"))[0][0] == 0  # nothing stored for reuse
 
     other = make_client()
     _, app_b, cand_b = await setup_app(other, make_client, job_family="DESIGN", duties="모바일 앱 회귀 테스트")
@@ -593,27 +586,6 @@ def test_yes_no_detection_ignores_questions_with_an_interrogative_word():
         assert is_yes_no(yes_no), yes_no
     for ok in ("어떻게 극복하셨습니까?", "무엇을 근거로 원인을 좁혔나요?", "왜 그 방법을 선택하셨습니까?", "결과는 어땠나요?"):
         assert not is_yes_no(ok), ok
-
-
-async def test_job_questions_prefer_the_bank_questions_nearest_to_the_posting(client, make_client, fake_ai):
-    """The posting's duties pick the job questions: the question about them is taken before an unrelated one."""
-    from app.models import QuestionBank
-    from app.questions.compose import _Ctx, _rank_by_relevance
-
-    class Ai:  # a tiny embedding: one axis for "database", one for "screen"
-        async def embed(self, texts):
-            return [[1.0 if "데이터베이스" in t or "DB" in t else 0.0, 1.0 if "화면" in t else 0.0] + [0.0] * (1024 - 2) for t in texts]
-
-    rows = [QuestionBank(text="화면 렌더링 성능 문제를 개선했던 방법을 말씀해 주세요."), QuestionBank(text="데이터베이스 트랜잭션 격리 수준을 고른 기준을 말씀해 주세요."),
-            QuestionBank(text="웹 접근성을 높인 방법을 말씀해 주세요.")]
-    c = _Ctx(None, None, None, None, Ai())
-    ranked = await _rank_by_relevance(c, rows, "백엔드 개발자 업무: DB 설계와 성능 개선")
-    assert ranked[0].text.startswith("데이터베이스")
-    class Down:
-        async def embed(self, texts):
-            from app.ai.client import AIUnavailable
-            raise AIUnavailable("down")
-    assert await _rank_by_relevance(_Ctx(None, None, None, None, Down()), rows, "x") == rows  # embeddings down: unchanged order
 
 
 async def test_common_bank_questions_are_fitted_to_the_resume_and_keep_their_text_when_a_rewrite_fails(client, make_client, fake_ai):

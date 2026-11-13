@@ -2,36 +2,31 @@
 
 The posting settings hold a question plan of 1~10 slots [{area, text}] (default: 자기소개, 지원 동기, 직무, 경험, 협업).
 A slot with text is asked as written (source=CUSTOM); an empty slot is filled by area:
-- 인성 PERSONALITY, 협업 COLLABORATION: bank only (least used, ties random), skipping similar questions.
+- 인성 PERSONALITY, 협업 COLLABORATION: made by code from the resume or the posting (common_fallback).
 - 지원 동기 MOTIVATION: T2 from the company's documents (questions/knowledge.py, ADR-0020). A company without relevant documents
-  gets a posting-based job question instead, never unverified facts. What T2 cannot make comes from the COMPANY bank.
-- 직무 기술 JOB_SKILL: T2 from the posting and the company's documents, then the JOB bank of the job family.
+  gets a posting-based job question instead, never unverified facts. What T2 cannot make: a posting question made by code.
+- 직무 기술 JOB_SKILL: T2 from the posting and the company's documents, then a posting question made by code.
   All spoken; a coding test comes after the last question.
-- 프로젝트 경험 PROJECT: T3 against the resume snapshot; what T3 cannot ground comes from the job bank
-  (BANK_FALLBACK). In 개발·데이터·AI postings the candidate may open the whiteboard.
+- 프로젝트 경험 PROJECT: T3 against the resume snapshot; what T3 cannot ground: an experience question made by code.
+  In 개발·데이터·AI postings the candidate may open the whiteboard.
 Before T2/T3 the composer also looks up similar reference questions (RAG, app/questions/rag.py) and passes them as
 examples; a generated question that copies one is dropped.
-Generated questions grounded in the posting are added to the company's bank unless an exact or embedding duplicate
-(cosine >= 0.85) is there; one grounded in a company document is not (the document may belong to one posting, and may be
-removed). Last resort: shared seed questions of the same kind regardless of job family.
+The question bank is retired (ADR-0031, 2026-11-13): its table is kept as a backup under a new name and nothing here
+reads or writes it. Generated questions are not stored for reuse; older question sets keep their bank_question_id.
 Every question's `grounding.sources` lists what it came from as {type, id}; `grounding.retrieved` the documents searched.
 
 Every candidate question passes the quality gate (questions/quality.py: grounding, level, type, clarity, repetition) before it is
 picked; what fails is asked for once more with its reasons, then made by code (2026-11-11).
 Everything is composed in memory and written in one transaction (the snapshot rows are immutable, QST-06). No transaction is
-held across a model call (2026-11-10): reads go through questions/dbio.ShortReads, bank inserts open their own short transaction
-after the embeddings. The interview graph's composition nodes (interview/graph.py) and live composition (questions/live.py) drive these steps.
-Usage counts are bumped when the interview starts, not here.
+held across a model call (2026-11-10): reads go through questions/dbio.ShortReads. The interview graph's composition nodes (interview/graph.py) and live composition (questions/live.py) drive these steps.
 """
 import hashlib
 import logging
-import random
 import re
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
 
-from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.client import AIClient, AIUnavailable
@@ -42,10 +37,8 @@ from app.core.config import get_settings
 from app.core.constants import (
     CODE_ANSWER_LIMIT_SEC,
     DEFAULT_PLAN,
-    EMBED_DIM,
     Area,
 )
-from app.core.db import session_scope
 from app.core.logging import log_event
 from app.core.timeutil import utcnow
 from app.models import (
@@ -55,21 +48,17 @@ from app.models import (
     InterviewQuestion,
     JobPosting,
     PostingEvalSettings,
-    QuestionBank,
     QuestionSet,
 )
 from app.ai.textrules import polite_did as _did, shared_terms, tidy_particles
 from app.questions import knowledge, quality, rag
-from app.questions.level import DIFFICULTIES, career_level, difficulty_plan, fits_level, fits_type
+from app.questions.level import DIFFICULTIES, career_level, difficulty_plan
 from app.resumes.schemas import to_ai_resume
 
 log = logging.getLogger("app.questions")
 
-RELEVANT_POOL = 6  # bank questions nearest to the posting that take turns (least used first)
-RELEVANT_MARGIN = 0.08  # ... when their cosine is within this of the nearest one
 COMPOSER_VERSION = "compose-v6"  # v6: every question passes questions/quality.py; one regeneration with the reasons, then code
 RESUME_LINE_FLOOR = 0.45
-EMBED_DUP_COSINE = 0.85  # TRD initial value, calibrated by S-14
 
 
 # The motivation question: the model picks which document to ask about, the sentence is fixed (same reason as RESUME_TAILS below).
@@ -183,35 +172,6 @@ def job_brief(posting: JobPosting) -> str:
     return "\n".join(p for p in parts if p)[:800]
 
 
-async def _bank_candidates(db: AsyncSession, kind: str, company_id: uuid.UUID, job_family: str | None,
-                           *, any_family: bool = False) -> list[QuestionBank]:
-    stmt = select(QuestionBank).where(QuestionBank.is_active, QuestionBank.kind == kind,
-                                      (QuestionBank.company_id.is_(None)) | (QuestionBank.company_id == company_id))
-    if kind == "JOB" and not any_family:
-        stmt = stmt.where(QuestionBank.job_family == job_family)
-    elif kind == "COMPANY" and not any_family:
-        stmt = stmt.where((QuestionBank.job_family.is_(None)) | (QuestionBank.job_family == job_family))
-    stmt = stmt.order_by(QuestionBank.usage_count, text("random()"))
-    return list((await db.execute(stmt)).scalars())
-
-
-def _take_from_bank(c: _Ctx, rows: list[QuestionBank], n: int, slots: list[tuple[int, str]], source: str) -> int:
-    taken = 0
-    # QST-07 fallback, ADR-0025: a bank question within the candidate's reach first (stable: relevance order kept otherwise)
-    rows = sorted(rows, key=lambda r: not fits_level(r.text, c.level))
-    for row in rows:
-        if taken >= n:
-            break
-        if row.id in c.taken_ids() or any(similar_question(row.text, t) for t in c.texts()):
-            continue
-        if not fits_type(row.kind, row.text):
-            continue  # e.g. a design question the model once stored in the company bank, offered as 지원 동기
-        seq, slot = slots[taken]
-        c.picked.append(Picked(seq, slot, row.text, source, bank_id=row.id, grounding={"sources": [{"type": "BANK", "id": str(row.id)}]}))
-        taken += 1
-    return taken
-
-
 async def _with_examples(c: _Ctx, kind: str, query: str, inp: dict, vector: list[float] | None = None) -> list[rag.Example]:
     """RAG (ai-architecture 6.1): nearest reference questions of the same kind go into the prompt as examples."""
     examples = await rag.find_examples(c.db, c.ai, c.embed_model, kind, query, get_settings().rag_example_count,
@@ -250,87 +210,6 @@ async def _generate(c: _Ctx, kind: str, n: int) -> tuple[list[dict], str]:
     return items, out.get("status") or "OK"
 
 
-async def _embed_or_none(ai: AIClient, texts: list[str]) -> list[list[float]] | None:
-    try:
-        return await ai.embed(texts)
-    except AIUnavailable:
-        return None  # 14: embeddings down -> exact-duplicate check only
-
-
-async def _near_duplicate(db: AsyncSession, ids: list[uuid.UUID], vec: list[float], model: str) -> bool:
-    """pgvector cosine distance (HNSW index, migration 0004) against the bank questions in scope."""
-    if not ids:
-        return False
-    return (await db.execute(text(
-        "SELECT 1 FROM question_bank WHERE id = ANY(:ids) AND embedding IS NOT NULL AND embedding_model = :m "
-        "AND embedding <=> CAST(:v AS vector) <= :d LIMIT 1"),
-        {"ids": ids, "m": model, "v": "[" + ",".join(f"{x:.7g}" for x in vec) + "]",
-         "d": 1.0 - EMBED_DUP_COSINE})).first() is not None
-
-
-async def _add_to_bank(db, c: _Ctx, kind: str, items: list[dict], embed_model: str) -> list[uuid.UUID | None]:
-    """Insert generated questions into the company's bank unless a duplicate exists (QST-01). Returns bank ids.
-    The embeddings are made first; the lock, the duplicate checks and the inserts then run in one short transaction of their own
-    (`db` is not used: no transaction stays open across the embedding call). A retry finds its own rows by their hash."""
-    if not items:
-        return []
-    vectors = await _embed_or_none(c.ai, [i["text"] for i in items])
-    async with session_scope() as wdb:
-        return await _insert_bank(wdb, c, kind, items, embed_model, vectors)
-
-
-async def _insert_bank(db: AsyncSession, c: _Ctx, kind: str, items: list[dict], embed_model: str, vectors) -> list[uuid.UUID | None]:
-    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"qbank:{c.company.id}"})
-    scope = await _bank_candidates(db, kind, c.company.id, c.posting.job_family)
-    ids: list[uuid.UUID | None] = []
-    for n, item in enumerate(items):
-        h = norm_hash(item["text"])
-        if any(r.text_norm_hash == h for r in scope):
-            ids.append(next(r.id for r in scope if r.text_norm_hash == h))
-            continue
-        vec = vectors[n] if vectors and len(vectors[n]) == EMBED_DIM else None
-        if vec and await _near_duplicate(db, [r.id for r in scope], vec, embed_model):
-            ids.append(None)  # near-duplicate of a bank question: used in this set, not stored again
-            continue
-        row = QuestionBank(kind=kind, job_family=c.posting.job_family if kind == "JOB" else None,
-                           company_id=c.company.id, text=item["text"], text_norm_hash=h, source="AI",
-                           embedding=vec, embedding_model=embed_model if vec else None)
-        db.add(row)
-        await db.flush()
-        scope.append(row)
-        ids.append(row.id)
-    return ids
-
-
-async def _rank_by_relevance(c: _Ctx, rows: list[QuestionBank], query: str) -> list[QuestionBank]:
-    """Bank questions nearest to the posting first (the job bank of a family mixes front-end, back-end and operations
-    questions; a back-end posting should not get a screen-rendering question while a database one is waiting).
-    Embeds the few bank texts on the fly; embeddings down or a size mismatch keeps the usage-count order."""
-    if len(rows) < 2 or not query.strip():
-        return rows
-    try:
-        vecs = await c.ai.embed([query[:1500]] + [r.text for r in rows])
-    except AIUnavailable:
-        return rows
-    if len(vecs) != len(rows) + 1 or any(len(v) != EMBED_DIM for v in vecs):
-        return rows
-    import numpy as np
-
-    q, m = np.array(vecs[0]), np.array(vecs[1:])
-    sims = (m @ q) / ((np.linalg.norm(m, axis=1) * np.linalg.norm(q)) + 1e-9)
-    order = sorted(range(len(rows)), key=lambda i: -float(sims[i]))  # stable: equal scores keep the least-used first
-    ranked = [rows[i] for i in order]
-    # Relevance alone picks the same nearest question for every back-end posting (2026-11-09: the API latency question in
-    # every interview).
-    # Among the few nearest that are about as near as the first, the least used comes first, ties at random.
-    top = float(sims[order[0]])
-    n = next((k for k, i in enumerate(order[:RELEVANT_POOL]) if float(sims[i]) < top - RELEVANT_MARGIN), min(RELEVANT_POOL, len(order)))
-    pool = ranked[:n]
-    random.shuffle(pool)
-    pool.sort(key=lambda r: r.usage_count or 0)
-    return pool + ranked[n:]
-
-
 async def _fill_generated_kind(db: AsyncSession, c: _Ctx, kind: str, slots: list[tuple[int, str]],
                                embed_model: str) -> None:
     """지원 동기(COMPANY)·직무(JOB) slots: T2 with corrective RAG, through the quality loop; what is left, posting_fallback."""
@@ -362,9 +241,6 @@ async def _generated_attempt(c: _Ctx, kind: str, slots: list[tuple[int, str]], e
         if quality.take(c, p):
             free.pop(0)
             taken.append((p, g))
-    shareable = [(p, g) for p, g in taken if g["source"]["type"] != "KNOWLEDGE" and not g.get("fixed")]
-    for (p, _g), bank_id in zip(shareable, await _add_to_bank(c.db, c, kind, [g for _p, g in shareable], embed_model)):
-        p.bank_id = bank_id
     return status
 
 

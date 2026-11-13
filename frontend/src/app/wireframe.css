@@ -835,3 +835,7 @@ table.t tbody tr:hover { background: var(--softer); }
   .side { position: static; display: flex; overflow-x: auto; border-radius: 16px; }
   .side-h { display: none; }
 }
+
+/* ADR-0029: test postings from public tech blogs — always labelled, never mistaken for a real opening. */
+.virtual-badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn-ink); font-size: 12px; font-weight: 700; vertical-align: middle; }
+.virtual-notice { margin: 8px 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--warn-ink); font-size: 14px; line-height: 1.5; }

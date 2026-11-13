@@ -114,6 +114,12 @@ class EvalSettingsOut(BaseModel):
     coding_enabled: bool
 
 
+class PostingSource(BaseModel):
+    title: str
+    url: str
+    published_date: date | None = None  # null when the blog does not show one
+
+
 class PostingPublicOut(BaseModel):
     """What candidates see (and the recruiter preview shows). No weights, no internal settings."""
     id: UUID
@@ -138,6 +144,8 @@ class PostingPublicOut(BaseModel):
     coding_language: str | None
     coding_time_limit_min: int | None
     has_applied: bool = False
+    is_virtual: bool = False          # a test posting from the company's public tech blog, not one the company published (ADR-0029)
+    sources: list[PostingSource] = []  # the blog posts it was written from
 
 
 class PostingSummaryOut(BaseModel):
@@ -153,6 +161,7 @@ class PostingSummaryOut(BaseModel):
     location: str | None = None
     view_count: int = 0
     hidden: bool = False             # taken down by the operator (SC-O02)
+    is_virtual: bool = False
     coding_enabled: bool
     applicant_count: int
     completed_count: int

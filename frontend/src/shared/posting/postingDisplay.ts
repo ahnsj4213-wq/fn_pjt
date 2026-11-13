@@ -14,6 +14,16 @@ export function dDay(deadline: string | null | undefined): string {
   return days === 0 ? 'D-day' : `D-${days}`;
 }
 
+/** A virtual test posting has no closing date (none is invented): it reads "테스트용", never a real-looking "상시". */
+export function deadlineLabel(p: { deadline_date: string | null; is_virtual?: boolean }): string {
+  if (!p.deadline_date && p.is_virtual) return '테스트용 · 마감일 없음';
+  return dDay(p.deadline_date);
+}
+
+export const VIRTUAL_NOTICE =
+  '테스트용 가상 공고입니다. 이 회사가 실제로 게시한 채용공고가 아니며, 지원해도 실제 채용으로 이어지지 않습니다. ' +
+  '면접 질문은 아래 공식 기술 블로그 글을 자료로 만듭니다.';
+
 /** Posting text written one item per line -> list items (SC-A03 주요 업무 · 자격 요건 · 우대 사항). */
 export function lines(text: string | null | undefined): string[] {
   return (text ?? '').split('\n').map((l) => l.replace(/^[-•·*]\s*/, '').trim()).filter(Boolean);

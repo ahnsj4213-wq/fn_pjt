@@ -43,6 +43,7 @@ from app.models import (
 )
 from app.notify.mail import queue_mail
 from app.resumes.router import media_type
+from app.postings import service as posting_service
 
 router = APIRouter(prefix="/api/recruiter", tags=["recruiter"])
 WITHDRAWN_NAME = "탈퇴한 지원자"  # USR-07: the account is anonymised; the application row stays (OQ-12)
@@ -65,7 +66,7 @@ def _audit(db, ctx: RecruiterCtx, request: Request, action: str, target_type: st
 async def dashboard(ctx: RecruiterCtx = Depends(require_recruiter), db: AsyncSession = Depends(get_db)) -> dict:
     open_postings = await db.scalar(select(func.count()).select_from(JobPosting).where(
         JobPosting.company_id == ctx.company_id, JobPosting.status == "OPEN", JobPosting.deleted_at.is_(None),
-        JobPosting.deadline_at > utcnow()))
+        posting_service.deadline_ahead()))
     awaiting = await db.scalar(select(func.count()).select_from(Application).where(
         Application.company_id == ctx.company_id, Application.share_result, Application.eval_status == "DONE",
         Application.decision_status == "UNDECIDED"))

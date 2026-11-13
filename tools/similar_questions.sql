@@ -5,7 +5,7 @@ SELECT s.src, s.kind, s.text, round((1 - (s.embedding <=> q.v))::numeric, 4) AS 
 FROM q,
      (SELECT 'EXAMPLE' AS src, kind, text, embedding FROM question_examples WHERE embedding_model = 'bge-m3'
       UNION ALL
-      SELECT 'BANK_' || source, kind, text, embedding FROM question_bank
+      SELECT 'BANK_' || source, kind, text, embedding FROM question_bank_backup_20261113
        WHERE embedding IS NOT NULL AND embedding_model = 'bge-m3') s
 ORDER BY s.embedding <=> q.v
 LIMIT 10;

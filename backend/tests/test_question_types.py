@@ -24,15 +24,6 @@ def test_the_company_bank_offers_only_motivation_questions():
     assert fits_type("JOB", "트래픽이 늘었을 때 API 응답 지연을 줄이기 위해 어떤 순서로 원인을 찾겠습니까?")
 
 
-def test_a_wrong_type_bank_row_is_skipped():
-    c = SimpleNamespace(level="JUNIOR", picked=[], taken_ids=lambda: set(), texts=lambda: [])
-    rows = [SimpleNamespace(id=uuid.uuid4(), kind="COMPANY", text=t) for t in (
-        "RAG 기반 문서 검색 서비스 개발에 임베딩과 벡터 검색에 대한 이해를 어떻게 적용하시겠습니까?",
-        "우리 회사가 하는 사업에서 관심 있는 부분과 그 이유를 말씀해 주세요.")]
-    assert C._take_from_bank(c, rows, 1, [(3, "MOTIVATION")], "BANK") == 1
-    assert [p.text for p in c.picked] == [rows[1].text]
-
-
 def _ctx(picked=()):
     c = SimpleNamespace(app=SimpleNamespace(id=uuid.uuid4()), picked=list(picked))
     c.texts = lambda: [p.text for p in c.picked]

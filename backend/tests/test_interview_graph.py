@@ -203,3 +203,27 @@ async def test_live_coding_turn_shows_its_problem_and_nothing_hidden(client, mak
     other = make_client()
     await candidate(other)
     assert (await other.get(url(app_id, f"/interview/turns/{t['turn_id']}/problem"))).status_code == 404
+
+
+async def test_text_answer_holds_no_connection_while_the_model_runs(client, make_client, voice_ai):
+    """The CPU model takes 30 s+ for a follow-up decision and the next question. A request session left in a transaction
+    across that is cut by the server's 30 s idle-in-transaction limit (live E2E, 2026-11-13: the text answer's re-read of
+    the turn opened one). The request's own session must hold nothing while the model runs."""
+    from app.core.db import get_engine
+
+    app_id, cand = await started(client, make_client)
+    voice_ai.followup = "ASK"
+    assert (await cand.post(url(app_id, "/interview/text-mode"))).status_code == 200
+    turn = (await cand.post(url(app_id, "/interview/next"))).json()["turn"]
+    held: list[int] = []
+    llm = voice_ai.llm
+
+    async def llm_watching_pool(task, input, **kw):
+        held.append(get_engine().pool.checkedout())
+        return await llm(task, input, **kw)
+
+    voice_ai.llm = llm_watching_pool
+    ANSWER = "주문 결제 API의 응답이 느려서 조회 결과를 캐시에 담고, 캐시 만료 시간을 조정해 평균 지연을 절반으로 줄였습니다."
+    r = await cand.post(url(app_id, f"/interview/turns/{turn['turn_id']}/text-answer"), json={"text": ANSWER})
+    assert r.status_code == 202 and r.json() == {"turn_id": turn["turn_id"], "state": "CLOSED"}
+    assert held and set(held) == {0}

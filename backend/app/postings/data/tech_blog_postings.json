@@ -1,0 +1,216 @@
+{
+  "notice": "테스트용 가상 공고입니다. 각 회사가 실제로 게시한 채용공고가 아니며, 회사의 공식 기술 블로그에 공개된 글을 면접 질문 자료로만 씁니다.",
+  "companies": [
+    {
+      "key": "kurly",
+      "name": "컬리",
+      "blog": "https://helloworld.kurly.com/",
+      "hosts": ["helloworld.kurly.com"],
+      "intro": "[테스트용 가상 공고] 컬리가 게시한 채용공고가 아닙니다. 면접 질문은 컬리 기술 블로그(helloworld.kurly.com)에 공개된 주문·배송·데이터·AI 사례를 근거로 만듭니다."
+    },
+    {
+      "key": "toss",
+      "name": "토스",
+      "blog": "https://toss.tech/",
+      "hosts": ["toss.tech"],
+      "intro": "[테스트용 가상 공고] 토스가 게시한 채용공고가 아닙니다. 면접 질문은 토스 기술 블로그(toss.tech)에 공개된 서버·플랫폼·추천·LLM 사례를 근거로 만듭니다."
+    },
+    {
+      "key": "kakao",
+      "name": "카카오",
+      "blog": "https://tech.kakao.com/",
+      "hosts": ["tech.kakao.com"],
+      "intro": "[테스트용 가상 공고] 카카오가 게시한 채용공고가 아닙니다. 면접 질문은 카카오 기술 블로그(tech.kakao.com)에 공개된 메시징·AI 모델·데이터·인프라 사례를 근거로 만듭니다."
+    }
+  ],
+  "postings": [
+    {
+      "key": "kurly-backend",
+      "company": "kurly",
+      "title": "백엔드 엔지니어 (주문·물류 시스템)",
+      "job_family": "DEV",
+      "experience_level": "경력 3년 이상",
+      "duties": "주문·배송·입고 도메인의 API와 배치 개발\nKafka 기반 이벤트 처리와 메시지 재처리(컨슈머 오프셋 이동, Outbox, 재시도 토픽)\nSpring Batch 대용량 조회의 페이징 성능 개선\n파일 업로드 보안 점검과 서비스 점검 중 접근 제어 기능 운영",
+      "requirements": "Java 또는 Kotlin, Spring Boot 기반 서비스 개발 경험\nMySQL 쿼리와 트랜잭션에 대한 이해\nKafka 같은 메시지 큐로 비동기 처리를 구현한 경험",
+      "preferred": "분산 환경에서 메시지 유실·중복을 다뤄 본 경험\n라이브러리·JDK 버전업 중 호환성 문제를 해결한 경험",
+      "coding_enabled": true,
+      "coding_time_limit_min": 30,
+      "sources": [
+        "https://helloworld.kurly.com/blog/2024-spring-kafka-consumer-offset-seeking/",
+        "https://helloworld.kurly.com/blog/2026-outbox-pattern-and-retry-topic/",
+        "https://helloworld.kurly.com/blog/2024-mysql-paging-query-provider/",
+        "https://helloworld.kurly.com/blog/2023-delivery-system/",
+        "https://helloworld.kurly.com/blog/75-java-module-with-gson-serialization/",
+        "https://helloworld.kurly.com/blog/74-excel-upload-zip-bomb/",
+        "https://helloworld.kurly.com/blog/access-block-1/"
+      ]
+    },
+    {
+      "key": "kurly-data",
+      "company": "kurly",
+      "title": "데이터 엔지니어 (스트리밍·검색 데이터)",
+      "job_family": "DATA_AI",
+      "experience_level": "신입 가능",
+      "duties": "Kafka Streams 윈도우 집계 등 실시간 데이터 처리 파이프라인 개발\n후기 검색을 위한 OpenSearch 색인 설계와 운영\n쿠버네티스 위 Airflow로 배치 파이프라인 운영",
+      "requirements": "Python 또는 Java로 데이터 처리 코드를 작성할 수 있는 분\nSQL과 데이터 모델링 기초\n스트리밍과 배치 처리의 차이에 대한 이해",
+      "preferred": "Kafka Streams, OpenSearch(Elasticsearch), Airflow 사용 경험\n쿠버네티스 환경에서 데이터 작업을 운영해 본 경험",
+      "coding_enabled": false,
+      "sources": [
+        "https://helloworld.kurly.com/blog/2025-kafka-streams-window/",
+        "https://helloworld.kurly.com/blog/2023-review-opensearch/",
+        "https://helloworld.kurly.com/blog/airflow-1/"
+      ]
+    },
+    {
+      "key": "kurly-ai",
+      "company": "kurly",
+      "title": "AI 엔지니어 (LLM·비전)",
+      "job_family": "DATA_AI",
+      "experience_level": "경력 2년 이상",
+      "duties": "고객 후기·도메인 지식을 다루는 LLM 애플리케이션과 RAG 개발\n배송 완료 사진의 객체 탐지 모델 개발과 학습 데이터 구축\n에러 분석·QA 자동화 등 사내 생성형 AI 도구와 에이전트 운영",
+      "requirements": "Python으로 머신러닝 또는 LLM 기반 기능을 개발한 경험\n프롬프트·검색 결과 품질을 평가하는 방법에 대한 이해",
+      "preferred": "RAG 검색 품질을 개선해 본 경험\n이미지 분류·객체 탐지 모델 학습 경험\n여러 AI 에이전트를 함께 운용해 본 경험",
+      "coding_enabled": false,
+      "sources": [
+        "https://helloworld.kurly.com/blog/2026-delivery-domain-rag/",
+        "https://helloworld.kurly.com/blog/2024-review-llm-application/",
+        "https://helloworld.kurly.com/blog/2025-delivery-photo-object-detection/",
+        "https://helloworld.kurly.com/blog/2025-delivery-jarvis-story/",
+        "https://helloworld.kurly.com/blog/ai-qa-from-spec-to-defect/",
+        "https://helloworld.kurly.com/blog/ai-orchestration-2/",
+        "https://helloworld.kurly.com/blog/aws-ground-truth/"
+      ]
+    },
+    {
+      "key": "toss-backend",
+      "company": "toss",
+      "title": "백엔드 엔지니어 (서버·데이터베이스 성능)",
+      "job_family": "DEV",
+      "experience_level": "경력 3년 이상",
+      "duties": "망분리 환경에서 실행을 격리하고 세션을 잇는 에이전트 플랫폼 서버 개발\n주문·체결 경로의 데이터베이스 커밋 지연 같은 성능 문제 분석\nAI가 만든 코드를 사내 어드민으로 안전하게 배포하는 실행 환경 개발",
+      "requirements": "서버 애플리케이션을 설계·운영한 경험\n데이터베이스 트랜잭션과 커밋 처리에 대한 이해\n지표·로그로 성능 병목을 찾아 본 경험",
+      "preferred": "OS·네트워크 수준까지 내려가 지연 원인을 찾아 본 경험\n격리 실행 환경이나 샌드박스를 다뤄 본 경험",
+      "coding_enabled": true,
+      "coding_time_limit_min": 30,
+      "sources": [
+        "https://toss.tech/article/agent-platform-foundation",
+        "https://toss.tech/article/nic-interrupt-bottleneck",
+        "https://toss.tech/article/52885",
+        "https://toss.tech/article/52631",
+        "https://toss.tech/article/toss-doctor"
+      ]
+    },
+    {
+      "key": "toss-platform",
+      "company": "toss",
+      "title": "플랫폼 엔지니어 (쿠버네티스·데이터 플랫폼)",
+      "job_family": "DEV",
+      "experience_level": "경력 5년 이상",
+      "duties": "쿠버네티스 기반 GPU 클러스터 구축과 운영 기준 수립\nSpark Connect 등 데이터 처리 엔진의 컨트롤 플레인 개발\n벡터 데이터베이스(Milvus) 사이징과 성능 최적화\n도메인별 Airflow와 dbt로 데이터 웨어하우스 파이프라인 이전",
+      "requirements": "쿠버네티스 운영 경험\n리소스 사용량을 측정해 용량을 산정해 본 경험\nPython, Go, Java 중 하나 이상으로 플랫폼 도구를 개발한 경험",
+      "preferred": "쿠버네티스 Operator 개발 경험\nGPU 워크로드나 모델 서빙 인프라 운영 경험",
+      "coding_enabled": false,
+      "sources": [
+        "https://toss.tech/article/gpu-native-cluster",
+        "https://toss.tech/article/spark-connect-on-kubernetes-2",
+        "https://toss.tech/article/milvus-optimization-and-sizing",
+        "https://toss.tech/article/ai-platform-foundation",
+        "https://toss.tech/article/dw-airflow-migration"
+      ]
+    },
+    {
+      "key": "toss-ml",
+      "company": "toss",
+      "title": "AI/ML 엔지니어 (추천·LLM)",
+      "job_family": "DATA_AI",
+      "experience_level": "신입 가능",
+      "duties": "추천 파운데이션 플랫폼과 실시간 개인화 추천 개발\n추천 후보 수(TopK) 등 추천 단계 최적화와 지표 분석\nLLM 호출 비용·지연을 줄이는 경량 모델 적용\n사내 업무에 맞는 LLM 벤치마크 구축과 모델 평가",
+      "requirements": "머신러닝 또는 추천 시스템 기초\nPython으로 실험 코드를 작성하고 결과를 지표로 설명할 수 있는 분",
+      "preferred": "RAG·그래프 검색을 구현해 본 경험\n오프라인 지표와 온라인 지표의 차이를 다뤄 본 경험",
+      "coding_enabled": false,
+      "sources": [
+        "https://toss.tech/article/taste",
+        "https://toss.tech/article/53545",
+        "https://toss.tech/article/snap-llm-cost-reduction",
+        "https://toss.tech/article/toss-benchmark",
+        "https://toss.tech/article/tech_talk_talk_3",
+        "https://toss.tech/article/dataops-log-definition-skill"
+      ]
+    },
+    {
+      "key": "kakao-backend",
+      "company": "kakao",
+      "title": "백엔드 엔지니어 (메시징 서버)",
+      "job_family": "DEV",
+      "experience_level": "신입 가능",
+      "duties": "대규모 메시징 서버 개발과 운영\n국제 문자 메시지 처리 경로의 유실 원인 분석과 개선\n동시성·경쟁 조건 문제 분석과 안티 패턴 제거\n스트레스 테스트로 서버 한계 확인",
+      "requirements": "Java 또는 Kotlin으로 서버를 개발할 수 있는 분\n동시성과 트랜잭션에 대한 이해\n네트워크 통신 기초",
+      "preferred": "부하·스트레스 테스트를 설계해 본 경험\n데이터 변경 로그(CDC) 기반 동기화 경험",
+      "coding_enabled": true,
+      "coding_time_limit_min": 30,
+      "sources": [
+        "https://tech.kakao.com/posts/843",
+        "https://tech.kakao.com/posts/822",
+        "https://tech.kakao.com/posts/810",
+        "https://tech.kakao.com/posts/845"
+      ]
+    },
+    {
+      "key": "kakao-ai",
+      "company": "kakao",
+      "title": "AI 엔지니어 (언어·멀티모달 모델)",
+      "job_family": "DATA_AI",
+      "experience_level": "경력 3년 이상",
+      "duties": "언어 모델의 사전 학습·후속 학습 데이터와 학습 방법 개발\n비전 인코더와 멀티모달 모델 개발\n음성 생성 모델 고도화와 프로덕션 서빙 최적화\n에이전트용 의사결정 모델 평가",
+      "requirements": "PyTorch 등으로 딥러닝 모델을 학습해 본 경험\n학습·평가 실험을 설계하고 결과를 해석할 수 있는 분",
+      "preferred": "MoE 등 대형 모델 학습 경험\n모델 추론 지연·처리량 최적화 경험",
+      "coding_enabled": false,
+      "sources": [
+        "https://tech.kakao.com/posts/807",
+        "https://tech.kakao.com/posts/808",
+        "https://tech.kakao.com/posts/840",
+        "https://tech.kakao.com/posts/806",
+        "https://tech.kakao.com/posts/827",
+        "https://tech.kakao.com/posts/821",
+        "https://tech.kakao.com/posts/826",
+        "https://tech.kakao.com/posts/846",
+        "https://tech.kakao.com/posts/812"
+      ]
+    },
+    {
+      "key": "kakao-data",
+      "company": "kakao",
+      "title": "데이터 엔지니어 (추천·분석 데이터)",
+      "job_family": "DATA_AI",
+      "experience_level": "경력 2년 이상",
+      "duties": "개인화 추천 랭킹 모델을 위한 데이터 파이프라인 개발\n추천 지표 분석 자동화와 데이터 분석 에이전트의 컨텍스트 설계\n개인화된 Airflow 테스트 환경 구축과 운영",
+      "requirements": "SQL과 Python으로 데이터를 처리해 본 경험\nAirflow 등 워크플로 도구 사용 경험",
+      "preferred": "추천 지표를 정의하고 분석해 본 경험\nLLM을 데이터 분석 업무에 적용해 본 경험",
+      "coding_enabled": false,
+      "sources": [
+        "https://tech.kakao.com/posts/837",
+        "https://tech.kakao.com/posts/824",
+        "https://tech.kakao.com/posts/838",
+        "https://tech.kakao.com/posts/844",
+        "https://tech.kakao.com/posts/829"
+      ]
+    },
+    {
+      "key": "kakao-infra",
+      "company": "kakao",
+      "title": "인프라 엔지니어 (배포 안정성·보안 모니터링)",
+      "job_family": "DEV",
+      "experience_level": "경력 5년 이상",
+      "duties": "과거 장애 사례를 바탕으로 배포 전 변경을 검토하는 도구 개발\n대량 보안 이벤트에서 실제 위협을 찾는 모니터링 체계 운영\n검색 색인의 변경 수집 방식 전환과 정합성 검증\nAI 모델 서빙 인프라 운영",
+      "requirements": "리눅스 서버와 배포 파이프라인 운영 경험\n장애 원인 분석과 재발 방지 활동 경험",
+      "preferred": "보안 이벤트 분석 경험\n데이터 이전 후 정합성을 검증해 본 경험",
+      "coding_enabled": false,
+      "sources": [
+        "https://tech.kakao.com/posts/831",
+        "https://tech.kakao.com/posts/817",
+        "https://tech.kakao.com/posts/845",
+        "https://tech.kakao.com/posts/821"
+      ]
+    }
+  ]
+}

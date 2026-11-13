@@ -212,10 +212,6 @@ async def start(aid: UUID, ctx: CandidateCtx = Depends(require_candidate), db: A
         posting.settings_locked_at = now  # JOB-06 / OQ-05: first interview locks weights and coding settings
     app.attempt_status, app.eval_settings_id, app.interview_started_at = "INTERVIEWING", posting.current_settings_id, now
     iv.question_set_id, iv.started_at, iv.last_heartbeat_at = qset.id, now, now
-    await db.execute(text(
-        "UPDATE question_bank SET usage_count = usage_count + 1, last_used_at = now() WHERE id IN "
-        "(SELECT bank_question_id FROM interview_questions WHERE question_set_id = :q AND bank_question_id IS NOT NULL)"),
-        {"q": qset.id})
     await db.commit()
     state = await interview_state(db, app)
     if not ai["tts"]:
@@ -384,13 +380,17 @@ async def text_answer(aid: UUID, turn_id: UUID, body: TextAnswerIn, ctx: Candida
     view = await turns.view_of(db, turn.id)
     await db.commit()  # the graph's nodes use their own sessions: the application lock must be released first
     io = igraph.TextIO("" if late else body.text)
-    async with igraph.app_lock(app.id):
+    async with igraph.app_lock(aid):
         await db.refresh(turn)
-        if turn.state != "ANSWERING":  # a second request for the same turn waited for the first one
-            return {"turn_id": turn.id, "state": "CLOSED"}
-        await igraph.ensure_waiting(app.id, view, "TEXT", io)
-        await igraph.resume(app.id, "TIMEOUT" if late else "BUTTON", io)  # transcribe -> decide_followup (-> handed back)
-    return {"turn_id": turn.id, "state": "CLOSED"}
+        state = turn.state
+        # The refresh opened a transaction: end it before the graph runs, or the follow-up decision and the next question
+        # (30 s+ on the CPU model) leave this connection idle in transaction and the server's 30 s limit cuts it.
+        await db.commit()
+        if state != "ANSWERING":  # a second request for the same turn waited for the first one
+            return {"turn_id": turn_id, "state": "CLOSED"}
+        await igraph.ensure_waiting(aid, view, "TEXT", io)
+        await igraph.resume(aid, "TIMEOUT" if late else "BUTTON", io)  # transcribe -> decide_followup (-> handed back)
+    return {"turn_id": turn_id, "state": "CLOSED"}
 
 
 @router.post("/heartbeat", status_code=204)

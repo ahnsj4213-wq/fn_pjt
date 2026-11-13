@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router';
 import { fetchJobFamilies, fetchPostings, type PostingPublic } from '@/api/common/postings';
 import { useSession } from '@/app/session';
 import { useStartApply } from '@/app/useStartApply';
-import { dDay } from '@/shared/posting/postingDisplay';
+import { dDay, deadlineLabel } from '@/shared/posting/postingDisplay';
 import { QueryState } from '@/shared/ui/extra';
 import { GuideModal, shouldShowGuide } from './GuideModal';
 
@@ -121,7 +121,8 @@ function PostingRow({ posting: p }: { posting: PostingPublic }) {
     // The empty parts of the row open the detail too; the links and buttons stay the keyboard targets.
     <article className="crow" onClick={(e) => { if (!(e.target as HTMLElement).closest('a,button')) navigate(detail); }}>
       <div className="crow-main">
-        <span className="crow-co"><span className="mini-logo" aria-hidden="true">{p.company_name.slice(0, 2)}</span>{p.company_name}</span>
+        <span className="crow-co"><span className="mini-logo" aria-hidden="true">{p.company_name.slice(0, 2)}</span>{p.company_name}
+          {p.is_virtual && <span className="virtual-badge">테스트용 가상 공고</span>}</span>
         <h3><Link to={detail} aria-label={`${p.title} 공고 보기`}>{p.title}</Link></h3>
         {meta.length > 0 && <ul className="crow-meta">{meta.map((m) => <li key={m}>{m}</li>)}</ul>}
         <span className="tags">
@@ -131,6 +132,7 @@ function PostingRow({ posting: p }: { posting: PostingPublic }) {
       </div>
       <div className="crow-side">
         {p.deadline_date && <span className="crow-dday">마감 {dDay(p.deadline_date)} ({shortDate(p.deadline_date)})</span>}
+        {!p.deadline_date && p.is_virtual && <span className="crow-dday">{deadlineLabel(p)}</span>}
         {p.has_applied
           ? <Link to="/me/applications" className="btn" aria-label={`${p.title} 지원 현황`}>지원 현황</Link>
           : <button type="button" className="btn btn-primary" aria-label={`${p.title} 지원하기`} onClick={() => startApply(p.id)}>지원하기</button>}

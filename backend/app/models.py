@@ -10,7 +10,7 @@ from decimal import Decimal
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import BigInteger, Boolean, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.core.constants import EMBED_DIM
@@ -161,7 +161,9 @@ class JobPosting(Base):
     close_reason: Mapped[str | None] = mapped_column(Text)
     deleted_at: Mapped[datetime | None] = mapped_column(TS)
     hidden_at: Mapped[datetime | None] = mapped_column(TS)  # SC-O02
-    hidden_by: Mapped[str | None] = mapped_column(Text)
+    hidden_by: Mapped[str | None] = mapped_column(Text)  # OPERATOR | SUSPENSION | ARCHIVE (old test posting, migration 0035)
+    is_virtual: Mapped[bool] = mapped_column(Boolean, default=False)  # test posting from a public tech blog, not the company's (0035)
+    source_doc_ids: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(UUID(as_uuid=True)), default=list)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
     updated_at: Mapped[datetime] = mapped_column(TS, server_default="now()")
@@ -314,22 +316,6 @@ class InterviewSlot(Base):
     lease_expires_at: Mapped[datetime] = mapped_column(TS)
 
 
-class QuestionBank(Base):
-    __tablename__ = "question_bank"
-    id: Mapped[uuid.UUID] = _pk()
-    kind: Mapped[str] = mapped_column(Text)
-    job_family: Mapped[str | None] = mapped_column(Text)
-    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    text: Mapped[str] = mapped_column(Text)
-    text_norm_hash: Mapped[bytes] = mapped_column(LargeBinary)
-    source: Mapped[str] = mapped_column(Text)
-    usage_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_used_at: Mapped[datetime | None] = mapped_column(TS)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))  # pgvector, BGE-M3 (migration 0004)
-    embedding_model: Mapped[str | None] = mapped_column(Text)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-
 class InterviewSchedule(Base):
     """SC-A15: an interview date the company sent by mail, with the candidate's answer (migration 0011)."""
     __tablename__ = "interview_schedules"
@@ -401,7 +387,9 @@ class CompanyKnowledge(Base):
     doc_type: Mapped[str] = mapped_column(Text)  # PROJECT | TECH | COMPANY
     title: Mapped[str] = mapped_column(Text)
     text: Mapped[str] = mapped_column(Text)
-    origin: Mapped[str] = mapped_column(Text)  # RECRUITER | SYNTHETIC
+    origin: Mapped[str] = mapped_column(Text)  # RECRUITER | SYNTHETIC | TECH_BLOG (migration 0035)
+    source_url: Mapped[str | None] = mapped_column(Text)  # TECH_BLOG: the public post
+    published_at: Mapped[datetime | None] = mapped_column(TS)  # TECH_BLOG: null when the blog does not say
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))
     embedding_model: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

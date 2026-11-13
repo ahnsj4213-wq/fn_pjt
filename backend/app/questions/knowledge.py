@@ -110,6 +110,10 @@ async def search_many(db: AsyncSession, ai: AIClient, model: str, *, company_id:
     queries = [q[:SEARCH_CHARS] for q in queries if q.strip()]
     if k <= 0 or not queries:
         return []
+    if shared and await has_tech_blog(db, company_id):
+        # A company with its own public tech blog never borrows: another real company's posts must not reach its candidates.
+        log_event(log, "rag_skipped", kind=f"KNOWLEDGE:{kind}", company_id=str(company_id), reason="tech_blog_company_no_sharing")
+        return []
     if vectors is None:
         vectors = await embed_queries(ai, queries, kind)
     if not vectors or len(vectors) != len(queries):
@@ -121,7 +125,7 @@ async def search_many(db: AsyncSession, ai: AIClient, model: str, *, company_id:
             return []
         rows = (await db.execute(text(
             "SELECT id, title, text, 1 - (embedding <=> CAST(:v AS vector)), doc_id, doc_type FROM company_knowledge "
-            + ("WHERE company_id <> :c AND NOT (doc_id = ANY(:x)) " if shared else
+            + ("WHERE company_id <> :c AND origin <> 'TECH_BLOG' AND NOT (doc_id = ANY(:x)) " if shared else
                "WHERE company_id = :c AND (posting_id IS NULL OR posting_id = :p) AND NOT (doc_id = ANY(:x)) ") +
             "AND embedding IS NOT NULL AND embedding_model = :m ORDER BY embedding <=> CAST(:v AS vector) LIMIT :n"),
             {"c": company_id, "p": posting_id, "x": list(exclude_docs), "m": model, "v": vec_literal(vec), "n": k * 3})).all()
@@ -145,6 +149,11 @@ async def search_many(db: AsyncSession, ai: AIClient, model: str, *, company_id:
     else:
         log_event(log, "rag_skipped", kind=f"KNOWLEDGE:{kind}", company_id=str(company_id), reason="no_company_knowledge")
     return out
+
+
+async def has_tech_blog(db, company_id: uuid.UUID) -> bool:
+    return await db.scalar(text("SELECT EXISTS (SELECT 1 FROM company_knowledge WHERE company_id = :c AND origin = 'TECH_BLOG')"),
+                           {"c": company_id}) is True
 
 
 async def embed_queries(ai: AIClient, queries: list[str], kind: str = "") -> list[list[float]] | None:
