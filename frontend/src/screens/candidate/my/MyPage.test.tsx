@@ -106,6 +106,9 @@ describe('My Page (SC-A09~A11, SC-A15)', () => {
           career: [{ company: '커머스랩', role: '백엔드 개발자', period: '2020-2024' }], projects: [{ title: '예약 서비스' }],
           skills: ['Python', 'FastAPI'], certificates: [] },
       }, { status: 201 })),
+      http.get('*/api/candidate/resume-files/f1', () => HttpResponse.json({ file_id: 'f1', media_type: 'application/pdf',
+        page_count: 1, text_extractable: true, extraction_status: 'DONE', method: 'TEXT', ocr_confidence: null,
+        low_conf_fields: [], manual_input_required: false, fields: null })),
       http.put('*/api/candidate/resume', async ({ request }) => {
         body = await request.json() as typeof body;
         return HttpResponse.json({ ok: true });
@@ -118,6 +121,8 @@ describe('My Page (SC-A09~A11, SC-A15)', () => {
     expect(await screen.findByText('첨부됨: cv.docx')).toBeTruthy();
     expect((screen.getByLabelText('최종 학력') as HTMLInputElement).value).toBe('한국대학교 컴퓨터공학');
     expect((screen.getByLabelText('보유 기술') as HTMLInputElement).value).toBe('Python, FastAPI');
+    expect((screen.getByLabelText('회사명') as HTMLInputElement).value).toBe('커머스랩'); // one block of boxes per row
+    expect((screen.getByLabelText('프로젝트명') as HTMLInputElement).value).toBe('예약 서비스');
     fireEvent.change(screen.getByLabelText('희망 직무'), { target: { value: 'DEV' } });
     fireEvent.change(screen.getByLabelText('경력'), { target: { value: 'Y3_5' } });
     fireEvent.click(screen.getByRole('button', { name: '이력서 등록' }));
@@ -127,16 +132,18 @@ describe('My Page (SC-A09~A11, SC-A15)', () => {
       education: [{ school: '한국대학교', major: '컴퓨터공학' }], career: [{ company: '커머스랩' }] });
   });
 
-  it('round-trips the flat form: untouched boxes keep their rows, edited ones are parsed', () => {
+  it('round-trips the form: one block per career and project row, empty names dropped, untouched boxes keep their rows', () => {
     const base = { name: '김지원', education: [{ school: '한국대학교', major: '컴퓨터공학' }],
       career: [{ company: '커머스랩', role: '백엔드', period: '2020-2024', description: '주문 API' }],
-      projects: [{ title: '예약 서비스', description: 'FastAPI' }], skills: ['Python'], certificates: [] };
+      projects: [{ title: '예약 서비스', role: null, period: null, description: 'FastAPI' }], skills: ['Python'], certificates: [] };
     const flat = toFlat(base);
-    expect(flat.proj).toBe('경력 · 커머스랩 / 백엔드 / 2020-2024: 주문 API\n예약 서비스: FastAPI');
+    expect(flat.career).toEqual([{ company: '커머스랩', role: '백엔드', period: '2020-2024', description: '주문 API' }]);
+    expect(flat.projects).toEqual([{ title: '예약 서비스', role: '', period: '', description: 'FastAPI' }]);
     expect(fromFlat(flat, base)).toMatchObject({ education: base.education, career: base.career, projects: base.projects });
-    const edited = fromFlat({ ...flat, proj: `${flat.proj}\n쇼핑몰: Django`, skill: 'Python, Go' }, base);
-    expect(edited.career).toEqual([{ company: '커머스랩', role: '백엔드', period: '2020-2024', description: '주문 API' }]);
-    expect(edited.projects.map((p) => p.title)).toEqual(['예약 서비스', '쇼핑몰']);
+    const edited = fromFlat({ ...flat, skill: 'Python, Go', projects: [...flat.projects,
+      { title: '쇼핑몰', role: '팀장', period: '2023', description: 'Django\n결제 연동' }, { title: ' ', role: '', period: '', description: '버림' }] }, base);
+    expect(edited.career).toEqual(base.career);
+    expect(edited.projects).toEqual([base.projects[0], { title: '쇼핑몰', role: '팀장', period: '2023', description: 'Django\n결제 연동' }]);
     expect(edited.skills).toEqual(['Python', 'Go']);
   });
 });

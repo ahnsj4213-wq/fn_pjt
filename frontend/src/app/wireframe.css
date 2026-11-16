@@ -854,3 +854,13 @@ table.t tbody tr:hover { background: var(--softer); }
   .orig { position: static; height: 70vh; }
 }
 
+
+/* ADR-0032: one block of boxes per career and project row */
+.rows { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; min-width: 0; }
+.rows > legend { font-weight: 700; font-size: 14px; margin-bottom: 6px; padding: 0; }
+.rows > legend .hint { font-weight: 400; margin-left: 6px; }
+.row-box { position: relative; display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.row3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.row3 > .field { min-width: 0; }
+.row-box textarea { min-height: 140px; }
+.row-del { justify-self: end; }

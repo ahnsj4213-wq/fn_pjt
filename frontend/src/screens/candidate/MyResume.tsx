@@ -2,7 +2,7 @@ import { WithOriginal } from '@/screens/candidate/resume/OriginalFile';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { fetchRegisteredResume, fetchResumeFile, saveRegisteredResume, uploadResumeFile, type ResumeFileOut } from '@/api/candidate';
+import { fetchRegisteredResume, fetchResumeFile, resumeFileContentUrl, saveRegisteredResume, uploadResumeFile, type ResumeFileOut } from '@/api/candidate';
 import { DESIRED_JOBS, EMPTY_RESUME, EXPERIENCE_LEVELS, type ResumeContent } from '@/api/common/resume';
 import { safeNext } from '@/app/session';
 import { formatDate } from '@/shared/format';
@@ -10,6 +10,7 @@ import { describeError } from '@/shared/http/errors';
 import { QueryState } from '@/shared/ui/extra';
 import { useToast } from '@/shared/ui/overlay';
 import { Field } from '@/shared/ui/wf';
+import { ExperienceRows } from './resume/ExperienceRows';
 import { flatMissing, fromFlat, toFlat, type FlatResume } from './resume/flatResume';
 
 const POLL_MS = 1500;
@@ -86,6 +87,21 @@ export function MyResume() {
     }
   };
 
+  /** The attached original read again with the current parser (ADR-0032): a resume read before the fix filled only short
+   * descriptions. The file is fetched from the owner-only endpoint and uploaded as a new file; nothing is saved until 저장. */
+  const reread = async () => {
+    if (!fileId) return;
+    try {
+      const res = await fetch(resumeFileContentUrl(fileId), { credentials: 'same-origin' });
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const ext = { 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg' }[blob.type] ?? 'docx';
+      await attach(new File([blob], fileName ?? `resume.${ext}`, { type: blob.type }));
+    } catch {
+      setError('원본 파일을 다시 읽지 못했습니다. 파일을 다시 골라 올려 주십시오.');
+    }
+  };
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const content = fromFlat(form, base);
@@ -126,16 +142,21 @@ export function MyResume() {
           </select></div>
       </div>
       <Field label="보유 기술" id="rs-skill" value={form.skill} onChange={set('skill')} hint="쉼표로 나눠 적어 주십시오" />
-      <div className="field"><label htmlFor="rs-proj">주요 프로젝트·경험</label>
-        <textarea id="rs-proj" value={form.proj} onChange={set('proj')} aria-describedby="rs-proj-hint" />
-        <small id="rs-proj-hint" className="hint">한 줄에 하나씩 '이름: 설명'으로 적어 주십시오. 회사 경력은 '경력 · 회사 / 직무 / 기간: 설명'입니다.</small></div>
+      <ExperienceRows idPrefix="rs" career={form.career} projects={form.projects}
+        onCareer={(career) => setForm((f) => ({ ...f, career }))} onProjects={(projects) => setForm((f) => ({ ...f, projects }))} />
       <div className="field"><label htmlFor="rs-intro">자기소개서 (선택)</label>
         <textarea id="rs-intro" value={form.intro} onChange={set('intro')} placeholder="지원 동기나 강점을 자유롭게 적어 주십시오" /></div>
       <div className="field"><label htmlFor="rs-file">기존 이력서·자기소개서 파일 (선택)</label>
         <input id="rs-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg" disabled={reading}
           onChange={(e) => { void attach(e.target.files?.[0]); e.target.value = ''; }} />
         {reading && <small className="hint" role="status">파일을 읽고 있습니다. 잠시만 기다려 주십시오</small>}
-        {!reading && fileId && <small className="hint">첨부됨: {fileName ?? '등록한 이력서 파일'}</small>}</div>
+        {!reading && fileId && (
+          <small className="hint">
+            <span>첨부됨: {fileName ?? '등록한 이력서 파일'}</span>{' '}
+            <button className="link" type="button" onClick={() => void reread()}>이 파일 다시 읽기</button>
+            {' '}(양식을 원본에서 다시 채웁니다. 저장하기 전까지는 바뀌지 않습니다)
+          </small>
+        )}</div>
     </>
   );
 

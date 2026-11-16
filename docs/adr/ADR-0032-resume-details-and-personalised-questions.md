@@ -148,6 +148,9 @@ Every `QUOTE_MISMATCH` from two real-model runs was checked against the document
   - a DOCX is sent as an attachment.
 - The frontend server set `X-Frame-Options: DENY` on every path, `/api` included, which would block the frame. It now sets it on pages only. The API's middleware still puts `DENY` and `frame-ancestors 'none'` on every other API answer (`setdefault`), so nothing else became frameable.
 
+- Career and project rows are edited one block per row (`ExperienceRows`): name, role, period, description (≤ 3,000). This replaces the single "이름: 설명" text box, which squeezed every row into one line. Rows without a name are not saved. The same blocks are used on My Page and in the apply step.
+- "이 파일 다시 읽기" (My Page) reads the attached original again with the current parser. It fetches the file from the owner-only endpoint and uploads it as a new file. A resume read before this change has short descriptions and no `details`, and nothing is migrated, so this is how it gets the full text. Nothing is saved until the candidate saves the form.
+
 ## Results
 
 Measured with `tools/eval_personalization.py` on the local model (llama.cpp, the live stack, read-only). The setup:
