@@ -22,6 +22,7 @@ from app.ai.textrules import (clarity_problems, content_tokens, fence, has_p8, i
 from app.evaluation.quotes import find_span, normalize
 from app.questions.level import REJECT_TEXT, complexity, problems
 from app.questions.level import level_block as _level_block
+from app.questions.resume_match import ASSUMES_EXPERIENCE
 
 
 _GLUE = re.compile(r"([A-Za-z0-9])\s+(에서|에게|에|를|을|로|으로|의|은|는|이|가|와|과|도)(?=[\s?.,]|$)")
@@ -50,8 +51,13 @@ def examples_block(inp: dict, nonce: str) -> str:
             + fence("EXAMPLES", "\n".join(f"- {e}" for e in ex), nonce))
 
 
+# The example questions written into the system prompt: a model that copies one has asked about nothing in the sources
+# (2026-11-16: "학습자에게 너무 쉽거나 어렵지 않은 문제를 추천하려면 …" was asked for a backend posting).
+PROMPT_EXAMPLES = ("학습자에게 너무 쉽거나 어렵지 않은 문제를 추천하려면 어떤 기준을 쓰시겠습니까?",)
+
+
 def copies_example(text: str, inp: dict) -> bool:
-    return any(similar_question(text, e) for e in (inp.get("examples") or []))
+    return any(similar_question(text, e) for e in [*(inp.get("examples") or []), *PROMPT_EXAMPLES])
 
 
 _YES_NO = re.compile(r"(있나요|있습니까|있으신가요|있었나요|있었습니까|하셨나요|하셨습니까|해 보셨나요|해 보셨습니까)\s*[?？]?\s*$")
@@ -156,6 +162,8 @@ class _GenQ(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(max_length=300)
     basis_quote: str = Field(max_length=400)
+    # ADR-0032: the candidate's experience the question connects to, copied from the given resume excerpts ("" when none)
+    resume_quote: str = Field("", max_length=300)
 
 
 class GenOut(BaseModel):
@@ -165,7 +173,7 @@ class GenOut(BaseModel):
 
 class QuestionGenerate(TaskSpec):
     name = "question_generate"
-    version = "question_generate@1.9.0"
+    version = "question_generate@1.10.0"
     format_retries = 1  # llama.cpp grammar keeps the JSON valid; one repair (a cut answer) is enough
     lane = "INTERACTIVE"
     temperature = 0.7
@@ -188,7 +196,11 @@ class QuestionGenerate(TaskSpec):
               "- 자료에 없는 회사 사실, 기술 이름, 수치를 지어내지 않는다. 필요 없는 숫자와 여러 겹의 가정·조건을 넣지 않는다.\n"
               "- 질문 하나는 근거 문장 하나에서만 만든다. 다른 줄의 표현을 이어 붙이지 않고, 문장의 주어와 서술어가 맞는지 확인한다.\n"
               "- '이미 쓴 근거'에 있는 문장은 다시 근거로 쓰지 않는다.\n"
-              "- basis_quote에는 근거가 된 문장을 글자 그대로 복사한다. 나이·가족·출신·종교·건강 등 사적인 질문은 만들지 않는다.")
+              "- basis_quote에는 근거가 된 문장을 글자 그대로 복사한다. 나이·가족·출신·종교·건강 등 사적인 질문은 만들지 않는다.\n"
+              "- '지원자 이력서의 경험'이 주어지면, 질문마다 그중 공고·자료 상황과 관련 있는 경험 하나를 짧게 연결한다. "
+              "형태 예: '<이력서의 프로젝트>에서 <이력서에 적힌 일>을 하셨는데, <자료에 적힌 과제>를 맡는다면 그 경험을 어떻게 살리시겠습니까?' "
+              "resume_quote에는 연결한 이력서 문장의 일부를 글자 그대로 복사하고, 연결하지 않았으면 빈 문자열로 둔다. "
+              "이력서에 적히지 않은 기술·경험·성과를 지원자가 했다고 쓰지 않는다. 근거(basis_quote)는 여전히 공고·회사 자료의 문장이다.")
 
     @staticmethod
     def _parts(inp: dict) -> list[tuple[dict, str]]:
@@ -218,13 +230,17 @@ class QuestionGenerate(TaskSpec):
         used = [b for b in inp.get("used_basis") or [] if b]
         if used:
             user += "\n이미 쓴 근거(다시 근거로 쓰지 않는다):\n" + fence("USED", "\n".join(used), nonce)
+        resume = [r for r in inp.get("resume") or [] if r.get("text")]
+        if resume:  # ADR-0032: what the candidate wrote, never more
+            lines = "\n".join(f"- [{r['scene'] or '이력서'}] {r['text']}" for r in resume)
+            user += "\n지원자 이력서의 경험(지원자가 직접 적은 문장, 이 밖의 경험은 가정하지 않는다):\n" + fence("RESUME", lines, nonce)
         return _level_block(inp) + user + examples_block(inp, nonce) + feedback_block(inp, nonce), {}
 
     def check(self, inp: dict, p: GenOut, ctx: dict, final: bool) -> Check:
         # `last_chance` (the composer's second request, with the feedback): the relaxed rules of the last attempt.
         final = bool(inp.get("last_chance"))
         parts, n = self._parts(inp), int(inp.get("n", 3))
-        src = "\n".join(t for _, t in parts)
+        src = "\n".join([t for _, t in parts] + [r.get("text") or "" for r in inp.get("resume") or []])
         level = inp.get("level") or "JUNIOR"
         # This company's own documents were found: a job question comes from one of them, not from the posting's lines (2026-11-09:
         # three job questions all came from one posting line while four documents were in the prompt). The documents make a question
@@ -241,8 +257,12 @@ class QuestionGenerate(TaskSpec):
             if len(valid) >= n:
                 break
             text = _GLUE.sub(r"\1\2", q.text.strip())  # "API 에" -> "API에"
-            bad, item = self._judge(inp, text, q.basis_quote, parts, src, level, must_use_docs, final, existing, used_basis, valid,
-                                    advanced_left)
+            bad, link = resume_link(inp, text, q.resume_quote)  # ADR-0032: what it says the candidate did, first
+            if not bad:
+                bad, item = self._judge(inp, text, q.basis_quote, parts, src, level, must_use_docs, final, existing, used_basis,
+                                        valid, advanced_left, from_resume=link is not None)
+            if not bad:
+                item["resume"] = link
             if bad:
                 codes.append((no, bad))
                 failed.append({"text": text[:QUESTION_MAX * 2], "codes": bad})
@@ -253,7 +273,8 @@ class QuestionGenerate(TaskSpec):
         return Check(output={"questions": valid, "failed": failed[:FEEDBACK_MAX]}, flags=flags)
 
     def _judge(self, inp: dict, text: str, quote: str, parts: list, src: str, level: str, must_use_docs: bool, final: bool,
-               existing: list[str], used_basis: list[str], valid: list[dict], advanced_left: int) -> tuple[list[str], dict | None]:
+               existing: list[str], used_basis: list[str], valid: list[dict], advanced_left: int, from_resume: bool = False
+               ) -> tuple[list[str], dict | None]:
         """([], question) when it may be asked, else its failure codes (all the code checks that apply, cheapest first)."""
         found = next(((ref, s) for ref, t in parts if (s := find_span(quote, t, min_chars=4)) is not None), None)
         if found is None:
@@ -280,7 +301,8 @@ class QuestionGenerate(TaskSpec):
         # a motivation question from the company's own document is asked in a fixed sentence (compose.MOTIVATION_QUESTION),
         # checked there: here only what the model's wording would carry over
         own_doc = inp["kind"] == "COMPANY" and ref["type"] == "KNOWLEDGE" and not ref.get("shared")
-        level_bad = [r for r in problems(text, kind=inp["kind"], level=level, basis=span.text) if not (own_doc and r == "NOT_MOTIVATION")]
+        level_bad = [r for r in problems(text, kind=inp["kind"], level=level, basis=span.text, from_resume=from_resume)
+                     if not (own_doc and r == "NOT_MOTIVATION")]
         hard = complexity(text) == "ADVANCED"
         if not level_bad and hard and advanced_left <= 0:
             level_bad = ["TOO_HARD"]  # the level's mix has no (more) room for a design question
@@ -292,6 +314,37 @@ class QuestionGenerate(TaskSpec):
             return list(dict.fromkeys(out)), None
         return [], {"text": text, "basis": {"start": span.start, "end": span.end, "text": span.text}, "source": ref,
                     "difficulty": complexity(text)}
+
+
+def resume_link(inp: dict, text: str, quote: str) -> tuple[list[str], dict | None]:
+    """ADR-0032. ([], the excerpt the question connects to, or None) when it may be asked; (["ASSUMED_EXPERIENCE"], None) when it
+    says the candidate did something the resume does not have: a quote that is not in the excerpts, or a technology named in
+    the part that tells their past work (before "...하셨는데") that the resume does not name."""
+    excerpts = [r for r in inp.get("resume") or [] if r.get("text")]
+    quoted = None
+    if quote and quote.strip():
+        quoted = next(((r, s) for r in excerpts if (s := find_span(quote, r["text"], min_chars=4)) is not None), None)
+    m = ASSUMES_EXPERIENCE.search(text)
+    if m:
+        told = text[:m.end()]
+        theirs = " ".join(inp.get("resume_terms") or []).lower() + "\n" + "\n".join(r["text"] for r in excerpts).lower()
+        if not excerpts or [t for t in _TERM.findall(told) if not t.isdigit() and t.strip(".-").lower() not in theirs]:
+            return ["ASSUMED_EXPERIENCE"], None
+        if quoted is None and not any(len(content_tokens(told) & content_tokens(r["text"])) >= 2 for r in excerpts):
+            return ["ASSUMED_EXPERIENCE"], None
+    if quoted is not None:
+        r, span = quoted
+        return [], {"ref": r["ref"], "scene": r.get("scene") or "", "quote": span.text, "how": "quote"}
+    best = max(excerpts, key=lambda r: len(content_tokens(text) & content_tokens(r["text"])), default=None)
+    if best is not None and len(content_tokens(text) & content_tokens(best["text"]) - content_tokens(_posting_text(inp))) >= 1 \
+            and len(content_tokens(text) & content_tokens(best["text"])) >= 2:
+        return [], {"ref": best["ref"], "scene": best.get("scene") or "", "quote": None, "how": "words"}
+    return [], None
+
+
+def _posting_text(inp: dict) -> str:
+    p = inp.get("posting") or {}
+    return "\n".join(p.get(k) or "" for k in ("title", "duties", "requirements", "preferred"))
 
 
 # ── T3 ─────────────────────────────────────────────────────────────────────────

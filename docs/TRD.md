@@ -1,6 +1,6 @@
-# AI 채용 플랫폼 TRD (기술 설계서) v2.5
+# AI 채용 플랫폼 TRD (기술 설계서) v2.6
 
-- 버전: **v2.5** · 날짜: 2026-11-13 · 기준: 현재 구현(커밋 eb404e8 이후 코드)
+- 버전: **v2.6** · 날짜: 2026-11-16 · 기준: 현재 구현(커밋 eb404e8 이후 코드)
 - **이 문서가 유일한 TRD다.** 이전 TRD(TRD_v1.4·v1.5, Final_Project_TRD v1.0~1.5, `docs/trd/01~08` 분할본)는 모두 이 문서로 대체됐다.
 - 무엇을·왜 만드는지는 [`docs/PRD.md`](PRD.md)(v2.1), 개별 결정의 근거는 [`docs/adr/`](adr/README.md)에 있다.
 - 장 번호는 예전 분할본 번호와 같다. 코드 주석의 "TRD 07 §12"는 이 문서 7장 12절을 뜻한다.
@@ -21,6 +21,7 @@
 
 | 버전 | 날짜 | 내용 |
 |---|---|---|
+| v2.6 | 2026-11-16 | ADR-0032 반영: 이력서 블록 원문 보존(`details`: 제목·줄 범위·소속 행), 페이지 제목형 머리글 인식, 제목을 건너는 설명 채우기 제거. T2 1.10.0: 이력서 관련 문장 전달·`resume_quote`·경험 가정 검사(`ASSUMED_EXPERIENCE`), 코드의 이력서 행 연결(`personalise`), 이력서 양식 옆 원본 파일 패널(`GET …/resume-files/{id}/content`), 지원 동기 고정 문장에 이력서 행, 대체 질문은 공고 업무+이력서 경험. `techs()` 한 제품명 한 주제, 프롬프트 예시 복사 차단 |
 | v2.5 | 2026-11-13 | ADR-0030 리뷰 반영(PR #6): BM25 색인은 색인 열 전체의 해시로 갱신, 벡터·BM25를 서로 격리(SAVEPOINT)해 pgvector 쿼리 실패 시 BM25로 대체, 두 가중치 합 1 검사, BM25만 찾은 조각은 다양성 규칙으로 앞당기지 않음(근거 정확도 회복), 가중치 선택에 근거 정확도 가드레일 |
 | v2.4 | 2026-11-13 | ADR-0030 반영: 회사 자료 검색을 독립 BM25 + pgvector 가중 RRF(0.7:0.3)로, 한 방식 장애 시 다른 방식, 설정 `rag_weight_vector`·`rag_weight_bm25`·`rag_rrf_k`·`rag_bm25_min_coverage`, 평가 도구 `tools/eval_bm25.py` |
 | v2.3 | 2026-11-13 | ADR-0031 반영(PR #5 리뷰): 마이그레이션 0036으로 `question_bank`를 `question_bank_backup_20261113`으로 보관, 질문은행 읽기·쓰기·사용 횟수 갱신 제거(생성 실패 대체는 공고·이력서 기반 코드 질문). 공고 보관 처리: 대상 행 잠금 후 재조사·`row_version` 확인, 복원은 버전을 앞으로 올리고 보관 후 바뀐 공고는 충돌로 남김 |
@@ -1067,7 +1068,8 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 | `GET /api/consent/current` (구현) | → `{version, is_draft, body_md, items: [{code, label, required}]}`. 가장 최근 문서 | 503 `CONSENT_UNAVAILABLE` | — |
 | `POST /api/candidate/postings/{pid}/consents` (구현) | `{version, answers: {code: bool}}`(모든 항목 코드가 있어야 함) → 201 `{consent_id, all_required_agreed, version, agreed_at}`. 거부도 기록한다(SEC-02). 진행 가능 여부는 `all_required_agreed`로 판단하고, false면 화면이 공고 상세로 돌아간다 | 404, 409 `POSTING_CLOSED`, 409 `CONSENT_VERSION_STALE`(`current`), 422 `VALIDATION` | CONSENT_RECORD |
 | `POST /api/candidate/resume-files` (구현) | multipart `file` → 201 `ResumeFileOut`. 크기·확장자·매직바이트·파싱을 동기로 확인. 텍스트가 30자 이상이면 `extract_resume` 작업 등록 + `PENDING`, 아니면 `NO_TEXT`(RES-04 직접 입력 안내). 저장 이름은 서버가 만든 UUID | 413 `FILE_TOO_LARGE`, 415 `UNSUPPORTED_FILE`(PDF·DOCX·PNG·JPG 외), 422 `PDF_ENCRYPTED`·`PDF_TOO_MANY_PAGES`·`PDF_UNREADABLE`·`DOCX_UNREADABLE` | — |
-| `GET /api/candidate/resume-files/{file_id}` (구현) | → `ResumeFileOut`(추출 상태 폴링, 2초 간격). `fields`는 원문 부분 문자열로 검증된 값만(RES-03) | 404(소유자 아님 포함) | — |
+| `GET /api/candidate/resume-files/{file_id}` (구현) | → `ResumeFileOut`(`media_type` 포함, 추출 상태 폴링, 2초 간격). `fields`는 원문 부분 문자열로 검증된 값만(RES-03) | 404(소유자 아님 포함) | — |
+| `GET /api/candidate/resume-files/{file_id}/content` (구현, ADR-0032) | → 원본 파일 바이트. 이력서 양식 옆 원본 패널용. PDF·PNG·JPEG는 `inline`, DOCX는 `attachment`. `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`(우리 화면에서만 끼워 보기), `nosniff`, `no-store`. 프런트 서버의 `X-Frame-Options: DENY`는 `/api`에 붙이지 않는다(API가 자기 헤더를 단다) | 404(소유자 아님·파일 없음) | — |
 | `GET /api/candidate/profile` · `PUT …/profile` (구현) | SC-A11. `{name, email(읽기 전용), birth_date, gender M\|F, phone}`. 이메일은 바꿀 수 없음(본문에 오면 422). 저장하면 세션 이름도 바뀜 | 422 형식 오류 | — |
 | `POST /api/candidate/profile/password-link` (구현) | SC-A11 '비밀번호 변경'. 계정 이메일로 재설정 메일(SC-A12와 같은 토큰 흐름) → 202 `{email}` | — | — |
 | `GET /api/candidate/schedules` (구현) | SC-A15. 본인 지원 건의 면접 일정 `[{id, application_id, company_name, title, starts_at, place, status}]`(일시 순) | — | — |
@@ -1349,7 +1351,7 @@ PDF 원본은 권한 API로만 준다. 응답 헤더는 다음과 같다.
 
 ## 5장. AI 파이프라인 (LLM·STT·TTS·임베딩, 작업 계약, 평가)
 
-- 현재 상태(2026-11-11): 모델은 llama.cpp(llm-gpu GPU, ai CPU)로 서빙하고, 게이트웨이·작업 검증은 호출 프로세스 안에서 돈다(`app/ai/direct.py`). 작업 계약 버전은 코드 기준 T1 `resume_extract@1.2.0`, T2 `question_generate@1.9.0`, T3 `resume_question@1.7.0`, T4 `followup_decide@1.4.0`, T5 `evaluate_answer@2.2.0`, T6 `report_summary@1.1.0`, T7 `candidate_feedback@1.1.0`, T8 `code_review@2.1.0`, T9 `problem_rewrite@1.1.0`, T10 `custom_criteria@2.0.0`, T11 `posting_draft@1.0.0`, T12 `question_adapt@1.3.0`. 루브릭 `rubric-v5`, 점수 `score-v3`. LangGraph 그래프는 둘이다: 면접 실행(질문 생성+면접+코딩 진입·종료)과 평가(ADR-0028).
+- 현재 상태(2026-11-11): 모델은 llama.cpp(llm-gpu GPU, ai CPU)로 서빙하고, 게이트웨이·작업 검증은 호출 프로세스 안에서 돈다(`app/ai/direct.py`). 작업 계약 버전은 코드 기준 T1 `resume_extract@1.2.0`, T2 `question_generate@1.10.0`, T3 `resume_question@1.7.0`, T4 `followup_decide@1.4.0`, T5 `evaluate_answer@2.2.0`, T6 `report_summary@1.1.0`, T7 `candidate_feedback@1.1.0`, T8 `code_review@2.1.0`, T9 `problem_rewrite@1.1.0`, T10 `custom_criteria@2.0.0`, T11 `posting_draft@1.0.0`, T12 `question_adapt@1.3.0`. 루브릭 `rubric-v5`, 점수 `score-v3`. LangGraph 그래프는 둘이다: 면접 실행(질문 생성+면접+코딩 진입·종료)과 평가(ADR-0028).
 - 관련 ADR: 0003(LLM 게이트웨이), 0004(음성·임베딩 모델), 0005(질문 구성·은행 범위), 0008(인용 검증), 0009(면접 런타임 프로토콜), 0014·0015(컨테이너 배치), 0016·0027(그래프), 0019(꼬리질문 판단 30초), 0020(회사 자료 RAG), 0022·0025(live 생성·수준·품질 검사), 0023·0026(평가 신뢰성·rubric-v5). 실시간 음성 흐름은 [6장](#ch06).
 - 표기: **[실측]** = `prototypes/results-*.txt`(2026-10-26, GTX 1660 SUPER 6GB 개발 장비), **[추정]** = 계산·경험값(실측 전), **[PRD]** = PRD 원문 수치, **[TRD]** = 이 문서가 정한 설정값(바꿀 수 있음, PRD 수치 아님).
 - X-11(모델 선정)은 PRD상 미결정이다. 아래 모델은 실측 기반 **기술적 임시 결정**(ADR-0004 "채택(임시)")이며 팀 확인 대상이다(OQ-03, OQ-29, OQ-30).
@@ -1476,11 +1478,24 @@ INT-14(면접 시작 전 AI 상태): `app`의 `GET /api/system/ai-health`가 `/v
 ```
 
 - 이 키 집합이 `resume-schema v1`이다(B·D가 따름). 각 문자열은 원문을 그대로 복사해야 하며 **값마다 원문 대조**를 통과하지 못하면 버린다(`null` 또는 배열에서 제거, `dropped_values` 집계). 날짜·학위명을 바꿔 쓴 값도 버려진다(RES-03 "원문에 실제로 적힌 내용만").
-- 긴 글은 모델이 복사하지 않고 코드가 원문에서 잘라 쓴다(`app/resumes/sections.py`). 자기소개서 제목부터 다음 항목 제목까지가 `intro`(≤10,000자)이고 T1에 보내지 않는다. 경력·프로젝트 설명은 그 행 이름부터 다음 행 이름까지의 원문이다(≤3,000자, 한 줄로 합침, 표 머리글·쪽 꼬리말 제외). 제목을 찾지 못한 이력서는 모델이 준 150자 이내 설명을 그대로 쓴다. T3에는 설명마다 앞 800자만 보낸다.
+- 긴 글은 모델이 복사하지 않고 코드가 원문에서 잘라 쓴다(`app/resumes/sections.py`). 자기소개서 제목부터 다음 항목 제목까지가 `intro`(≤10,000자)이고 T1에 보내지 않는다. 제목은 낱말 목록과 `[이름 ·] 한국어 제목 / ENGLISH` 형태의 쪽 제목으로 찾는다. 세 쪽 이상 글자 그대로 되풀이되는 줄은 쪽 머리말로 버린다. **ADR-0032**: 경력·프로젝트·기술·요약 제목 아래 블록은 원문 그대로 `details`에 남긴다(항목마다 `heading`, `kind`, `text`≤4,000자(넘으면 나눔), `lines`=[추출 텍스트의 첫 줄, 끝 줄], `row`=소속 행, `how`=`name`(행 이름이 줄 앞 30자 안) 또는 `similar`(행 낱말 40%·3개 이상, 다른 행의 2배 이상, 행 낱말 4개 이상)). 연락처·인적사항 블록은 남기지 않고, 남긴 블록의 이메일·전화번호는 가린다. 경력·프로젝트 설명은 그 행에 속한 블록 조각의 원문(≤3,000자, 줄 경계에서 멈춤, 한 줄로 합침, 표 머리글 제외)이다. 제목을 건너 다른 행의 글을 가져오지 않는다. 속한 조각이 없는 행은 모델이 준 150자 이내 설명을 그대로 쓴다. T3에는 설명마다 앞 800자만 보내고 `details`는 보내지 않는다.
 - 자기소개서를 뺀 원문이 4,000자를 넘으면 줄 경계로 나눠 여러 번 호출 후 병합한다(같은 항목 중복 제거).
 - 비식별화하지 않는다(성명 추출이 목적). 이 출력은 평가 입력에 쓰지 않는다.
 
 #### T2 `question_generate` (QST-01 은행 보충: 기업·직무)
+
+**이력서 연결(ADR-0032, 1.10.0)**:
+- 입력 `resume`: `questions/resume_match.relevant`가 고른 이력서 문장 최대 3개(행마다 1개, 원문 그대로, ≤200자, 공고·찾은 자료와 낱말이 겹치는 것).
+- 입력 `resume_terms`: 이력서의 영문 기술명.
+- 출력 `resume_quote`(선택).
+- 지원자가 했다고 말하는 질문("…하셨는데", "운영해 보신")은 아래 중 하나면 `ASSUMED_EXPERIENCE`로 버린다(`resume_link`).
+  - 이력서 문장이 주어지지 않았다.
+  - 그 부분의 기술명이 이력서에 없다.
+  - 인용이 이력서 문장에 없고, 겹치는 낱말도 2개 미만이다.
+- 연결이 확인되면 `PRESUMES_EXPERIENCE`를 적용하지 않는다.
+- 모델이 이력서를 잇지 않은 직무 질문은, 같은 행이 아직 연결되지 않았고 낱말 2개 이상이 겹치면 코드가 "<행>에서 쌓은 경험을 살려, <질문>"으로 잇는다(`compose.personalise`). 수준별 길이 안이고 모든 품질 규칙을 통과할 때만이다.
+- 지원 동기 고정 문장은 자료와 가장 관련 있는 이력서 행을 넣는다.
+- 기록: `grounding.resume = {given, link{ref, scene, quote, how}}`.
 
 입력: `{"kind": "COMPANY|JOB", "job_family": "s", "posting": {"title","duties","requirements","preferred"}, "company_intro": "s", "n": 3}`. 출력:
 

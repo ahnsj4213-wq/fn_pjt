@@ -1,3 +1,4 @@
+import { WithOriginal } from '@/screens/candidate/resume/OriginalFile';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
@@ -140,9 +141,10 @@ export function MyResume() {
 
   if (welcome) {
     return (
-      <div className="wrap"><div className="stub wide">
+      <div className="wrap"><div className={`stub wide${fileId && !reading ? ' with-file' : ''}`}>
         <h1>이력서 작성</h1>
         <p className="sub">한 번 작성해 두면 모든 공고의 AI 면접에 사용됩니다. 지금 쓰지 않아도 지원할 때 올릴 수 있습니다.</p>
+        <WithOriginal fileId={reading ? null : fileId} name={fileName}>
         <form className="form" onSubmit={submit} noValidate aria-label="이력서">
           {fields}
           <div className="row2">
@@ -151,6 +153,7 @@ export function MyResume() {
             <button className="btn btn-primary" type="submit" disabled={busy || reading}>저장하고 공고 보기</button>
           </div>
         </form>
+        </WithOriginal>
       </div></div>
     );
   }
@@ -165,6 +168,7 @@ export function MyResume() {
       {back && <div className="notice" style={{ margin: 0 }}>저장하면 지원하던 공고의 개인정보 동의 단계로 돌아갑니다.</div>}
       <QueryState isPending={resume.isPending} error={resume.error} onRetry={() => resume.refetch()}>
         {() => (
+          <WithOriginal fileId={reading ? null : fileId} name={fileName}>
           <form className="card form" onSubmit={submit} noValidate aria-label="이력서">
             {fields}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -174,6 +178,7 @@ export function MyResume() {
               </button>
             </div>
           </form>
+          </WithOriginal>
         )}
       </QueryState>
     </>

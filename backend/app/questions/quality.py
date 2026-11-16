@@ -121,10 +121,11 @@ def judge(c, p, others=None) -> list[str]:
     g = p.grounding or {}
     if p.source == "AI":
         out += _grounding(c, p)
+        told = bool(((g.get("resume") or {}).get("link")))  # ADR-0032: what it says they did was checked against the resume
         if p.slot == Area.MOTIVATION.value and not p.fixed:  # a fixed sentence (MOTIVATION_QUESTION) is a motivation question
-            out += problems(text, kind="COMPANY", level=c.level, basis=(g.get("basis") or {}).get("text") or "")
+            out += problems(text, kind="COMPANY", level=c.level, basis=(g.get("basis") or {}).get("text") or "", from_resume=told)
         elif p.slot == Area.JOB_SKILL.value:
-            out += problems(text, kind="JOB", level=c.level, basis=(g.get("basis") or {}).get("text") or "")
+            out += problems(text, kind="JOB", level=c.level, basis=(g.get("basis") or {}).get("text") or "", from_resume=told)
             hard = complexity(text) == "ADVANCED"
             if hard and (c.level == "NEW" and g.get("difficulty") != "ADVANCED" or g.get("difficulty") == "BASIC"):
                 out.append("TOO_HARD")

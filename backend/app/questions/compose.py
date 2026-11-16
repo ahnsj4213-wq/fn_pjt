@@ -50,9 +50,10 @@ from app.models import (
     PostingEvalSettings,
     QuestionSet,
 )
-from app.ai.textrules import polite_did as _did, shared_terms, tidy_particles
-from app.questions import knowledge, quality, rag
-from app.questions.level import DIFFICULTIES, career_level, difficulty_plan
+from app.ai.textrules import _ACTION_NOUNS, _final, content_tokens, shared_terms, tidy_particles
+from app.ai.textrules import polite_did as _did
+from app.questions import knowledge, quality, rag, resume_match
+from app.questions.level import DIFFICULTIES, MAX_LEN, career_level, difficulty_plan
 from app.resumes.schemas import to_ai_resume
 
 log = logging.getLogger("app.questions")
@@ -63,6 +64,20 @@ RESUME_LINE_FLOOR = 0.45
 
 # The motivation question: the model picks which document to ask about, the sentence is fixed (same reason as RESUME_TAILS below).
 MOTIVATION_QUESTION = "이 회사의 ‘{title}’ 업무에서 어떤 점에 관심이 있고, 본인의 어떤 경험을 살릴 수 있다고 보십니까?"
+MOTIVATION_WITH_EXPERIENCE = "이 회사의 ‘{title}’ 업무에서 어떤 점에 관심이 있고, ‘{scene}’ 경험을 어떻게 살릴 수 있다고 보십니까?"
+
+
+def _motivation_link(c, about: str) -> dict | None:
+    """The resume row most related to what the motivation question names (ADR-0032), not yet asked about in this set."""
+    snapshot = getattr(c.app, "resume_snapshot", None)
+    ex = next(iter(resume_match.relevant(snapshot, about, k=1, skip_rows=linked_rows(c)) if snapshot else []), None)
+    return {"ref": ex.ref, "scene": ex.scene, "quote": ex.text, "how": "code"} if ex and ex.scene else None
+
+
+def motivation_question(title: str, scene: str | None = None) -> str:
+    """The fixed motivation sentence; with the resume row the question connects to, named as the candidate wrote it (ADR-0032)."""
+    scene = (scene or "").strip()
+    return MOTIVATION_WITH_EXPERIENCE.format(title=title, scene=scene) if scene else MOTIVATION_QUESTION.format(title=title)
 CODE_QUESTION = "화면의 문제를 코드로 풀어 주십시오. 풀이 설명은 말하지 말고 코드에 주석으로 적어 주십시오."  # no speech on this turn
 
 
@@ -201,7 +216,8 @@ async def _generate(c: _Ctx, kind: str, n: int) -> tuple[list[dict], str]:
         chunk = seen.get(i["source"]["id"]) if i["source"]["type"] == "KNOWLEDGE" else None
         # A project or technology has a name to put in the fixed sentence; "회사 소개" does not, so the model's checked sentence stays.
         if kind == "COMPANY" and chunk is not None and chunk.doc_type != "COMPANY" and not chunk.shared:  # never name another company's project
-            i["text"], i["fixed"] = MOTIVATION_QUESTION.format(title=chunk.title), True
+            link = i.get("resume") or _motivation_link(c, f"{chunk.title} {chunk.text}")
+            i["text"], i["fixed"], i["resume"] = motivation_question(chunk.title, (link or {}).get("scene")), True, link
         if out["no_company_info"]:
             i["replaced"] = "NO_COMPANY_KNOWLEDGE"
             if kind == "COMPANY":  # the model was asked a job question (nothing verified about the company): the slot stays 지원 동기
@@ -231,17 +247,55 @@ async def _generated_attempt(c: _Ctx, kind: str, slots: list[tuple[int, str]], e
     for g in gen:
         if not free:
             break
-        grounding = {"basis": g.get("basis"), "sources": [g["source"]], "retrieved": g["retrieved"], "level": c.level}
+        grounding = {"basis": g.get("basis"), "sources": [g["source"]], "retrieved": g["retrieved"], "level": c.level,
+                     # ADR-0032: which resume excerpts T2 saw, and the one the question connects to (None: not personalised)
+                     "resume": {"given": g.get("resume_given") or [], "link": g.get("resume")}}
         if g.get("difficulty"):
             grounding["difficulty"] = g["difficulty"]
         if g.get("replaced"):
             grounding["replaced"] = g["replaced"]
         seq, slot = free[0]
+        mine = personalise(c, g["text"], (g.get("basis") or {}).get("text") or "") if kind == "JOB" and not g.get("resume") else None
+        if mine is not None:  # ADR-0032: the candidate's own row in front, if the question still passes every rule with it
+            p = Picked(seq, slot, mine[0], "AI", grounding={**grounding, "resume": {**grounding["resume"], "link": mine[1]}},
+                       prompt_version=version, fixed=bool(g.get("fixed")))
+            if not quality.judge(c, p):
+                c.picked.append(p)
+                free.pop(0)
+                taken.append((p, g))
+                continue
         p = Picked(seq, slot, g["text"], "AI", grounding=grounding, prompt_version=version, fixed=bool(g.get("fixed")))
         if quality.take(c, p):
             free.pop(0)
             taken.append((p, g))
     return status
+
+
+PERSONAL_JOB = "{where} 쌓은 경험을 살려, {question}"
+PERSONAL_MIN_SHARED = 2  # words an experience must share with the question and its basis to be put in front of it
+
+
+def linked_rows(c: _Ctx) -> set[str]:
+    """The resume rows questions of this set are already connected to: one row, one question (no repetition)."""
+    return {(((p.grounding or {}).get("resume") or {}).get("link") or {}).get("scene") for p in c.picked} - {None, ""}
+
+
+def personalise(c: _Ctx, question: str, basis: str) -> tuple[str, dict] | None:
+    """A job question the model made from the posting or the documents, with the resume row it is about put in front:
+    "<가상데이터랩 데이터 엔지니어 업무에서> 쌓은 경험을 살려, <question>". The row is the candidate's own (resume_match), the experience
+    shares at least PERSONAL_MIN_SHARED words with the question and its basis, nothing is said about what they did, and the
+    sentence must fit the level's length. None when there is no such row."""
+    snapshot = getattr(c.app, "resume_snapshot", None)
+    if not snapshot:
+        return None
+    target = f"{question} {basis}"
+    for ex in resume_match.relevant(snapshot, target, k=3, skip_rows=linked_rows(c)):
+        if not ex.where or len(content_tokens(ex.text) & content_tokens(target)) < PERSONAL_MIN_SHARED:
+            continue
+        text_ = PERSONAL_JOB.format(where=ex.where, question=question.strip())
+        if len(text_) <= MAX_LEN.get(c.level, 90):
+            return text_, {"ref": ex.ref, "scene": ex.scene, "quote": ex.text, "how": "code"}
+    return None
 
 
 def resume_context(resume: dict, field: str) -> str:
@@ -485,23 +539,95 @@ JOB_TAILS = (
 )
 
 
+# A posting line names a requirement ("Kafka 기반 이벤트 처리 경험이 있으신 분"): what is left once its requirement wording is
+# gone is the work itself ("Kafka 기반 이벤트 처리"), which a question can put the candidate in (ADR-0032).
+_REQUIREMENT_ENDS = [re.compile(x) for x in (
+    r"[\s.!·,]+$", r"\s*(?:을|를)?\s*(?:하실|할)\s*수\s*있(?:으신|는)\s*분$", r"\s*(?:이|가)?\s*(?:있으신|있는|보유하신|보유한|많으신|많은)\s*분$",
+    r"\s*(?:가능하신|가능한|능숙하신|능숙한|익숙하신|익숙한)\s*분$", r"\s*(?:하신|한|하는|되신)\s*분$", r"\s*(?:분|자|인재)$",
+    r"\s*(?:우대|필수|우대합니다|환영합니다|환영)$", r"\s*(?:경험|경력|역량|능력|지식|이해|이해도|기술)$", r"\s*(?:에\s*대한|관련|등)$",
+    r"(?:합니다|해요|함|하기|하는\s*일|업무|담당)$", r"\s*(?:및|또는|와|과)$")]
+TOPIC_MAX = 40
+
+
+def job_topic(line: str) -> str | None:
+    """The work a posting line names, without its requirement wording; None when nothing is left to ask about."""
+    t = line.strip()
+    before = None
+    while t != before:
+        before = t
+        for r in _REQUIREMENT_ENDS:
+            t = r.sub("", t).strip()
+    t = t.strip(" ‘’'\"")
+    return t if 4 <= len(t) <= TOPIC_MAX else None
+
+
+def job_work(topic: str) -> str:
+    """The topic as a piece of work: "API를 설계하고 개발" -> "API를 설계하고 개발하는 일", "Kafka 기반 이벤트 처리" -> "Kafka 기반
+    이벤트 처리와 관련된 일"."""
+    if re.search(r"\S(을|를)\s", topic) and topic.endswith(_ACTION_NOUNS + ("처리", "사용", "활용")):
+        return f"{topic}하는 일"
+    last = topic[-1]
+    return f"{topic}{'과' if _final(last) > 0 else '와'} 관련된 일"
+
+
+JOB_SITUATION_TAILS = (
+    "맡는다면 어떤 순서로 접근하시겠습니까?",
+    "맡는다면 가장 먼저 확인할 것은 무엇입니까?",
+    "맡는다면 가장 조심해야 할 점은 무엇이라고 생각하십니까?",
+)
+
+
+DONE_MAX = 40  # characters of a resume sentence the code-made question may repeat
+
+
+def _with_experience(ex, topic: str, limit: int) -> str | None:
+    """'<row>에서 <what the resume says they did>…셨는데, 그 경험을 <the posting's work>에 어떻게 살리시겠습니까?', or with the row alone
+    when that is too long for the candidate's level. The experience is the resume's own sentence (copied), the work the posting's."""
+    if not ex.where:
+        return None
+    work = job_work(topic)
+    said = ex.text.strip().replace("\n", " ")
+    # only a sentence short enough to be said whole: a cut one loses what was done ("120ms로 줄이셨는데" without the API)
+    done = _did(tidy_particles(said)) if len(said) <= DONE_MAX else None
+    for text_ in ([f"{ex.where} {done}, 그 경험을 {work}에 어떻게 살리시겠습니까?"] if done else []) + \
+            [f"{ex.where} 쌓은 경험을 {work}에 어떻게 살리시겠습니까?"]:
+        if len(text_) <= limit:
+            return text_
+    return None
+
+
 def posting_fallback(c: _Ctx, kind: str, slots: list[tuple[int, str]]) -> None:
-    """지원 동기(COMPANY)·직무(JOB) slots a generation left empty: a question about a line of the posting, made by code."""
+    """지원 동기(COMPANY)·직무(JOB) slots a generation left empty, made by code (QST-07). The posting's line is not copied: its work
+    (job_topic) becomes the situation, connected to an experience the resume states (ADR-0032), else asked on its own."""
+    snapshot = c.app.resume_snapshot or {}
     lines = posting_lines(c.posting)
     title = (c.posting.title or "").strip() or "이"
+    used_rows = linked_rows(c)
     for n, (seq, slot) in enumerate(slots):
-        line = next((x for x in lines if not any(x[:12] in t for t in c.texts())), None)
+        line = next((x for x in lines if job_topic(x) and not any(job_topic(x) in t or x[:12] in t for t in c.texts())), None)
+        topic = job_topic(line) if line else None
+        ex = next(iter(resume_match.relevant(snapshot, line or title, c.posting.duties or "", k=1, skip_rows=used_rows)), None)
+        text_ = None
         if kind == "COMPANY":
-            text_ = MOTIVATION_QUESTION.format(title=title) if n == 0 and not any(title in t for t in c.texts()) or not line else \
-                f"공고의 ‘{line}’ 업무에서 어떤 점에 관심이 있고, 본인의 어떤 경험을 살릴 수 있다고 보십니까?"
-        elif line:
-            text_ = f"공고에 적힌 ‘{line}’ {JOB_TAILS[(len(c.picked) + n) % len(JOB_TAILS)]}"
-        else:
+            text_ = motivation_question(title, ex.scene if ex else None)
+            if any(similar_question(text_, t) for t in c.texts()) and topic:
+                text_ = f"이 직무의 {job_work(topic)}에 관심을 갖게 된 이유는 무엇이고, 본인의 어떤 경험을 살릴 수 있다고 보십니까?"
+        elif topic:
+            text_ = (_with_experience(ex, topic, MAX_LEN.get(c.level, 90)) if ex else None) or \
+                f"이 직무에서 {job_work(topic)}을 {JOB_SITUATION_TAILS[(len(c.picked) + n) % len(JOB_SITUATION_TAILS)]}"
+        if not text_ or any(similar_question(text_, t) for t in c.texts()):
             text_ = f"{title} 직무에서 가장 중요하다고 생각하는 일은 무엇이며, 그 이유는 무엇입니까?"
+            ex = None
         if any(similar_question(text_, t) for t in c.texts()):
             text_ = f"{title} 직무를 수행할 때 {JOB_TAILS[(len(c.picked) + n + 1) % len(JOB_TAILS)]}"
+        linked = ex is not None and bool(ex.scene) and ex.scene in text_
+        resume = {"given": [ex.ref] if ex else [],
+                  "link": {"ref": ex.ref, "scene": ex.scene, "quote": ex.text, "how": "template"} if linked else None}
+        if linked:
+            used_rows.add(ex.scene)
         c.picked.append(Picked(seq, slot, text_, "TEMPLATE", grounding={
-            "sources": [{"type": "POSTING", "id": str(c.posting.id)}], "fallback": "POSTING", **({"basis": {"line": line}} if line else {})}))
+            "sources": [{"type": "POSTING", "id": str(c.posting.id)}], "fallback": "POSTING",
+            **({"basis": {"line": line, "topic": topic}} if line else {}), "resume": resume}))
 
 
 async def plan_slots(db: AsyncSession, posting: JobPosting, settings: PostingEvalSettings

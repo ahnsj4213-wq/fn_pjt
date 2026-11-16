@@ -43,7 +43,7 @@
 |---|---|---|---|---|---|---|---|
 | RES-01 | 지원 시 이력서 필수. 등록본 불러오기 / PDF 업로드 / 직접 작성 | P0 | resumes, applications | `app/resumes`, `pages/candidate/Apply` | T-RES-01 | 미착수 | |
 | RES-02 | PDF만, 10MB 이하, 드래그 앤 드롭, 다른 형식·손상 파일 거부와 이유 안내 | P0 | resumes / `POST /api/candidate/resume-files` | `app/resumes/pdf.py` | T-RES-02, AC-06 | 미착수 | 서버에서 크기·매직바이트·파싱 가능 여부 재검사 |
-| RES-03 | PDF 텍스트 추출 → 표준 항목(성명·학력·경력·프로젝트·기술 스택·자격증), 원문에 있는 내용만 | P0 | resumes | `app/resumes/extract.py` | T-RES-03, AC-06 | 미착수 | LLM 구조화 + 원문 부분 문자열 검증. 원문에 없는 값은 버림 |
+| RES-03 | PDF 텍스트 추출 → 표준 항목(성명·학력·경력·프로젝트·기술 스택·자격증), 원문에 있는 내용만 | P0 | resumes | `app/resumes/extract.py` | T-RES-03, AC-06 | 미착수 | LLM 구조화 + 원문 부분 문자열 검증. 원문에 없는 값은 버림. **ADR-0032(2026-11-16)**: 블록 원문 보존 `details`(줄 범위·소속 행), 쪽 제목형 머리글 인식, 제목 건너는 설명 채우기 제거. `app/resumes/sections.py`, `tests/test_resume_details.py`, `tests/test_resume_sections.py` |
 | RES-04 | 스캔 PDF는 "직접 입력" 안내, OCR은 P2 | P0 | resumes | `app/resumes/router.py`, `app/resumes/ocr.py`, `app/resumes/ocr_extract.py`, `app/jobs/handlers.py` | T-RES-04, `tests/test_resume_ocr.py` | 구현 | 페이지별 글자 50자 미만이면 OCR(Tesseract, worker). 평균 신뢰도 0.5 미만·엔진 없음 → NO_TEXT 직접 입력 안내. 0.7 미만 줄이 들어간 항목은 확인 표시. PNG/JPG 사진도 허용. 원래 "OCR 흉내 금지"였으나 실제 OCR을 구현했고 화면정의서가 OCR을 요구하며 사용자가 팀원 로직 반영을 요청(2026-10-30). 실제 휴대폰 사진 미검증 |
 | RES-05 | 추출 결과 확인·수정 | P0 | resumes / `PUT /api/candidate/resume` | `pages/candidate/ResumeEditor` | T-RES-05, AC-06 | 미착수 | |
 | RES-06 | 직접 작성 최소 필수: 성명 + (학력 1건 또는 경력 1건) | P0 | resumes | `app/resumes/schemas.py` | T-RES-06 | 미착수 | |
@@ -55,13 +55,13 @@
 
 | ID | 요약 | 우선 | 도메인 / API | 구현 | 테스트 ID | 상태 | 근거·비고 |
 |---|---|---|---|---|---|---|---|
-| QST-01 | 질문은행(직무·유형별), 덜 쓴 질문부터, 부족하면 AI 생성 후 은행에 추가, 유사 질문 중복 저장 금지 | P0 | questions | `app/questions/bank.py` | T-QST-01 | 미착수 | 유사도는 로컬 임베딩 (ADR-0005). 생성 시 RAG 예시 3개(`app/questions/rag.py`, `tests/test_question_rag.py`) **ADR-0020: 동기·직무는 회사 자료 기반 생성 우선, 은행은 대체 경로로 순서 변경.** `app/questions/knowledge.py`, `tests/test_company_knowledge.py`  **ADR-0031(2026-11-13): 질문은행 사용 중단, `question_bank_backup_20261113`으로 보관.** `tests/test_question_bank_retired.py` |
+| QST-01 | 질문은행(직무·유형별), 덜 쓴 질문부터, 부족하면 AI 생성 후 은행에 추가, 유사 질문 중복 저장 금지 | P0 | questions | `app/questions/bank.py` | T-QST-01 | 미착수 | 유사도는 로컬 임베딩 (ADR-0005). 생성 시 RAG 예시 3개(`app/questions/rag.py`, `tests/test_question_rag.py`) **ADR-0020: 동기·직무는 회사 자료 기반 생성 우선, 은행은 대체 경로로 순서 변경.** `app/questions/knowledge.py`, `tests/test_company_knowledge.py`  **ADR-0031(2026-11-13): 질문은행 사용 중단, `question_bank_backup_20261113`으로 보관.** `tests/test_question_bank_retired.py`  **ADR-0032: 직무·지원동기 질문에 이력서 관련 문장 연결(검증된 경우만), 경험 가정 검사.** `app/questions/resume_match.py`, `tests/test_question_personalization.py` |
 | QST-02 | 면접 시작 전 본질문 10개 구성 (6.1) | P0 | questions / 준비 단계 작업 | `app/questions/compose.py` | T-QST-02 | 미착수 | 인성2·이력서2·기업2·직무4, 순서 고정 **2026-11-07 변경(ADR-0022, 사용자 결정): 시작 전에는 첫 질문만, 이후는 면접 중 답변을 반영해 한 문항씩 생성. `AIHIRE_QUESTION_MODE=upfront`로 원래 방식** **2026-11-09 ADR-0025: 기본값을 upfront로 되돌림(본질문·TTS를 면접 전 준비, 면접 중 LLM은 꼬리질문만). 지원자 수준별 난이도 배분과 질문 품질 코드 검사 추가 (`app/questions/level.py`, tests/test_question_level.py)** |
 | QST-03 | 이력서 질문은 이력서에 실제 적힌 경험·프로젝트만 근거, 근거 없으면 버리고 은행 질문으로 | P0 | questions | `app/questions/resume_q.py` | T-QST-03, AC-07 | 미착수 | 근거 문장을 스냅샷 원문과 코드로 대조 ADR-0020: 근거를 `grounding.sources`(RESUME_SNAPSHOT)로 추적, 공고·회사 자료와 겹치는 항목 우선 |
 | QST-04 | 공고별 커스텀 질문(1개), 비우면 자동 채움 | P1 | postings / 평가 설정 API | `app/postings` | T-QST-04 | 미착수 | ADM-05(P0)가 커스텀 질문 설정을 포함 → 우선순위 불일치 OQ-02 |
 | QST-05 | 답변에 따른 꼬리질문 (6.2) | P0 | interview | `app/interview/followup.py` | T-QST-05, AC-12 | 미착수 | ADR-0020: 앞선 답변·회사 자료를 입력에 추가, 근거를 `grounding.sources`로 추적 |
 | QST-06 | 출제 질문은 변경 불가 스냅샷 | P0 | questions / DB 트리거 | `migrations` | T-QST-06 | 미착수 | UPDATE 금지 트리거 |
-| QST-07 | 생성 실패 시 1회 재시도 후 질문은행 대체 | P0 | questions | `app/questions/compose.py` | T-QST-07 | 미착수 | **(변경, ADR-0031)** 대체는 공고·이력서 기반 코드 질문(`TEMPLATE`). 질문은행 대체 없음 |
+| QST-07 | 생성 실패 시 1회 재시도 후 질문은행 대체 | P0 | questions | `app/questions/compose.py` | T-QST-07 | 미착수 | **(변경, ADR-0031)** 대체는 공고·이력서 기반 코드 질문(`TEMPLATE`). 질문은행 대체 없음  **ADR-0032: 대체 질문은 공고 문장 복사 대신 공고 업무+이력서 경험.** |
 | QST-08 | JD에서 질문 후보 자동 추출·담당자 선택 | P2 | — | — | — | 미착수 | |
 
 ### 5.5 AI 면접 (INT)

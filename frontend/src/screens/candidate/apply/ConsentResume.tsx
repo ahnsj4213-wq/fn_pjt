@@ -11,6 +11,7 @@ import { fetchPosting } from '@/api/common/postings';
 import { formatDate } from '@/shared/format';
 import { ApiError } from '@/shared/http/client';
 import { describeError } from '@/shared/http/errors';
+import { WithOriginal } from '@/screens/candidate/resume/OriginalFile';
 import { useToast } from '@/shared/ui/overlay';
 import { applyPath, loadDeviceCheck } from './applyState';
 import { Stepper } from './Stepper';
@@ -193,7 +194,7 @@ export function ConsentResume() {
   };
 
   return (
-    <div className="wrap"><div className="stub xwide">
+    <div className="wrap"><div className={`stub xwide${extracted ? ' with-file' : ''}`}>
       <Stepper cur={1} />
       <h1>개인정보 동의와 이력서</h1>
       <p className="sub">{p ? `${p.company_name} · ${p.title}` : ''}</p>
@@ -229,16 +230,18 @@ export function ConsentResume() {
             <b>{reading.join(', ')}</b><p className="hint">파일을 읽고 이력서 정보를 뽑고 있습니다. 스캔한 PDF와 사진은 글자 인식(OCR)으로 읽습니다.</p>
           </div></div>
         ) : extracted ? (
-          <div className="extract">
-            <div className="ex-h"><b>파일에서 읽은 정보입니다</b><span className="hint">잘못 읽은 부분이 있으면 바로 고쳐 주십시오</span></div>
-            <div className="row2">{box('name', '이름')}{box('edu', '학력')}</div>
-            <div className="row2">{box('career', '경력')}{box('skill', '보유 기술')}</div>
-            {box('proj', '주요 프로젝트', true)}
-            <div className="mfoot" style={{ justifyContent: 'flex-start' }}>
-              <button className="btn btn-primary" type="button" disabled={busy} onClick={() => void register()}>이 내용으로 이력서 등록</button>
-              <button className="btn" type="button" onClick={() => setExtracted(null)}>다른 파일 올리기</button>
+          <WithOriginal fileId={extracted.fileId} name={extracted.fileName}>
+            <div className="extract">
+              <div className="ex-h"><b>파일에서 읽은 정보입니다</b><span className="hint">오른쪽 원본과 비교해 잘못 읽은 부분이 있으면 바로 고쳐 주십시오</span></div>
+              <div className="row2">{box('name', '이름')}{box('edu', '학력')}</div>
+              <div className="row2">{box('career', '경력')}{box('skill', '보유 기술')}</div>
+              {box('proj', '주요 프로젝트', true)}
+              <div className="mfoot" style={{ justifyContent: 'flex-start' }}>
+                <button className="btn btn-primary" type="button" disabled={busy} onClick={() => void register()}>이 내용으로 이력서 등록</button>
+                <button className="btn" type="button" onClick={() => setExtracted(null)}>다른 파일 올리기</button>
+              </div>
             </div>
-          </div>
+          </WithOriginal>
         ) : (
           <>
             {reg && (

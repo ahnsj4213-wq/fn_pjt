@@ -100,3 +100,21 @@ async def test_resume_form_fields_stay_out_of_ai_input(make_client):
     assert not {"desired_job", "experience_level", "intro", "name"} & set(to_ai_resume(saved))
     bad = await cand.put("/api/candidate/resume", json={"content": {**RESUME, "desired_job": "CHEF"}})
     assert bad.status_code == 422
+
+
+async def test_the_original_file_is_shown_only_to_its_owner(make_client, fake_ai):
+    """ADR-0032: the side panel beside the resume form opens the candidate's own upload; someone else gets 404."""
+    cand, other = make_client(), make_client()
+    await candidate(cand)
+    await candidate(other)
+    body = docx(["김지원", "학력: 한국대학교 컴퓨터공학과"])
+    r = await cand.post("/api/candidate/resume-files", files={"file": ("cv.docx", body, "application/octet-stream")})
+    fid = r.json()["file_id"]
+    assert r.json()["media_type"].endswith("wordprocessingml.document")
+    got = await cand.get(f"/api/candidate/resume-files/{fid}/content")
+    assert got.status_code == 200 and got.content == body
+    assert got.headers["content-disposition"].startswith("attachment")  # a DOCX is downloaded, never shown inline
+    assert got.headers["x-frame-options"] == "SAMEORIGIN" and "frame-ancestors 'self'" in got.headers["content-security-policy"]
+    assert got.headers["x-content-type-options"] == "nosniff" and got.headers["cache-control"] == "no-store"
+    assert (await other.get(f"/api/candidate/resume-files/{fid}/content")).status_code == 404
+    assert (await other.get(f"/api/candidate/resume-files/{fid}")).status_code == 404

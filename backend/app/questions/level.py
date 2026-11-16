@@ -94,8 +94,22 @@ _IF_ANY = re.compile(r"있다면|있으신가요|있나요|있으십니까|있�
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 
 
+_TECH_RUN = re.compile(r"(?<![A-Za-z])[A-Za-z][A-Za-z0-9+#.\-]*(?:\s+[A-Za-z][A-Za-z0-9+#.\-]*)*")
+
+
 def techs(text: str) -> set[str]:
-    return {t.lower() for t in _TECH.findall(text or "") if t.lower() not in _GENERIC}
+    """The technology names a question mentions, one per name: Latin words side by side are one name ("Spark Connect",
+    "Node Ready"), and a name inside a longer one is that one ("GPU" with "GPU-aware"), 2026-11-16 reject analysis (ADR-0032)."""
+    names = set()
+    for run in _TECH_RUN.findall(text or ""):
+        words = [t.lower() for t in _TECH.findall(run) if t.lower() not in _GENERIC]
+        if words:
+            names.add(" ".join(words))
+    return {n for n in names if not any(n != m and _contains_name(m, n) for m in names)}
+
+
+def _contains_name(longer: str, name: str) -> bool:
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", longer))
 
 
 _SITUATION = re.compile(r"한다면|라면|하시겠|상황|경우에")

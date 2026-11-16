@@ -6,7 +6,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Request, UploadFile
+from fastapi import APIRouter, Depends, Request, Response, UploadFile
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -139,7 +139,8 @@ async def copy_for_application(db: AsyncSession, src: ResumeFile) -> uuid.UUID:
 
 
 def _file_out(rf: ResumeFile) -> dict:
-    return {"file_id": str(rf.id), "page_count": rf.page_count, "text_extractable": rf.text_extractable,
+    return {"file_id": str(rf.id), "media_type": media_type(rf.storage_key), "page_count": rf.page_count,
+            "text_extractable": rf.text_extractable,
             "extraction_status": rf.extraction_status, "fields": rf.extracted_fields,
             "method": rf.extraction_method,
             "ocr_confidence": float(rf.ocr_confidence) if rf.ocr_confidence is not None else None,
@@ -151,6 +152,27 @@ def _file_out(rf: ResumeFile) -> dict:
 async def get_resume_file(file_id: uuid.UUID, ctx: CandidateCtx = Depends(require_candidate),
                           db: AsyncSession = Depends(get_db)) -> dict:
     return _file_out(await get_for_owner(db, ResumeFile, file_id, ctx.user_id, owner_col="owner_id"))
+
+
+# The candidate's own file beside the form that was filled from it, to check one against the other. Same rules as the
+# recruiter's view (T26: a server-chosen media type, never sniffed or cached) except that our own pages may frame it: a PDF or
+# an image is shown inline in the form's side panel; a DOCX, which no browser shows, is downloaded.
+PREVIEWABLE = {"application/pdf", "image/png", "image/jpeg"}
+
+
+@router.get("/resume-files/{file_id}/content")
+async def get_resume_file_content(file_id: uuid.UUID, ctx: CandidateCtx = Depends(require_candidate),
+                                  db: AsyncSession = Depends(get_db)) -> Response:
+    rf = await get_for_owner(db, ResumeFile, file_id, ctx.user_id, owner_col="owner_id")  # someone else's: 404
+    data = await get_storage().get(storage_key(rf.storage_key))
+    if data is None:
+        raise AppError(404, "NOT_FOUND", "파일을 찾을 수 없습니다.")
+    kind = media_type(rf.storage_key)
+    ext = Path(rf.storage_key).suffix
+    return Response(data, media_type=kind, headers={
+        "Content-Disposition": f'{"inline" if kind in PREVIEWABLE else "attachment"}; filename="resume{ext}"',
+        "Content-Security-Policy": "frame-ancestors 'self'", "X-Frame-Options": "SAMEORIGIN",
+        "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
 
 @router.get("/resume")
