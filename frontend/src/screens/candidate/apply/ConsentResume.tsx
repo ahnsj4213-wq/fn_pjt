@@ -239,7 +239,7 @@ export function ConsentResume() {
               {box('skill', '보유 기술')}
               {(extracted.unsure.has('career') || extracted.unsure.has('projects'))
                 && <small className="hint warn">경력·프로젝트에 흐리게 읽힌 부분이 있습니다. 원본과 같은지 확인해 주십시오</small>}
-              <ExperienceRows idPrefix="ex" career={extracted.career} projects={extracted.projects}
+              <ExperienceRows idPrefix="ex" career={extracted.career} projects={extracted.projects} showCareer={extracted.career.length > 0}
                 onCareer={(career) => setExtracted((x) => x && { ...x, career })}
                 onProjects={(projects) => setExtracted((x) => x && { ...x, projects })} />
               <div className="mfoot" style={{ justifyContent: 'flex-start' }}>

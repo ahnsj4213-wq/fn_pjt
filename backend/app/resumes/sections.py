@@ -185,9 +185,33 @@ def apply_sections(fields: dict, s: Sections) -> dict:
     """`fields` in the form shape (from_ai_resume), completed from the file's text. A row's description becomes the text of
     the blocks that belong to it; a row no block belongs to keeps the model's short description."""
     fields["intro"] = s.intro
+    not_jobs_to_projects(fields)
     fields["details"] = details(fields, s.blocks)
     _complete(fields, fields["details"])
     return fields
+
+
+# What the model sometimes puts under 경력 although it is no job: school and lab activities, projects, clubs, courses. A
+# company internship stays a career row (it is work at a company; level.py leaves it out of the years on its own).
+NOT_A_JOB = re.compile(r"학부\s?연구생|연구\s?보조|교내|프로젝트|project|동아리|학회|해커톤|공모전|스터디|부트캠프|교육생|수강|국비|"
+                       r"졸업\s?작품|캡스톤|봉사", re.I)
+
+
+def not_jobs_to_projects(fields: dict) -> None:
+    """Career rows that are no job become project rows, word for word (name → title; role, period and description kept), so
+    a newcomer's resume has no 경력 it does not state (2026-11-16). A project of the same name is not repeated."""
+    jobs, moved = [], []
+    for row in fields.get("career") or []:
+        if NOT_A_JOB.search(f"{row.get('company') or ''} {row.get('role') or ''}"):
+            moved.append({"title": row.get("company") or row.get("role") or "", "role": row.get("role"),
+                          "period": row.get("period"), "description": row.get("description")})
+        else:
+            jobs.append(row)
+    if not moved:
+        return
+    have = {(p.get("title") or "").strip() for p in fields.get("projects") or []}
+    fields["career"] = jobs
+    fields["projects"] = [p for p in moved if p["title"].strip() and p["title"].strip() not in have] + list(fields.get("projects") or [])
 
 
 # ── details: every block word for word, where it came from and which row it belongs to (ADR-0032) ────────────────────

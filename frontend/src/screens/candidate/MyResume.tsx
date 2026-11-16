@@ -11,7 +11,7 @@ import { QueryState } from '@/shared/ui/extra';
 import { useToast } from '@/shared/ui/overlay';
 import { Field } from '@/shared/ui/wf';
 import { ExperienceRows } from './resume/ExperienceRows';
-import { flatMissing, fromFlat, toFlat, type FlatResume } from './resume/flatResume';
+import { flatMissing, fromFlat, showsCareer, toFlat, type FlatResume } from './resume/flatResume';
 
 const POLL_MS = 1500;
 const POLL_LIMIT = 120; // ~3 minutes: OCR of scanned pages, then the extraction model
@@ -142,7 +142,7 @@ export function MyResume() {
           </select></div>
       </div>
       <Field label="보유 기술" id="rs-skill" value={form.skill} onChange={set('skill')} hint="쉼표로 나눠 적어 주십시오" />
-      <ExperienceRows idPrefix="rs" career={form.career} projects={form.projects}
+      <ExperienceRows idPrefix="rs" career={form.career} projects={form.projects} showCareer={showsCareer(form)}
         onCareer={(career) => setForm((f) => ({ ...f, career }))} onProjects={(projects) => setForm((f) => ({ ...f, projects }))} />
       <div className="field"><label htmlFor="rs-intro">자기소개서 (선택)</label>
         <textarea id="rs-intro" value={form.intro} onChange={set('intro')} placeholder="지원 동기나 강점을 자유롭게 적어 주십시오" /></div>

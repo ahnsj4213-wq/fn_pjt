@@ -43,11 +43,14 @@ export function fromFlat(f: FlatResume, base: ResumeContent): ResumeContent {
     intro: f.intro.trim() || null,
     education: !changed('edu') ? base.education
       : f.edu.split(',').map((s) => s.trim()).filter(Boolean).map((school) => ({ school })),
-    career: fromCareerRows(f.career),
+    career: f.experience_level === 'NEW' ? [] : fromCareerRows(f.career), // a newcomer's resume has no 경력
     projects: fromProjectRows(f.projects),
     skills: !changed('skill') ? base.skills : f.skill.split(',').map((s) => s.trim()).filter(Boolean),
   };
 }
+
+/** The 경력 boxes: shown for a chosen experienced level, or before one is chosen when the file had career rows. */
+export const showsCareer = (f: FlatResume) => (f.experience_level ? f.experience_level !== 'NEW' : f.career.length > 0);
 
 /** RES-06: name and at least one education or career row (the API checks it again). */
 export function flatMissing(c: ResumeContent): string | null {

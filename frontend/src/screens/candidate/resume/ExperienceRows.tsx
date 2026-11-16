@@ -24,15 +24,17 @@ interface Props {
   projects: ProjectRow[];
   onCareer: (rows: CareerRow[]) => void;
   onProjects: (rows: ProjectRow[]) => void;
+  /** 경력 only for an experienced candidate's resume; a newcomer's has projects only (2026-11-16). */
+  showCareer: boolean;
 }
 
 /** 경력 and 프로젝트·경험, one block of boxes per row, so each can be checked against the original file beside it. */
-export function ExperienceRows({ idPrefix, career, projects, onCareer, onProjects }: Props) {
+export function ExperienceRows({ idPrefix, career, projects, onCareer, onProjects, showCareer }: Props) {
   const put = <T,>(rows: T[], i: number, patch: Partial<T>) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r));
   const drop = <T,>(rows: T[], i: number) => rows.filter((_, j) => j !== i);
   return (
     <>
-      <fieldset className="rows">
+      {showCareer && <fieldset className="rows">
         <legend>경력 <span className="hint">회사마다 하나씩</span></legend>
         {career.map((r, i) => {
           const id = `${idPrefix}-c${i}`;
@@ -57,7 +59,7 @@ export function ExperienceRows({ idPrefix, career, projects, onCareer, onProject
         })}
         <button className="btn btn-sm" type="button" style={{ justifySelf: 'start' }}
           onClick={() => onCareer([...career, { company: '', role: '', period: '', description: '' }])}>+ 경력 추가</button>
-      </fieldset>
+      </fieldset>}
       <fieldset className="rows">
         <legend>프로젝트·경험 <span className="hint">프로젝트마다 하나씩</span></legend>
         {projects.map((r, i) => {

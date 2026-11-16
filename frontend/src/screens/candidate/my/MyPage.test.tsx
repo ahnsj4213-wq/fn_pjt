@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { candidateSession, renderRoutes } from '@/test/render';
-import { fromFlat, toFlat } from '../resume/flatResume';
+import { fromFlat, showsCareer, toFlat } from '../resume/flatResume';
 import { MyApplications } from '../MyApplications';
 import { MyResume } from '../MyResume';
 import { MyPageLayout } from './MyPageLayout';
@@ -145,5 +145,10 @@ describe('My Page (SC-A09~A11, SC-A15)', () => {
     expect(edited.career).toEqual(base.career);
     expect(edited.projects).toEqual([base.projects[0], { title: '쇼핑몰', role: '팀장', period: '2023', description: 'Django\n결제 연동' }]);
     expect(edited.skills).toEqual(['Python', 'Go']);
+    // a newcomer's resume has no 경력: the boxes are hidden and nothing is saved there
+    expect(showsCareer({ ...flat, experience_level: 'NEW' })).toBe(false);
+    expect(showsCareer({ ...flat, experience_level: 'Y1_3' })).toBe(true);
+    expect(showsCareer({ ...flat, experience_level: '', career: [] })).toBe(false);
+    expect(fromFlat({ ...flat, experience_level: 'NEW' }, base).career).toEqual([]);
   });
 });

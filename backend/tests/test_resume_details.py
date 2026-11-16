@@ -124,3 +124,17 @@ def test_t1_drops_a_company_the_file_does_not_contain():
 
 def test_a_resume_without_details_still_validates():
     ResumeContent.model_validate({"name": "홍길동", "career": [{"company": "가상"}]})
+
+
+def test_school_lab_and_project_rows_are_projects_not_careers():
+    from app.resumes.sections import not_jobs_to_projects
+    fields = {"career": [
+        {"company": "교내 AI 서비스 연구팀", "role": "학부연구생", "period": "2025.07~2025.12", "description": "연구 보조"},
+        {"company": "에이전트 개발 프로젝트", "role": None, "period": "2026.03~2026.08", "description": None},
+        {"company": "가상커머스", "role": "백엔드 인턴", "period": "2024.01~2024.06", "description": None}],
+        "projects": [{"title": "에이전트 개발 프로젝트", "description": "LangGraph"}]}
+    not_jobs_to_projects(fields)
+    assert [c["company"] for c in fields["career"]] == ["가상커머스"]  # a company internship is still work
+    assert fields["projects"][0] == {"title": "교내 AI 서비스 연구팀", "role": "학부연구생", "period": "2025.07~2025.12",
+                                     "description": "연구 보조"}
+    assert [p["title"] for p in fields["projects"]] == ["교내 AI 서비스 연구팀", "에이전트 개발 프로젝트"]  # not repeated
