@@ -839,3 +839,28 @@ table.t tbody tr:hover { background: var(--softer); }
 /* ADR-0029: test postings from public tech blogs — always labelled, never mistaken for a real opening. */
 .virtual-badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn-ink); font-size: 12px; font-weight: 700; vertical-align: middle; }
 .virtual-notice { margin: 8px 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--warn-ink); font-size: 14px; line-height: 1.5; }
+
+/* ADR-0032: the form beside the original resume file, to check one against the other */
+.with-orig { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.with-orig-form { min-width: 0; display: grid; gap: 12px; }
+.orig { position: sticky; top: 76px; display: grid; grid-template-rows: auto 1fr; gap: 8px; height: calc(100vh - 120px); min-height: 420px;
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--surface); }
+.orig-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.orig-frame { width: 100%; height: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.orig-img { width: 100%; height: 100%; object-fit: contain; object-position: top; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.stub.with-file { max-width: 1240px; }
+@media (max-width: 900px) {
+  .with-orig { grid-template-columns: 1fr; }
+  .orig { position: static; height: 70vh; }
+}
+
+
+/* ADR-0032: one block of boxes per career and project row */
+.rows { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; min-width: 0; }
+.rows > legend { font-weight: 700; font-size: 14px; margin-bottom: 6px; padding: 0; }
+.rows > legend .hint { font-weight: 400; margin-left: 6px; }
+.row-box { position: relative; display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.row3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.row3 > .field { min-width: 0; }
+.row-box textarea { min-height: 140px; }
+.row-del { justify-self: end; }

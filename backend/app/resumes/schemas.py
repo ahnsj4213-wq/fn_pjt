@@ -35,6 +35,17 @@ class Certificate(_Item):
     date: str | None = Field(None, max_length=50)
 
 
+class Detail(_Item):
+    """A block of the uploaded file, word for word (ADR-0032): its heading, where it came from (1-based line numbers of the
+    extracted text) and the career/project row it belongs to ("projects:<title>"), found by its name or by clearly shared words."""
+    heading: str = Field(max_length=200)
+    kind: Literal["career", "projects", "skills", "summary"]
+    text: str = Field(min_length=1, max_length=4000)
+    row: str | None = Field(None, max_length=300)
+    how: Literal["name", "similar"] | None = None
+    lines: list[int] | None = Field(None, min_length=2, max_length=2)
+
+
 class ResumeContent(_Item):
     name: str = Field(min_length=1, max_length=50)
     education: list[Education] = Field(default_factory=list, max_length=20)
@@ -46,6 +57,8 @@ class ResumeContent(_Item):
     desired_job: Literal["DEV", "DATA_AI", "DESIGN", "MARKETING", "MGMT"] | None = None
     experience_level: Literal["NEW", "Y1_3", "Y3_5", "Y5_PLUS"] | None = None
     intro: str | None = Field(None, max_length=10000)
+    # Read from the file, not typed (ADR-0032): what the form's one line per row cannot hold.
+    details: list[Detail] = Field(default_factory=list, max_length=80)
 
     @model_validator(mode="after")
     def _minimum(self) -> "ResumeContent":
@@ -57,7 +70,7 @@ class ResumeContent(_Item):
 
 # The AI contract (TRD 05 T1 "resume-schema v1") names two sections differently from the stored form/snapshot.
 _AI_TO_FORM = {"experience": "career", "certifications": "certificates"}
-_FORM_ONLY = {"name", "desired_job", "experience_level", "intro"}
+_FORM_ONLY = {"name", "desired_job", "experience_level", "intro", "details"}
 _FORM_TO_AI = {v: k for k, v in _AI_TO_FORM.items()}
 AI_DESCRIPTION_MAX = 800
 
@@ -100,4 +113,7 @@ def flatten(c: ResumeContent) -> str:
         lines.append("기술 스택: " + ", ".join(c.skills))
     for cert in c.certificates:
         lines.append(" ".join(x for x in ("자격증:", cert.name, cert.issuer, cert.date) if x))
+    for d in c.details:
+        lines.append(f"{d.heading}:")
+        lines.append(d.text)
     return "\n".join(lines)

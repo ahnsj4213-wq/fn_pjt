@@ -11,6 +11,10 @@ import { fetchPosting } from '@/api/common/postings';
 import { formatDate } from '@/shared/format';
 import { ApiError } from '@/shared/http/client';
 import { describeError } from '@/shared/http/errors';
+import {
+  ExperienceRows, fromCareerRows, fromProjectRows, toCareerRows, toProjectRows, type CareerRow, type ProjectRow,
+} from '@/screens/candidate/resume/ExperienceRows';
+import { WithOriginal } from '@/screens/candidate/resume/OriginalFile';
 import { useToast } from '@/shared/ui/overlay';
 import { applyPath, loadDeviceCheck } from './applyState';
 import { Stepper } from './Stepper';
@@ -19,20 +23,22 @@ const POLL_MS = 1500;
 const POLL_LIMIT = 120; // ~3 minutes: OCR of scanned pages, then the INTERACTIVE-lane extraction
 const MAX_BYTES = 10 * 1024 * 1024; // RES-02; the API checks it again (413 FILE_TOO_LARGE)
 const FILE_EXT = /\.(pdf|png|jpe?g)$/i; // scanned PDFs and photos are read by OCR on the server (RES-04)
-const LOW_CONF_BOX: Record<string, keyof Extracted['form']> = { name: 'name', education: 'edu', career: 'career', projects: 'proj', skills: 'skill' };
+const LOW_CONF_BOX: Record<string, string> = { name: 'name', education: 'edu', career: 'career', projects: 'projects', skills: 'skill' };
 const DISAGREE_HINT = '동의하지 않으면 AI 면접을 진행할 수 없습니다. 동의 여부는 언제든 바꿀 수 있습니다.';
 
 /** Text boxes of the "파일에서 읽은 정보" review; a changed box replaces that part of the extracted resume. */
-interface Extracted { fileId: string; fileName: string; content: ResumeContent; form: Record<'name' | 'edu' | 'career' | 'skill' | 'proj', string>; unsure: Set<string> }
+interface Extracted {
+  fileId: string; fileName: string; content: ResumeContent; form: Record<'name' | 'edu' | 'skill', string>;
+  /** One block of boxes per career and project row (ADR-0032), checked against the original file beside them. */
+  career: CareerRow[]; projects: ProjectRow[]; unsure: Set<string>;
+}
 
 const join = (xs: (string | null | undefined)[]) => xs.filter(Boolean).join(' ');
 function toBoxes(c: ResumeContent): Extracted['form'] {
   return {
     name: c.name,
     edu: c.education.map((e) => join([e.school, e.major, e.degree])).join(', '),
-    career: c.career.length ? c.career.map((e) => join([e.company, e.role, e.period])).join(', ') : '신입',
     skill: c.skills.join(', '),
-    proj: c.projects.map((p) => (p.description ? `${p.title}: ${p.description}` : p.title)).join('\n'),
   };
 }
 function fromBoxes(x: Extracted): ResumeContent {
@@ -42,13 +48,9 @@ function fromBoxes(x: Extracted): ResumeContent {
     ...c,
     name: f.name.trim(),
     education: !changed('edu') ? c.education : f.edu.trim() ? [{ school: f.edu.trim() }] : [],
-    career: !changed('career') ? c.career : f.career.trim() && !f.career.trim().startsWith('신입') ? [{ company: f.career.trim() }] : [],
+    career: fromCareerRows(x.career),
     skills: !changed('skill') ? c.skills : f.skill.split(',').map((s) => s.trim()).filter(Boolean),
-    projects: !changed('proj') ? c.projects
-      : f.proj.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-        const i = l.indexOf(':');
-        return i > 0 ? { title: l.slice(0, i).trim(), description: l.slice(i + 1).trim() } : { title: l };
-      }),
+    projects: fromProjectRows(x.projects),
   };
 }
 
@@ -104,7 +106,8 @@ export function ConsentResume() {
       if (out.extraction_status === 'DONE' && out.fields) {
         const content = { ...EMPTY_RESUME, ...out.fields, name: out.fields.name ?? '' };
         const unsure = new Set(out.low_conf_fields.map((f) => LOW_CONF_BOX[f.split('.')[0]]).filter(Boolean));
-        setExtracted({ fileId: out.file_id, fileName: pdf.name, content, form: toBoxes(content), unsure });
+        setExtracted({ fileId: out.file_id, fileName: pdf.name, content, form: toBoxes(content), unsure,
+          career: toCareerRows(content.career), projects: toProjectRows(content.projects) });
       } else if (out.extraction_status === 'PENDING') {
         setError('AI 서버가 응답하지 않아 파일을 아직 읽지 못했습니다. 잠시 후 다시 올리거나 이력서를 직접 만들어 주십시오.');
       } else {
@@ -193,7 +196,7 @@ export function ConsentResume() {
   };
 
   return (
-    <div className="wrap"><div className="stub xwide">
+    <div className="wrap"><div className={`stub xwide${extracted ? ' with-file' : ''}`}>
       <Stepper cur={1} />
       <h1>개인정보 동의와 이력서</h1>
       <p className="sub">{p ? `${p.company_name} · ${p.title}` : ''}</p>
@@ -229,16 +232,22 @@ export function ConsentResume() {
             <b>{reading.join(', ')}</b><p className="hint">파일을 읽고 이력서 정보를 뽑고 있습니다. 스캔한 PDF와 사진은 글자 인식(OCR)으로 읽습니다.</p>
           </div></div>
         ) : extracted ? (
-          <div className="extract">
-            <div className="ex-h"><b>파일에서 읽은 정보입니다</b><span className="hint">잘못 읽은 부분이 있으면 바로 고쳐 주십시오</span></div>
-            <div className="row2">{box('name', '이름')}{box('edu', '학력')}</div>
-            <div className="row2">{box('career', '경력')}{box('skill', '보유 기술')}</div>
-            {box('proj', '주요 프로젝트', true)}
-            <div className="mfoot" style={{ justifyContent: 'flex-start' }}>
-              <button className="btn btn-primary" type="button" disabled={busy} onClick={() => void register()}>이 내용으로 이력서 등록</button>
-              <button className="btn" type="button" onClick={() => setExtracted(null)}>다른 파일 올리기</button>
+          <WithOriginal fileId={extracted.fileId} name={extracted.fileName}>
+            <div className="extract">
+              <div className="ex-h"><b>파일에서 읽은 정보입니다</b><span className="hint">오른쪽 원본과 비교해 잘못 읽은 부분이 있으면 바로 고쳐 주십시오</span></div>
+              <div className="row2">{box('name', '이름')}{box('edu', '학력')}</div>
+              {box('skill', '보유 기술')}
+              {(extracted.unsure.has('career') || extracted.unsure.has('projects'))
+                && <small className="hint warn">경력·프로젝트에 흐리게 읽힌 부분이 있습니다. 원본과 같은지 확인해 주십시오</small>}
+              <ExperienceRows idPrefix="ex" career={extracted.career} projects={extracted.projects} showCareer={extracted.career.length > 0}
+                onCareer={(career) => setExtracted((x) => x && { ...x, career })}
+                onProjects={(projects) => setExtracted((x) => x && { ...x, projects })} />
+              <div className="mfoot" style={{ justifyContent: 'flex-start' }}>
+                <button className="btn btn-primary" type="button" disabled={busy} onClick={() => void register()}>이 내용으로 이력서 등록</button>
+                <button className="btn" type="button" onClick={() => setExtracted(null)}>다른 파일 올리기</button>
+              </div>
             </div>
-          </div>
+          </WithOriginal>
         ) : (
           <>
             {reg && (

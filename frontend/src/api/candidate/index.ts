@@ -43,6 +43,8 @@ export type ExtractionStatus = 'PENDING' | 'DONE' | 'NO_TEXT' | 'FAILED';
 
 export interface ResumeFileOut {
   file_id: string;
+  /** application/pdf, image/png, image/jpeg or the DOCX type: what the original file panel can show (ADR-0032). */
+  media_type: string;
   page_count: number | null;
   text_extractable: boolean;
   extraction_status: ExtractionStatus;
@@ -71,6 +73,8 @@ export const uploadResumeFile = (file: File, onProgress?: (f: number) => void, s
   uploadFile<ResumeFileOut>('/api/candidate/resume-files', file, onProgress, signal);
 
 export const fetchResumeFile = (fileId: string) => apiFetch<ResumeFileOut>(`/api/candidate/resume-files/${enc(fileId)}`);
+/** The candidate's own uploaded file, for the original file panel (inline PDF/image, DOCX downloaded). */
+export const resumeFileContentUrl = (fileId: string) => `/api/candidate/resume-files/${enc(fileId)}/content`;
 
 // ---- applications (JOB-02, RES-07, 6.6) ----
 export interface ApplyIn {

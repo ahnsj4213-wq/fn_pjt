@@ -38,6 +38,19 @@ export interface ResumeContent {
   desired_job?: DesiredJob | null;
   experience_level?: ExperienceLevel | null;
   intro?: string | null;
+  /** Read from the uploaded file word for word (ADR-0032), not typed: kept as it is when the form is saved. */
+  details?: ResumeDetail[];
+}
+
+export interface ResumeDetail {
+  heading: string;
+  kind: 'career' | 'projects' | 'skills' | 'summary';
+  text: string;
+  /** The row it belongs to ("projects:<title>"), found by its name or clearly shared words. */
+  row?: string | null;
+  how?: 'name' | 'similar' | null;
+  /** First and last line of the extracted text it came from. */
+  lines?: [number, number] | null;
 }
 
 export type DesiredJob = 'DEV' | 'DATA_AI' | 'DESIGN' | 'MARKETING' | 'MGMT';

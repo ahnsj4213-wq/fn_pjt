@@ -17,7 +17,9 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [{
-      source: '/:path*',
+      // Pages only: /api answers carry their own headers (app/core/middleware.py), and the candidate's own resume file may be
+      // framed by our pages (SAMEORIGIN, ADR-0032) where everything else is DENY.
+      source: '/((?!api/).*)',
       headers: [
         { key: 'X-Content-Type-Options', value: 'nosniff' },
         { key: 'Referrer-Policy', value: 'no-referrer' },

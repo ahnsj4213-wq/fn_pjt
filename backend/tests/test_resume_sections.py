@@ -108,13 +108,18 @@ def test_a_row_the_section_does_not_name_keeps_the_models_description():
     assert apply_sections(fields(career=[row]), read_sections(RESUME))["career"][0]["description"] == "모델 설명"
 
 
-def test_description_and_intro_fit_the_form_limits():
+def test_description_and_intro_fit_the_form_limits_and_the_details_keep_the_rest():
     long = "가" * 200
-    text = "경력\n가상테크\n" + "\n".join(f"{long}{i}" for i in range(40)) + "\n자기소개서\n" + "\n".join(f"{long}{i}" for i in range(80))
+    body = [f"{long}{i}" for i in range(40)]
+    text = "경력\n가상테크\n" + "\n".join(body) + "\n자기소개서\n" + "\n".join(f"{long}{i}" for i in range(80))
     s = read_sections(text)
     row = {"company": "가상테크", "role": None, "period": None, "description": None}
     out = apply_sections(fields(career=[row]), s)
-    assert len(out["career"][0]["description"]) == DESCRIPTION_MAX
+    d = out["career"][0]["description"]
+    assert len(d) <= DESCRIPTION_MAX and d == " ".join(body[:len(d.split(" "))])  # whole lines, never half of one
+    kept = "\n".join(d["text"] for d in out["details"]).splitlines()
+    assert kept == ["가상테크", *body]  # split into entries, nothing cut
+    assert all(len(d["text"]) <= 4000 for d in out["details"])
     ResumeContent.model_validate({**out, "name": "홍길동"})
 
 

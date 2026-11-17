@@ -29,10 +29,11 @@ from typing import TypedDict
 
 from sqlalchemy import text
 
+from app.ai.tasks.questions import _TERM
 from app.ai.textrules import content_tokens
 from app.core.config import get_settings
 from app.core.logging import log_event
-from app.questions import knowledge
+from app.questions import knowledge, resume_match
 
 log = logging.getLogger("app.questions")
 MAX_ROUNDS = 2
@@ -127,6 +128,14 @@ async def _retrieve(state: RagState, c) -> dict:
             "shared": shared, "no_company_info": no_info}
 
 
+def resume_input(c, targets: list) -> dict:
+    """The resume excerpts T2 may connect a question to, and the technology names the candidate wrote (ADR-0032)."""
+    snapshot = getattr(c.app, "resume_snapshot", None) or {}
+    excerpts = resume_match.relevant(snapshot, *[t for t in targets if t])
+    terms = sorted({t.lower() for t in _TERM.findall(resume_match.resume_words(snapshot)) if not t.isdigit()})
+    return {"resume": [e.as_input() for e in excerpts], "resume_terms": terms[:200]}
+
+
 async def _generate(state: RagState, c) -> dict:
     from app.questions.compose import _drop_copies, _with_examples  # compose imports this module
 
@@ -143,7 +152,9 @@ async def _generate(state: RagState, c) -> dict:
            # sentences earlier questions of this set came from (a posting line too): one sentence gives one question
            "used_basis": used_basis(c) + [q["basis"]["text"] for q in state["accepted"] if q.get("basis")],
            # ADR-0025: who is asked and how hard comes first; the documents only make the question concrete
-           "level": getattr(c, "level", "JUNIOR"), "difficulties": list(getattr(c, "want", []))[len(state["accepted"]):][:missing]}
+           "level": getattr(c, "level", "JUNIOR"), "difficulties": list(getattr(c, "want", []))[len(state["accepted"]):][:missing],
+           # ADR-0032: the candidate's own sentences about what this job and these documents are about
+           **resume_input(c, [p.title, p.duties, p.requirements, p.preferred] + [f"{x.title} {x.text}" for x in state["chunks"]])}
     if state["round"] >= MAX_ROUNDS:
         inp["last_chance"] = True  # the second request: the relaxed rules, and the failure reasons of the first one
         inp["feedback"] = list(getattr(c, "feedback", []) or [])
@@ -164,6 +175,8 @@ async def _generate(state: RagState, c) -> dict:
     if hasattr(c, "failed"):
         c.failed.extend(r.output.get("failed") or [])  # what the task's own checks dropped, for the regeneration's feedback
     items = r.output.get("questions", [])
+    for i in items:
+        i["resume_given"] = [x["ref"] for x in inp["resume"]]
     kept = await _drop_copies(c, items, examples[1])
     _count(rejects, "RAG_COPY", len(items) - len(kept))
     return {"candidates": kept, "examples": examples, "rejects": rejects, "status": r.status}
